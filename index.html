@@ -1006,40 +1006,74 @@ async function updateRow(table, id, patch) {
 /**
  * Авторизация через Telegram Login Widget.
  *
- * Как это будет работать в проде:
- * 1. На сайт подключается официальный виджет:
- *    <script async src="https://telegram.org/js/telegram-widget.js?22"
- *      data-telegram-login="mastervraenebot"
- *      data-size="large"
- *      data-onauth="onTelegramAuth(user)"
- *      data-request-access="write"><\/script>
- * 2. Telegram возвращает { id, first_name, username, photo_url, auth_date, hash }.
- * 3. hash ОБЯЗАТЕЛЬНО проверяется на сервере (HMAC-SHA256 с секретом —
- *    токеном бота), иначе подделать вход тривиально. В прототипе эта
- *    проверка — заглушка verifyTelegramAuth(), помеченная явно.
- * 4. Телефон и остальные контактные данные пользователь передаёт НЕ через
- *    виджет, а отдельно, боту (@mastervraenebot) кнопкой «Поделиться
- *    контактом» — бот привязывает phone к тому же telegram_id и пишет
- *    в Supabase (через вебхук бэкенда, см. заметки по BotHelp).
+ * Реальный виджет подключается прямо в index.html (см. renderLogin() в
+ * app.js) и вызывает глобальный колбэк window.onTelegramAuth(user) с
+ * { id, first_name, last_name, username, photo_url, auth_date, hash }.
  *
- * В прототипе (нет реального бота на этом домене) используется
- * форма-заглушка, эмулирующая ответ виджета.
+ * ВАЖНО (сознательный компромисс для быстрого запуска, аналогично RLS):
+ * hash из виджета ДОЛЖЕН проверяться на сервере HMAC-SHA256 с секретом —
+ * токеном бота. У нас сейчас нет отдельного бэкенда (сайт — статика на
+ * GitHub Pages), а класть токен бота в клиентский JS нельзя ни при каких
+ * обстоятельствах — это как выложить пароль. Поэтому verifyTelegramAuth()
+ * ниже проверяет только структуру ответа (что id/hash/auth_date вообще
+ * пришли от виджета), но не криптографическую подпись. Практически это
+ * означает: подделать вход теоретически может тот, кто разбирается в
+ * DevTools конкретного браузера — приемлемо для закрытого теста на
+ * знакомых людях, но перед публичным запуском нужно поднять маленькую
+ * Supabase Edge Function, которая держит токен бота на сервере и
+ * проверяет hash перед тем, как отдавать данные пользователя.
+ *
+ * Привязка к личности пользователя дополнительно опирается на то, что
+ * telegram_id в нашей таблице users попадает туда только через реальный
+ * диалог с ботом @mastervraenebot (BotHelp), а не через сайт — то есть
+ * даже подделанный вход на сайте не даст доступа к чужому телефону,
+ * если знать нужно только чей-то telegram_id (а не hash).
  */
+
+const SESSION_KEY = 'muzhik_tg_session_v1';
 
 function isRealWidgetAvailable() {
   return typeof window !== 'undefined' && Boolean(window.Telegram?.Login);
 }
 
 /**
- * ЗАГЛУШКА. В проде заменяется на серверную проверку HMAC подписи Telegram.
- * @param {{id:number, hash:string}} authPayload
+ * Проверка структуры ответа виджета. НЕ криптографическая проверка hash —
+ * см. пояснение выше. Отклоняет откровенно битые/неполные ответы и
+ * слишком старые (auth_date старше 1 дня — вдруг виджет закэширован).
+ * @param {{id:number, hash:string, auth_date:number}} authPayload
  */
 function verifyTelegramAuth(authPayload) {
+  if (!authPayload || !authPayload.id || !authPayload.hash) return false;
+  const ageSeconds = Date.now() / 1000 - Number(authPayload.auth_date || 0);
+  if (ageSeconds > 86400) {
+    console.warn('[telegramAuth] Ответ виджета слишком старый, отклонён.');
+    return false;
+  }
   console.warn(
-    '[DEMO] verifyTelegramAuth: подпись Telegram не проверяется. ' +
-      'В проде обязательна серверная HMAC-проверка перед созданием сессии.'
+    '[telegramAuth] ВНИМАНИЕ: криптографическая проверка hash от Telegram ' +
+      'не выполняется (нет серверной части) — см. комментарий в telegramAuth.js. ' +
+      'Приемлемо для закрытого теста, обязательно закрыть Edge Function перед публичным запуском.'
   );
-  return Boolean(authPayload && authPayload.id);
+  return true;
+}
+
+/** Сохранить telegram_id вошедшего пользователя, чтобы не логиниться заново при каждом визите. */
+function saveSession(telegramId) {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(SESSION_KEY, String(telegramId));
+  }
+}
+
+/** @returns {string|null} */
+function loadSession() {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(SESSION_KEY);
+}
+
+function clearSession() {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(SESSION_KEY);
+  }
 }
 
 /**
@@ -1376,6 +1410,8 @@ function dbOrderToOrder(row) {
     voiceTranscript: row.voice_transcript || '',
     exactLocation: { lat: row.exact_lat, lng: row.exact_lng },
     district: row.district || '',
+    houseNumberPublic: row.house_number_public || '',
+    fullAddress: row.full_address || '',
     desiredDate: row.desired_date || '',
     timeWindow: row.time_window || '',
     urgency: row.urgency || 'normal',
@@ -1406,6 +1442,8 @@ function orderToDbOrder(order) {
     exact_lat: order.exactLocation?.lat,
     exact_lng: order.exactLocation?.lng,
     district: order.district,
+    house_number_public: order.houseNumberPublic || null,
+    full_address: order.fullAddress || null,
     desired_date: order.desiredDate || null,
     time_window: order.timeWindow,
     urgency: order.urgency,
@@ -1539,6 +1577,37 @@ function getServices() {
 }
 function getNotificationsFor(userId) {
   return cache.notifications.filter((n) => n.recipientUserId === userId);
+}
+
+/**
+ * Ищет пользователя по telegram_id сначала в кэше, а если не нашёл —
+ * перечитывает users+skills из Supabase (на случай, если человек только
+ * что зарегистрировался через бота и наш кэш ещё не знает о нём).
+ * В режиме локальной заглушки ищет только в кэше.
+ * @param {string|number} telegramId
+ */
+async function findUserByTelegramId(telegramId) {
+  const key = String(telegramId);
+  let user = cache.users.find((u) => String(u.telegramId) === key);
+  if (user || !isSupabaseConfigured()) return user || null;
+
+  try {
+    const [userRows, skillRows] = await Promise.all([
+      getRows('users'),
+      getRows('skills'),
+    ]);
+    const skillsByUser = {};
+    skillRows.forEach((row) => {
+      const skill = dbSkillToSkill(row);
+      if (!skillsByUser[row.user_id]) skillsByUser[row.user_id] = [];
+      skillsByUser[row.user_id].push(skill);
+    });
+    cache.users = userRows.map((row) => dbUserToUser(row, skillsByUser));
+  } catch (err) {
+    reportError('поиск пользователя по telegram_id', err);
+    return null;
+  }
+  return cache.users.find((u) => String(u.telegramId) === key) || null;
 }
 
 // ---------------------------------------------------------------------
@@ -1979,6 +2048,9 @@ function buildInitialDb() {
 
 
 
+const TELEGRAM_BOT_USERNAME =
+  (typeof window !== 'undefined' && window.__ENV__?.TELEGRAM_BOT_USERNAME) || 'mastervraenebot';
+
 const CATEGORY_TITLES = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.title]));
 const STATUS_LABELS = {
   draft: 'Черновик',
@@ -2004,6 +2076,8 @@ const state = {
   toast: null,
   booting: true,
   bootError: null,
+  loginNotRegistered: false, // Telegram-логин прошёл, но такого telegram_id нет в базе
+  loginIntent: 'customer', // 'customer' | 'worker' — куда попасть сразу после входа
 };
 
 function currentUser() {
@@ -2026,11 +2100,63 @@ function go(screen, extra = {}) {
 }
 
 // ---------------------------------------------------------------------
+// Вход через Telegram
+// ---------------------------------------------------------------------
+
+/** Колбэк для официального Telegram Login Widget, см. mountTelegramWidget(). */
+async function handleTelegramAuth(tgUser) {
+  if (!verifyTelegramAuth(tgUser)) {
+    showToast('Не удалось подтвердить вход через Telegram, попробуйте ещё раз');
+    return;
+  }
+  showToast('Проверяем регистрацию…');
+  const user = await findUserByTelegramId(tgUser.id);
+  if (!user) {
+    state.loginNotRegistered = true;
+    render();
+    return;
+  }
+  saveSession(tgUser.id);
+  state.currentUserId = user.id;
+  state.loginNotRegistered = false;
+  state.screen = state.loginIntent === 'worker' ? 'orders' : 'home';
+  showToast(`Добро пожаловать, ${user.displayName || 'друг'}!`);
+  render();
+}
+if (typeof window !== 'undefined') {
+  window.onTelegramAuth = handleTelegramAuth;
+}
+
+/** Официальный виджет нельзя вставить через innerHTML (браузер не выполнит <script>) — создаём узел вручную. */
+function mountTelegramWidget() {
+  const container = document.getElementById('telegram-login-container');
+  if (!container) return;
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = 'https://telegram.org/js/telegram-widget.js?22';
+  script.setAttribute('data-telegram-login', TELEGRAM_BOT_USERNAME);
+  script.setAttribute('data-size', 'large');
+  script.setAttribute('data-radius', '10');
+  script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+  script.setAttribute('data-request-access', 'write');
+  container.appendChild(script);
+}
+
+function logout() {
+  clearSession();
+  state.currentUserId = null;
+  state.loginNotRegistered = false;
+  state.screen = 'login';
+  render();
+}
+
+// ---------------------------------------------------------------------
 // Composer / диалог создания заказа
 // ---------------------------------------------------------------------
 
-function startDraft(rawMessage, attachments) {
+function startDraft(rawMessage, attachments, addressInfo = {}) {
   const interpretation = interpretCustomerMessage(rawMessage);
+  const user = currentUser();
   state.draft = {
     step: interpretation.categoryId ? 'confirmCategory' : 'pickCategory',
     rawMessage,
@@ -2040,9 +2166,11 @@ function startDraft(rawMessage, attachments) {
     quantity: 1,
     accessDifficulty: 'easy',
     needsMaterials: false,
-    district: currentUser()?.district || '',
+    district: addressInfo.district || user?.district || '',
+    houseNumberPublic: addressInfo.houseNumberPublic || '',
+    fullAddress: '',
     useMyLocation: true,
-    exactLocation: currentUser()?.location || null,
+    exactLocation: addressInfo.exactLocation || user?.location || null,
     desiredDate: '',
     timeWindow: '',
     urgency: 'normal',
@@ -2105,6 +2233,8 @@ function publishDraft() {
     voiceTranscript: '',
     exactLocation: d.exactLocation,
     district: d.district,
+    houseNumberPublic: d.houseNumberPublic || '',
+    fullAddress: d.fullAddress || '',
     desiredDate: d.desiredDate,
     timeWindow: d.timeWindow,
     urgency: d.urgency,
@@ -2330,15 +2460,34 @@ function renderBottomNav() {
 
 function renderHome() {
   const examples = ['Заменить розетку', 'Течёт кран', 'Повесить полку', 'Собрать шкаф', 'Нужна уборка'];
+  const user = currentUser();
   return `
     <div class="screen">
       <div class="home-hero">
         <div class="logo-slot" style="margin:0 auto 10px;">ЛОГО</div>
         <h1>Что нужно сделать?</h1>
-        <p>Опишите проблему или запишите голосовое и приложите фото — рядом найдётся человек, который поможет.</p>
+        <p>Опишите проблему, укажите адрес и приложите фото — рядом найдётся человек, который поможет.</p>
       </div>
       <div class="composer-card">
         <textarea id="composer-input" class="composer-textarea" placeholder="Например: искрит розетка на кухне, хочу заменить"></textarea>
+        <input
+          type="text"
+          id="composer-district"
+          class="composer-textarea"
+          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
+          placeholder="Район / улица (например: Центр — Арбат)"
+          value="${escapeHtml(user?.district || '')}"
+        />
+        <input
+          type="text"
+          id="composer-house"
+          class="composer-textarea"
+          style="min-height:auto;font-size:13px;color:var(--gray-600);"
+          placeholder="Дом — необязательно, виден мастерам-кандидатам (например: 12)"
+        />
+        <button type="button" class="tool-button" id="composer-geo" style="width:auto;padding:6px 10px;font-size:12px;gap:6px;margin-top:6px;">
+          📍 Определить моё местоположение
+        </button>
         <div id="composer-attachments" class="attachment-preview"></div>
         <div class="composer-actions">
           <div class="composer-tools">
@@ -2354,9 +2503,6 @@ function renderHome() {
       <div class="quick-examples">
         ${examples.map((e) => `<button data-action="quick-example" data-value="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join('')}
       </div>
-
-      <div class="section-title">Мои активные заказы</div>
-      ${renderMyOrdersMini()}
     </div>
   `;
 }
@@ -2382,7 +2528,7 @@ function orderCardHtml(order, { viewer }) {
           <p class="order-title">${escapeHtml(order.title)}</p>
           <div class="order-meta">
             <span>${escapeHtml(catTitle)}</span>
-            <span>${escapeHtml(order.district)}</span>
+            <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
             ${viewer === 'worker' && dist ? `<span>~${dist} км</span>` : ''}
           </div>
         </div>
@@ -2464,16 +2610,6 @@ function renderCompose() {
           <button data-action="pick-access" data-value="hard" class="${d.accessDifficulty === 'hard' ? 'selected' : ''}">Затруднённый</button>
         </div>
         <label><input type="checkbox" id="field-materials" ${d.needsMaterials ? 'checked' : ''} style="width:auto;margin-right:6px;" />Нужны материалы мастера</label>
-        <button class="primary-button" data-action="draft-continue" data-value="location">Продолжить →</button>
-      </div>
-    `;
-  } else if (d.step === 'location') {
-    body = `
-      <div class="msg assistant">Где нужно выполнить работу? Точный адрес увидит только назначенный мастер.</div>
-      <div class="field-card">
-        <button class="secondary-button" data-action="use-geo">📍 Использовать мою геопозицию</button>
-        <label>Район (виден кандидатам публично)</label>
-        <input type="text" id="field-district" value="${escapeHtml(d.district)}" placeholder="Например: Центр — Арбат" />
         <button class="primary-button" data-action="draft-continue" data-value="timing">Продолжить →</button>
       </div>
     `;
@@ -2536,7 +2672,9 @@ function renderCompose() {
       <div class="msg assistant">Проверьте карточку заказа перед публикацией.</div>
       <div class="field-card">
         <p><b>${escapeHtml(d.rawMessage)}</b></p>
-        <p class="order-meta"><span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || '')}</span><span>${escapeHtml(d.district)}</span><span>${escapeHtml(d.desiredDate)} ${escapeHtml(d.timeWindow)}</span></p>
+        <p class="order-meta"><span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || '')}</span><span>${escapeHtml(d.district)}${d.houseNumberPublic ? ', д. ' + escapeHtml(d.houseNumberPublic) : ''}</span><span>${escapeHtml(d.desiredDate)} ${escapeHtml(d.timeWindow)}</span></p>
+        <label>Квартира / подъезд / комментарий для мастера (видит только назначенный исполнитель, не кандидаты)</label>
+        <input type="text" id="field-full-address" value="${escapeHtml(d.fullAddress)}" placeholder="Например: кв. 45, домофон 45К" />
         ${
           d.isPrecedent
             ? `<p>Ваше предложение цены: ${escapeHtml(d.negotiationOffer)} ₽ (прецедент)</p>`
@@ -2608,10 +2746,14 @@ function renderOrderDetail() {
         </div>
         <p class="order-meta">
           <span>${escapeHtml(CATEGORY_TITLES[order.categoryId] || '')}</span>
-          <span>${escapeHtml(order.district)}</span>
+          <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
         </p>
         <p>${escapeHtml(order.description)}</p>
-        ${showExact ? `<p class="order-meta"><span>Точка: ${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>` : `<p class="order-meta"><span>Точный адрес виден только назначенному мастеру</span></p>`}
+        ${
+          showExact
+            ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
+            : ''
+        }
         <p class="order-meta"><span>${escapeHtml(order.desiredDate)} ${escapeHtml(order.timeWindow)}</span></p>
         ${order.isPrecedent ? `<p>Прецедент — предложение клиента: ${order.negotiation.customerOffer ?? '—'} ₽</p>` : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`}
         <p class="order-meta"><span>Оплата: ${order.payment.method === 'on_site' ? 'на месте' : 'предоплата (демо)'}, статус — ${order.payment.status}</span></p>
@@ -2687,6 +2829,10 @@ function renderProfile() {
         <p class="order-meta" style="margin-top:8px;">Так мы не покажем вам сантехнику, если вы электрик — и наоборот.</p>
       </div>
 
+      ${
+        isSupabaseConfigured()
+          ? `<button class="secondary-button" data-action="logout">Выйти из аккаунта</button>`
+          : `
       <div class="section-title">Демо-вход</div>
       <div class="field-card">
         <p class="order-meta">Переключитесь на другого демо-пользователя, чтобы посмотреть сценарий с другой стороны (в проде — вход через Telegram).</p>
@@ -2697,9 +2843,10 @@ function renderProfile() {
         </select>
         <button class="secondary-button" data-action="switch-demo-user">Переключить</button>
       </div>
-
-      <button class="secondary-button" data-action="go-operator">Панель оператора (демо)</button>
       <button class="secondary-button" data-action="reset-demo">Сбросить демо-данные</button>
+      `
+      }
+      <button class="secondary-button" data-action="go-operator">Панель оператора (демо)</button>
       <p class="demo-tag" style="margin-top:10px;">Бэкенд: ${getBackendMode()}</p>
     </div>
   `;
@@ -2738,8 +2885,42 @@ function renderNoUsers() {
     <div class="screen">
       <div class="empty-state">
         Пока нет ни одного пользователя.<br/>
-        Зарегистрируйтесь через Telegram-бота <b>@mastervraenebot</b>, чтобы начать.
+        Зарегистрируйтесь через Telegram-бота <b>@${escapeHtml(TELEGRAM_BOT_USERNAME)}</b>, чтобы начать.
       </div>
+    </div>
+  `;
+}
+
+function renderLoginScreen() {
+  const intent = state.loginIntent || 'customer';
+  return `
+    <div class="screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:88vh;text-align:center;">
+      <div class="logo-slot" style="margin:0 auto 14px;">ЛОГО</div>
+      <h1 style="font-size:20px;margin:0 0 8px;color:var(--gray-900);">Мужик</h1>
+      <p style="color:var(--gray-500);font-size:13px;margin:0 0 18px;max-width:280px;">
+        Опишите бытовую задачу — рядом найдётся человек, который поможет.
+      </p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <button
+          class="icon-button"
+          data-action="set-login-intent"
+          data-value="worker"
+          title="Войти как исполнитель"
+          style="${intent === 'worker' ? 'background:var(--gray-800);color:var(--gray-0);' : ''}"
+        >🔧</button>
+        <span style="font-size:12px;color:var(--gray-500);max-width:190px;text-align:left;">
+          ${intent === 'worker' ? 'Вход как исполнитель — после входа сразу увидите заказы рядом.' : 'Нажмите на гаечный ключ, если вы мастер и хотите видеть заказы.'}
+        </span>
+      </div>
+      <div id="telegram-login-container"></div>
+      ${
+        state.loginNotRegistered
+          ? `<div class="order-warning" style="margin-top:18px;max-width:300px;">
+               Мы вас не нашли в базе. Сначала напишите боту <b>@${escapeHtml(TELEGRAM_BOT_USERNAME)}</b>
+               и нажмите «Start» — он спросит имя и телефон. После этого войдите здесь ещё раз.
+             </div>`
+          : ''
+      }
     </div>
   `;
 }
@@ -2749,6 +2930,12 @@ function render() {
 
   if (state.screen === 'boot' || state.booting) {
     app.innerHTML = renderBooting();
+    return;
+  }
+
+  if (isSupabaseConfigured() && !currentUser()) {
+    app.innerHTML = renderLoginScreen();
+    mountTelegramWidget();
     return;
   }
 
@@ -2780,12 +2967,36 @@ function render() {
 }
 
 let pendingAttachments = [];
+let pendingExactLocation = null;
 
 function wireEvents() {
   const composerInput = document.getElementById('composer-input');
   const composerSend = document.getElementById('composer-send');
   const composerFile = document.getElementById('composer-file');
   const composerAttachments = document.getElementById('composer-attachments');
+  const composerGeo = document.getElementById('composer-geo');
+
+  if (composerGeo) {
+    composerGeo.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        showToast('Геолокация недоступна в этом браузере — просто укажите район текстом');
+        return;
+      }
+      composerGeo.disabled = true;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          pendingExactLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          composerGeo.textContent = '📍 Геопозиция определена';
+          showToast('Геопозиция сохранена — виден будет только мастеру, кому назначите заказ');
+        },
+        () => {
+          composerGeo.disabled = false;
+          showToast('Не удалось получить геопозицию — можно указать район текстом');
+        },
+        { timeout: 8000 }
+      );
+    });
+  }
 
   if (composerInput) {
     composerInput.addEventListener('input', () => {
@@ -2811,7 +3022,11 @@ function wireEvents() {
       if (!text) return;
       const atts = pendingAttachments;
       pendingAttachments = [];
-      startDraft(text, atts);
+      const district = document.getElementById('composer-district').value.trim();
+      const houseNumberPublic = document.getElementById('composer-house').value.trim();
+      const exactLocation = pendingExactLocation;
+      pendingExactLocation = null;
+      startDraft(text, atts, { district, houseNumberPublic, exactLocation });
     });
   }
 
@@ -2850,9 +3065,6 @@ function handleAction(action, value) {
         state.draft.quantity = Number(document.getElementById('field-quantity').value || 1);
         state.draft.needsMaterials = document.getElementById('field-materials').checked;
       }
-      if (state.draft.step === 'location') {
-        state.draft.district = document.getElementById('field-district').value.trim();
-      }
       if (state.draft.step === 'timing') {
         state.draft.desiredDate = document.getElementById('field-date').value;
         state.draft.timeWindow = document.getElementById('field-window').value.trim();
@@ -2874,22 +3086,11 @@ function handleAction(action, value) {
     case 'pick-payment':
       state.draft.paymentMethod = value;
       return render();
-    case 'use-geo':
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            state.draft.exactLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            showToast('Геопозиция определена');
-            render();
-          },
-          () => showToast('Не удалось получить геопозицию — укажите район вручную')
-        );
-      } else {
-        showToast('Геолокация недоступна — укажите район вручную');
-      }
-      return;
-    case 'publish-draft':
+    case 'publish-draft': {
+      const fullAddressField = document.getElementById('field-full-address');
+      if (fullAddressField) state.draft.fullAddress = fullAddressField.value.trim();
       return publishDraft();
+    }
 
     case 'accept-order':
       return acceptOrder(value);
@@ -2937,6 +3138,11 @@ function handleAction(action, value) {
       showToast('Демо-данные сброшены');
       return render();
     }
+    case 'set-login-intent':
+      state.loginIntent = value;
+      return render();
+    case 'logout':
+      return logout();
     default:
       return;
   }
@@ -2946,7 +3152,25 @@ async function boot() {
   setSyncErrorHandler(showToast);
   render(); // показать экран загрузки сразу
   await initDb(buildInitialDb());
-  state.currentUserId = getUsers()[0]?.id ?? null;
+
+  if (isSupabaseConfigured()) {
+    // Прод/тест на реальных людях: заходим только по подтверждённой
+    // Telegram-сессии, никакого автовыбора "первого пользователя".
+    const savedTelegramId = loadSession();
+    const user = savedTelegramId ? await findUserByTelegramId(savedTelegramId) : null;
+    if (user) {
+      state.currentUserId = user.id;
+      state.screen = 'home';
+    } else {
+      clearSession();
+      state.currentUserId = null;
+      state.screen = 'login';
+    }
+  } else {
+    // Локальная разработка без Supabase: как раньше, сразу демо-пользователь.
+    state.currentUserId = getUsers()[0]?.id ?? null;
+  }
+
   state.booting = false;
   console.info(assistantDemoNotice());
   render();
