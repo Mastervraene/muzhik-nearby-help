@@ -1004,63 +1004,38 @@ async function updateRow(table, id, patch) {
 
 // ---- js/adapters/telegramAuth.js ----
 /**
- * Авторизация через Telegram Login Widget.
+ * Вход через Telegram: код через бота вместо официального JS-виджета.
  *
- * Реальный виджет подключается прямо в index.html (см. renderLogin() в
- * app.js) и вызывает глобальный колбэк window.onTelegramAuth(user) с
- * { id, first_name, last_name, username, photo_url, auth_date, hash }.
+ * Почему не виджет telegram-widget.js: он тяжёлый, требует подтвердить
+ * некрасивый punycode-домен (xn--80aaflcxqniqbin.xn--p1ai) и на практике
+ * подвисает без VPN у части пользователей в России.
  *
- * ВАЖНО (сознательный компромисс для быстрого запуска, аналогично RLS):
- * hash из виджета ДОЛЖЕН проверяться на сервере HMAC-SHA256 с секретом —
- * токеном бота. У нас сейчас нет отдельного бэкенда (сайт — статика на
- * GitHub Pages), а класть токен бота в клиентский JS нельзя ни при каких
- * обстоятельствах — это как выложить пароль. Поэтому verifyTelegramAuth()
- * ниже проверяет только структуру ответа (что id/hash/auth_date вообще
- * пришли от виджета), но не криптографическую подпись. Практически это
- * означает: подделать вход теоретически может тот, кто разбирается в
- * DevTools конкретного браузера — приемлемо для закрытого теста на
- * знакомых людях, но перед публичным запуском нужно поднять маленькую
- * Supabase Edge Function, которая держит токен бота на сервере и
- * проверяет hash перед тем, как отдавать данные пользователя.
+ * Как работает код через бота (см. app.js: startLoginFlow/completeLogin):
+ * 1. Сайт создаёт короткий одноразовый код и строку вида
+ *    https://t.me/mastervraenebot?start=<код> (см. store/dataStore.js:
+ *    createLoginCode/getLoginCodeStatus, таблица public.login_codes).
+ * 2. Человек нажимает кнопку — открывается Telegram и бот, достаточно
+ *    нажать Start. BotHelp читает параметр запуска и своим вебхуком
+ *    записывает telegram_id пользователя в ту же строку login_codes.
+ * 3. Сайт каждые 2.5 сек проверяет статус кода; как только telegram_id
+ *    появился — ищет пользователя по нему (findUserByTelegramId) и
+ *    логинит.
  *
- * Привязка к личности пользователя дополнительно опирается на то, что
- * telegram_id в нашей таблице users попадает туда только через реальный
- * диалог с ботом @mastervraenebot (BotHelp), а не через сайт — то есть
- * даже подделанный вход на сайте не даст доступа к чужому телефону,
- * если знать нужно только чей-то telegram_id (а не hash).
+ * Привязка к личности опирается на то, что подтвердить код может только
+ * тот, у кого есть доступ к соответствующему Telegram-аккаунту — сайт
+ * никогда не видит и не хранит секретов бота, только сверяет короткий код.
+ *
+ * Резервный способ (submitPhoneFallback в app.js) — имя и телефон без
+ * какой-либо проверки. Используется, только если бот недоступен;
+ * сознательно менее надёжен, помечен в интерфейсе как резервный.
  */
 
 const SESSION_KEY = 'muzhik_tg_session_v1';
 
-function isRealWidgetAvailable() {
-  return typeof window !== 'undefined' && Boolean(window.Telegram?.Login);
-}
-
-/**
- * Проверка структуры ответа виджета. НЕ криптографическая проверка hash —
- * см. пояснение выше. Отклоняет откровенно битые/неполные ответы и
- * слишком старые (auth_date старше 1 дня — вдруг виджет закэширован).
- * @param {{id:number, hash:string, auth_date:number}} authPayload
- */
-function verifyTelegramAuth(authPayload) {
-  if (!authPayload || !authPayload.id || !authPayload.hash) return false;
-  const ageSeconds = Date.now() / 1000 - Number(authPayload.auth_date || 0);
-  if (ageSeconds > 86400) {
-    console.warn('[telegramAuth] Ответ виджета слишком старый, отклонён.');
-    return false;
-  }
-  console.warn(
-    '[telegramAuth] ВНИМАНИЕ: криптографическая проверка hash от Telegram ' +
-      'не выполняется (нет серверной части) — см. комментарий в telegramAuth.js. ' +
-      'Приемлемо для закрытого теста, обязательно закрыть Edge Function перед публичным запуском.'
-  );
-  return true;
-}
-
-/** Сохранить telegram_id вошедшего пользователя, чтобы не логиниться заново при каждом визите. */
-function saveSession(telegramId) {
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(SESSION_KEY, String(telegramId));
+/** Сохранить идентификатор вошедшего пользователя (telegram_id или id), чтобы не логиниться заново при каждом визите. */
+function saveSession(id) {
+  if (typeof localStorage !== 'undefined' && id) {
+    localStorage.setItem(SESSION_KEY, String(id));
   }
 }
 
@@ -1074,21 +1049,6 @@ function clearSession() {
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem(SESSION_KEY);
   }
-}
-
-/**
- * Эмулирует успешный вход через Telegram для прототипа.
- * @param {{displayName:string, phone:string}} demoProfile
- */
-function mockTelegramLogin(demoProfile) {
-  const telegramId = `demo-${Math.floor(Math.random() * 1e9)}`;
-  return {
-    telegramId,
-    displayName: demoProfile.displayName || 'Гость',
-    phone: demoProfile.phone || '',
-    authenticatedAt: new Date().toISOString(),
-    isDemo: true,
-  };
 }
 
 
@@ -1611,6 +1571,26 @@ async function findUserByTelegramId(telegramId) {
 }
 
 // ---------------------------------------------------------------------
+// Одноразовые коды входа (логин через бота вместо JS-виджета)
+// ---------------------------------------------------------------------
+
+/** @param {string} code */
+async function createLoginCode(code) {
+  if (!isSupabaseConfigured()) return { code, telegram_id: null };
+  return insertRow('login_codes', { code });
+}
+
+/**
+ * @param {string} code
+ * @returns {Promise<{telegram_id: string|null, display_name: string|null}|null>}
+ */
+async function getLoginCodeStatus(code) {
+  if (!isSupabaseConfigured()) return null;
+  const rows = await getRows('login_codes', `code=eq.${encodeURIComponent(code)}&select=telegram_id,display_name`);
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
 // Запись: обновляем кэш сразу, в Supabase — в фоне
 // ---------------------------------------------------------------------
 
@@ -2076,8 +2056,8 @@ const state = {
   toast: null,
   booting: true,
   bootError: null,
-  loginNotRegistered: false, // Telegram-логин прошёл, но такого telegram_id нет в базе
-  loginIntent: 'customer', // 'customer' | 'worker' — куда попасть сразу после входа
+  auth: null, // { code, showPhoneFallback, notRegistered } — состояние текущей попытки входа
+  afterLogin: null, // { type: 'draft', step } | { type: 'go', screen } — куда вернуться после входа
 };
 
 function currentUser() {
@@ -2100,53 +2080,103 @@ function go(screen, extra = {}) {
 }
 
 // ---------------------------------------------------------------------
-// Вход через Telegram
+// Вход: код через бота (без тяжёлого JS-виджета) + резерв по телефону
 // ---------------------------------------------------------------------
 
-/** Колбэк для официального Telegram Login Widget, см. mountTelegramWidget(). */
-async function handleTelegramAuth(tgUser) {
-  if (!verifyTelegramAuth(tgUser)) {
-    showToast('Не удалось подтвердить вход через Telegram, попробуйте ещё раз');
-    return;
-  }
-  showToast('Проверяем регистрацию…');
-  const user = await findUserByTelegramId(tgUser.id);
-  if (!user) {
-    state.loginNotRegistered = true;
-    render();
-    return;
-  }
-  saveSession(tgUser.id);
-  state.currentUserId = user.id;
-  state.loginNotRegistered = false;
-  state.screen = state.loginIntent === 'worker' ? 'orders' : 'home';
-  showToast(`Добро пожаловать, ${user.displayName || 'друг'}!`);
-  render();
-}
-if (typeof window !== 'undefined') {
-  window.onTelegramAuth = handleTelegramAuth;
+let loginPollTimer = null;
+
+function generateLoginCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-/** Официальный виджет нельзя вставить через innerHTML (браузер не выполнит <script>) — создаём узел вручную. */
-function mountTelegramWidget() {
-  const container = document.getElementById('telegram-login-container');
-  if (!container) return;
-  const script = document.createElement('script');
-  script.async = true;
-  script.src = 'https://telegram.org/js/telegram-widget.js?22';
-  script.setAttribute('data-telegram-login', TELEGRAM_BOT_USERNAME);
-  script.setAttribute('data-size', 'large');
-  script.setAttribute('data-radius', '10');
-  script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-  script.setAttribute('data-request-access', 'write');
-  container.appendChild(script);
+/**
+ * Запускает попытку входа: создаёт код, показывает панель входа,
+ * начинает опрашивать Supabase — как только бот подтвердит код
+ * (см. login_codes), пользователь автоматически войдёт.
+ * @param {{type:'draft', step:string}|{type:'go', screen:string}} afterLogin
+ */
+function startLoginFlow(afterLogin) {
+  if (loginPollTimer) clearInterval(loginPollTimer);
+  const code = generateLoginCode();
+  state.afterLogin = afterLogin;
+  state.auth = { code, showPhoneFallback: false, notRegistered: false };
+  createLoginCode(code).catch((err) => console.error('[auth] createLoginCode', err));
+  render();
+
+  loginPollTimer = setInterval(async () => {
+    if (!state.auth || state.auth.code !== code) {
+      clearInterval(loginPollTimer);
+      return;
+    }
+    try {
+      const row = await getLoginCodeStatus(code);
+      if (row && row.telegram_id) {
+        clearInterval(loginPollTimer);
+        const user = await findUserByTelegramId(row.telegram_id);
+        if (user) {
+          completeLogin(user.id);
+        } else {
+          state.auth.notRegistered = true;
+          render();
+        }
+      }
+    } catch (err) {
+      console.error('[auth] опрос кода входа', err);
+    }
+  }, 2500);
+}
+
+function completeLogin(userId) {
+  if (loginPollTimer) {
+    clearInterval(loginPollTimer);
+    loginPollTimer = null;
+  }
+  const user = getUsers().find((u) => u.id === userId);
+  state.currentUserId = userId;
+  saveSession(user?.telegramId || userId);
+
+  const after = state.afterLogin;
+  state.afterLogin = null;
+  state.auth = null;
+
+  if (after?.type === 'draft' && state.draft) {
+    state.draft.step = after.step;
+  } else if (after?.type === 'go') {
+    state.screen = after.screen;
+  }
+  showToast(`Добро пожаловать, ${user?.displayName || 'друг'}!`);
+  render();
+}
+
+/** Резервный вход без Telegram: имя + телефон, без проверки. */
+function createPhoneOnlyUser(displayName, phone) {
+  const draftLoc = state.draft?.exactLocation;
+  const draftDistrict = state.draft?.district;
+  const user = {
+    id: `local-${Date.now()}`,
+    telegramId: '',
+    displayName: displayName || 'Гость',
+    phone: phone || '',
+    location: draftLoc || { lat: 0, lng: 0 },
+    district: draftDistrict || '',
+    searchRadiusKm: 3,
+    skills: [],
+    availableAsWorker: false,
+    rating: 0,
+    ratingCount: 0,
+    blocked: false,
+    createdAt: new Date().toISOString(),
+  };
+  saveUser(user);
+  return user;
 }
 
 function logout() {
+  if (loginPollTimer) clearInterval(loginPollTimer);
   clearSession();
   state.currentUserId = null;
-  state.loginNotRegistered = false;
-  state.screen = 'login';
+  state.auth = null;
+  state.screen = 'home';
   render();
 }
 
@@ -2417,9 +2447,12 @@ function renderTopbar() {
           <span class="brand-sub">человек рядом поможет</span>
         </div>
       </div>
-      <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
-        ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
-      </button>
+      <div style="display:flex;gap:8px;">
+        <button class="icon-button" data-action="worker-entry" aria-label="Я исполнитель" title="Я исполнитель — показать заказы рядом">🔧</button>
+        <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
+          ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
+        </button>
+      </div>
     </header>
   `;
 }
@@ -2656,6 +2689,8 @@ function renderCompose() {
         <button class="primary-button" data-action="draft-continue" data-value="payment">Всё верно, продолжить →</button>
       </div>
       `;
+  } else if (d.step === 'login') {
+    body = renderAuthPanel();
   } else if (d.step === 'payment') {
     body = `
       <div class="msg assistant">Как удобнее оплатить работу?</div>
@@ -2891,34 +2926,36 @@ function renderNoUsers() {
   `;
 }
 
-function renderLoginScreen() {
-  const intent = state.loginIntent || 'customer';
+/** Панель входа: код через бота (основной способ) + телефон без проверки (резерв). */
+function renderAuthPanel() {
+  const a = state.auth || {};
+  const deepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${a.code || ''}`;
   return `
-    <div class="screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:88vh;text-align:center;">
-      <div class="logo-slot" style="margin:0 auto 14px;">ЛОГО</div>
-      <h1 style="font-size:20px;margin:0 0 8px;color:var(--gray-900);">Мужик</h1>
-      <p style="color:var(--gray-500);font-size:13px;margin:0 0 18px;max-width:280px;">
-        Опишите бытовую задачу — рядом найдётся человек, который поможет.
-      </p>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-        <button
-          class="icon-button"
-          data-action="set-login-intent"
-          data-value="worker"
-          title="Войти как исполнитель"
-          style="${intent === 'worker' ? 'background:var(--gray-800);color:var(--gray-0);' : ''}"
-        >🔧</button>
-        <span style="font-size:12px;color:var(--gray-500);max-width:190px;text-align:left;">
-          ${intent === 'worker' ? 'Вход как исполнитель — после входа сразу увидите заказы рядом.' : 'Нажмите на гаечный ключ, если вы мастер и хотите видеть заказы.'}
-        </span>
-      </div>
-      <div id="telegram-login-container"></div>
+    <div class="msg assistant">Чтобы продолжить, подтвердите, что это вы.</div>
+    <div class="field-card">
+      <p><b>Вход через бота</b></p>
+      <p class="order-meta">Нажмите кнопку — откроется Telegram и бот @${escapeHtml(TELEGRAM_BOT_USERNAME)}. Просто отправьте команду Start, ничего вводить не нужно — мы узнаем вас по коду автоматически.</p>
+      <a class="primary-button" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;" href="${deepLink}" target="_blank" rel="noopener">Открыть бота и подтвердить</a>
+      <p class="order-meta" style="margin-top:8px;justify-content:center;">Код: <b>${escapeHtml(a.code || '')}</b> · ждём подтверждения…</p>
       ${
-        state.loginNotRegistered
-          ? `<div class="order-warning" style="margin-top:18px;max-width:300px;">
-               Мы вас не нашли в базе. Сначала напишите боту <b>@${escapeHtml(TELEGRAM_BOT_USERNAME)}</b>
-               и нажмите «Start» — он спросит имя и телефон. После этого войдите здесь ещё раз.
-             </div>`
+        a.notRegistered
+          ? `<div class="order-warning">Вы ещё не зарегистрированы в боте. Сначала напишите @${escapeHtml(TELEGRAM_BOT_USERNAME)} и укажите имя и телефон, потом нажмите кнопку выше ещё раз.</div>`
+          : ''
+      }
+      <button class="secondary-button" data-action="toggle-phone-fallback">
+        ${a.showPhoneFallback ? 'Скрыть' : 'Telegram недоступен? Войти по телефону'}
+      </button>
+      ${
+        a.showPhoneFallback
+          ? `
+        <div style="margin-top:10px;">
+          <label>Имя</label>
+          <input type="text" id="auth-name" placeholder="Как к вам обращаться" />
+          <label>Телефон</label>
+          <input type="text" id="auth-phone" placeholder="+7 900 000-00-00" />
+          <p class="order-meta">Без подтверждения через Telegram — используйте, только если бот сейчас недоступен.</p>
+          <button class="primary-button" data-action="submit-phone-fallback">Продолжить без Telegram</button>
+        </div>`
           : ''
       }
     </div>
@@ -2933,14 +2970,25 @@ function render() {
     return;
   }
 
-  if (isSupabaseConfigured() && !currentUser()) {
-    app.innerHTML = renderLoginScreen();
-    mountTelegramWidget();
+  const screensRequiringUser = ['orders', 'profile', 'notifications', 'operator', 'orderDetail'];
+  if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
+    if (!state.auth || !state.auth.code) {
+      startLoginFlow({ type: 'go', screen: state.screen });
+      return; // startLoginFlow сам вызовет render()
+    }
+    app.innerHTML = `
+      ${renderTopbar()}
+      <div class="screen">
+        <div class="section-title">Нужен вход</div>
+        <div class="chat-thread">${renderAuthPanel()}</div>
+      </div>
+      ${renderBottomNav()}
+    `;
     wireEvents();
     return;
   }
 
-  if (!currentUser()) {
+  if (!currentUser() && !isSupabaseConfigured()) {
     app.innerHTML = `
       ${renderTopbarNoUser()}
       ${renderNoUsers()}
@@ -3076,8 +3124,29 @@ function handleAction(action, value) {
       if (state.draft.step === 'estimate' && state.draft.isPrecedent) {
         state.draft.negotiationOffer = document.getElementById('field-negotiation').value;
       }
+      // Вход требуется только один раз — перед оплатой/публикацией, после
+      // того как человек уже увидел предварительную оценку цены.
+      if (value === 'payment' && !currentUser()) {
+        state.draft.step = 'login';
+        startLoginFlow({ type: 'draft', step: 'payment' });
+        return;
+      }
       return draftNext(value);
     }
+    case 'toggle-phone-fallback':
+      state.auth.showPhoneFallback = !state.auth.showPhoneFallback;
+      return render();
+    case 'submit-phone-fallback': {
+      const name = document.getElementById('auth-name').value.trim();
+      const phone = document.getElementById('auth-phone').value.trim();
+      if (!name || !phone) return showToast('Укажите имя и телефон');
+      const user = createPhoneOnlyUser(name, phone);
+      return completeLogin(user.id);
+    }
+    case 'worker-entry':
+      if (currentUser()) return go('orders');
+      state.screen = 'orders';
+      return startLoginFlow({ type: 'go', screen: 'orders' });
     case 'pick-access':
       state.draft.accessDifficulty = value;
       return render();
@@ -3139,9 +3208,6 @@ function handleAction(action, value) {
       showToast('Демо-данные сброшены');
       return render();
     }
-    case 'set-login-intent':
-      state.loginIntent = value;
-      return render();
     case 'logout':
       return logout();
     default:
@@ -3155,22 +3221,24 @@ async function boot() {
   await initDb(buildInitialDb());
 
   if (isSupabaseConfigured()) {
-    // Прод/тест на реальных людях: заходим только по подтверждённой
-    // Telegram-сессии, никакого автовыбора "первого пользователя".
-    const savedTelegramId = loadSession();
-    const user = savedTelegramId ? await findUserByTelegramId(savedTelegramId) : null;
+    // Пробуем восстановить сессию по сохранённому telegram_id/id, но НЕ
+    // требуем входа для просмотра главной страницы — заявку можно начать
+    // без авторизации, вход нужен только перед публикацией (см. renderCompose).
+    const saved = loadSession();
+    let user = null;
+    if (saved) {
+      user = (await findUserByTelegramId(saved)) || getUsers().find((u) => u.id === saved) || null;
+    }
     if (user) {
       state.currentUserId = user.id;
-      state.screen = 'home';
-    } else {
+    } else if (saved) {
       clearSession();
-      state.currentUserId = null;
-      state.screen = 'login';
     }
   } else {
     // Локальная разработка без Supabase: как раньше, сразу демо-пользователь.
     state.currentUserId = getUsers()[0]?.id ?? null;
   }
+  state.screen = 'home';
 
   state.booting = false;
   console.info(assistantDemoNotice());
