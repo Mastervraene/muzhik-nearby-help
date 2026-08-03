@@ -2936,6 +2936,7 @@ function render() {
   if (isSupabaseConfigured() && !currentUser()) {
     app.innerHTML = renderLoginScreen();
     mountTelegramWidget();
+    wireEvents();
     return;
   }
 
