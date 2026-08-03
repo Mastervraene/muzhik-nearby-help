@@ -1010,20 +1010,31 @@ async function updateRow(table, id, patch) {
  * некрасивый punycode-домен (xn--80aaflcxqniqbin.xn--p1ai) и на практике
  * подвисает без VPN у части пользователей в России.
  *
+ * Почему код вводится в боте вручную, а не передаётся автоматически через
+ * параметр диплинка: BotHelp не даёт прочитать параметр /start как
+ * переменную в вебхуке. Вместо этого используется диплинк на конкретный
+ * шаг бота (BotHelp → шаг "Ждём код" → кнопка "Диплинк", формат
+ * t.me/<bot>?start=dl-<ref_шага>), который сразу спрашивает код. Это же
+ * исключает гонку условий при одновременном входе нескольких людей —
+ * код всегда проверяется точным совпадением, а не "последним по времени".
+ *
  * Как работает код через бота (см. app.js: startLoginFlow/completeLogin):
- * 1. Сайт создаёт короткий одноразовый код и строку вида
- *    https://t.me/mastervraenebot?start=<код> (см. store/dataStore.js:
- *    createLoginCode/getLoginCodeStatus, таблица public.login_codes).
- * 2. Человек нажимает кнопку — открывается Telegram и бот, достаточно
- *    нажать Start. BotHelp читает параметр запуска и своим вебхуком
- *    записывает telegram_id пользователя в ту же строку login_codes.
- * 3. Сайт каждые 2.5 сек проверяет статус кода; как только telegram_id
+ * 1. Сайт создаёт короткий одноразовый код (4 цифры) и строку в таблице
+ *    public.login_codes (см. store/dataStore.js: createLoginCode/
+ *    getLoginCodeStatus), code, telegram_id = null.
+ * 2. Человек нажимает кнопку на сайте — открывается Telegram сразу на
+ *    шаге бота, который просит отправить код. Человек вручную
+ *    набирает и отправляет код в чат с ботом.
+ * 3. BotHelp своим действием (вебхук PATCH .../login_codes?code=eq.<код>)
+ *    записывает telegram_id этого человека в найденную по коду строку.
+ * 4. Сайт каждые 2.5 сек проверяет статус кода; как только telegram_id
  *    появился — ищет пользователя по нему (findUserByTelegramId) и
  *    логинит.
  *
- * Привязка к личности опирается на то, что подтвердить код может только
- * тот, у кого есть доступ к соответствующему Telegram-аккаунту — сайт
- * никогда не видит и не хранит секретов бота, только сверяет короткий код.
+ * Привязка к личности опирается на то, что отправить именно этот код в
+ * бота может только тот, кто увидел его на сайте и у кого есть доступ к
+ * соответствующему Telegram-аккаунту — сайт никогда не видит и не хранит
+ * секретов бота, только сверяет короткий код.
  *
  * Резервный способ (submitPhoneFallback в app.js) — имя и телефон без
  * какой-либо проверки. Используется, только если бот недоступен;
@@ -2086,7 +2097,7 @@ function go(screen, extra = {}) {
 let loginPollTimer = null;
 
 function generateLoginCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 /**
@@ -2927,15 +2938,19 @@ function renderNoUsers() {
 }
 
 /** Панель входа: код через бота (основной способ) + телефон без проверки (резерв). */
+// Диплинк ведёт сразу на шаг бота "Ждём код" (см. BotHelp → Сообщение 7 → Диплинк),
+// минуя обычную регистрацию. Код нужно ввести в боте вручную — так надёжнее и без
+// гонки условий между несколькими одновременными входами.
+const TELEGRAM_LOGIN_DEEPLINK_PARAM = 'dl-1785799480488';
 function renderAuthPanel() {
   const a = state.auth || {};
-  const deepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${a.code || ''}`;
+  const deepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${TELEGRAM_LOGIN_DEEPLINK_PARAM}`;
   return `
     <div class="msg assistant">Чтобы продолжить, подтвердите, что это вы.</div>
     <div class="field-card">
       <p><b>Вход через бота</b></p>
-      <p class="order-meta">Нажмите кнопку — откроется Telegram и бот @${escapeHtml(TELEGRAM_BOT_USERNAME)}. Просто отправьте команду Start, ничего вводить не нужно — мы узнаем вас по коду автоматически.</p>
-      <a class="primary-button" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;" href="${deepLink}" target="_blank" rel="noopener">Открыть бота и подтвердить</a>
+      <p class="order-meta">Нажмите кнопку — откроется Telegram и бот сразу спросит код. Отправьте код <b>${escapeHtml(a.code || '')}</b> обычным сообщением в чате с ботом.</p>
+      <a class="primary-button" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;" href="${deepLink}" target="_blank" rel="noopener">Открыть бота и ввести код</a>
       <p class="order-meta" style="margin-top:8px;justify-content:center;">Код: <b>${escapeHtml(a.code || '')}</b> · ждём подтверждения…</p>
       ${
         a.notRegistered
