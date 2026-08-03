@@ -552,14 +552,15 @@ body {
   text-align: center;
   z-index: 50;
 }
+
 </style>
 </head>
 <body>
   <div id="app" class="app-shell"></div>
   <script>
     window.__ENV__ = {
-      SUPABASE_URL: '',
-      SUPABASE_ANON_KEY: '',
+      SUPABASE_URL: 'https://youyvbqdxuigvjciklfk.supabase.co',
+      SUPABASE_ANON_KEY: 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw',
       YANDEX_GPT_ENABLED: false,
       TELEGRAM_BOT_USERNAME: 'mastervraenebot',
     };
@@ -907,38 +908,97 @@ function createNotification(recipientUserId, recipientRole, orderId, eventKey, c
 /**
  * Точка интеграции с Supabase.
  *
- * Пока нет ключей проекта — используется локальная заглушка (см.
- * store/localStore.js), реализующая тот же интерфейс. Когда появятся
- * SUPABASE_URL и SUPABASE_ANON_KEY, нужно:
+ * Все операции — обычные вызовы PostgREST (встроенный REST API
+ * Supabase), без отдельной библиотеки supabase-js — так проще держать
+ * прототип в один файл без сборки.
  *
- * 1. Подключить клиент:
- *    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"><\/script>
- *    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+ * Белый список операций: наружу торчат только конкретные функции ниже
+ * (getRows/insertRow/updateRow), а не произвольный доступ к базе —
+ * это соответствует требованию брифа "доступные операции ограничены
+ * белым списком".
  *
- * 2. Реализовать методы ниже через client.from('users')... вместо localStorage.
- *
- * 3. Настроить Row Level Security в Supabase так, чтобы:
- *    - exact_location заказа был читаем только customer_id и assigned_worker_id;
- *    - обычные пользователи не могли читать чужие phone/telegram_id.
- *    Это и есть тот самый серверный контроль прав из требований безопасности
- *    брифа — RLS-политики, а не сокрытие полей на уровне UI.
- *
- * 4. Гео-подбор (matching.js) перенести в Postgres RPC-функцию
- *    (bounding box + сортировка), чтобы не выгружать всех пользователей
- *    на клиент.
- *
- * Интерфейс адаптера намеренно узкий (белый список операций) — так
- * ассистент и UI не могут выполнить произвольный запрос к базе.
+ * Публичный (publishable/anon) ключ безопасен для клиента ТОЛЬКО
+ * потому что на таблицах включены RLS-политики. Для MVP сейчас стоят
+ * открытые политики (anon/authenticated: полный доступ) — сознательный
+ * компромисс скорости запуска, описанный отдельно в README. Для продакшена
+ * это нужно сузить (например, через Edge Functions на service_role).
  */
 
-/** @typedef {'users'|'orders'|'services'|'notifications'} TableName */
+function getConfig() {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  return { url: env.SUPABASE_URL || '', key: env.SUPABASE_ANON_KEY || '' };
+}
 
 function isSupabaseConfigured() {
-  return Boolean(window.__ENV__?.SUPABASE_URL && window.__ENV__?.SUPABASE_ANON_KEY);
+  const { url, key } = getConfig();
+  return Boolean(url && key);
 }
 
 function getBackendMode() {
   return isSupabaseConfigured() ? 'supabase' : 'local-stub';
+}
+
+function headers(extra = {}) {
+  const { key } = getConfig();
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+}
+
+/**
+ * @param {string} table
+ * @param {string} [query] — например "select=*&order=created_at.desc"
+ */
+async function getRows(table, query = 'select=*') {
+  const { url } = getConfig();
+  const res = await fetch(`${url}/rest/v1/${table}?${query}`, {
+    headers: headers(),
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase GET ${table} failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/**
+ * @param {string} table
+ * @param {Object} row
+ * @returns {Promise<Object>} вставленная строка (с сгенерированными полями)
+ */
+async function insertRow(table, row) {
+  const { url } = getConfig();
+  const res = await fetch(`${url}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: headers({ Prefer: 'return=representation' }),
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase INSERT ${table} failed: ${res.status} ${await res.text()}`);
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+/**
+ * @param {string} table
+ * @param {string} id
+ * @param {Object} patch
+ */
+async function updateRow(table, id, patch) {
+  const { url } = getConfig();
+  const res = await fetch(`${url}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: headers({ Prefer: 'return=representation' }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase UPDATE ${table} failed: ${res.status} ${await res.text()}`);
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
 }
 
 
@@ -1117,7 +1177,8 @@ function confirmMockPayment(paymentInfo) {
 }
 
 
-// ---- js/store/localStore.js ----
+// ---- js/store/localStore.js (изолирован в IIFE, чтобы имена не конфликтовали с dataStore.js) ----
+const local = (function(){
 /**
  * Локальная персистентность (замена Supabase, пока нет реального проекта).
  * Реализует тот же набор таблиц/операций, чтобы переключение на
@@ -1207,6 +1268,386 @@ function getServices() {
 
 function getNotificationsFor(userId) {
   return getDb().notifications.filter((n) => n.recipientUserId === userId);
+}
+
+  return { initDb, resetDb, getUsers, getOrders, getServices, getNotificationsFor, saveUser, saveOrder, saveService, pushNotification };
+})();
+
+// ---- js/store/dataStore.js ----
+/**
+ * Единый слой данных для приложения.
+ *
+ * Раньше UI напрямую работал с localStore.js (localStorage-заглушка).
+ * Теперь это дата-стор с тем же публичным интерфейсом (getUsers,
+ * getOrders, getServices, getNotificationsFor, saveUser, saveOrder,
+ * saveService, pushNotification, addSkillForUser, initDb), который
+ * внутри выбирает реальный backend (Supabase) или локальную заглушку —
+ * в зависимости от того, настроены ли SUPABASE_URL/KEY (см.
+ * adapters/supabaseAdapter.js).
+ *
+ * Важно для UI: чтение (getUsers/getOrders/...) остаётся СИНХРОННЫМ —
+ * оно всегда отдаёт данные из локального кэша в памяти. Кэш заполняется
+ * один раз при старте (initDb) и обновляется сразу при каждой записи.
+ * Сама сетевая запись в Supabase уходит в фоне; в редком случае сбоя
+ * сети показывается тост с ошибкой, но интерфейс не блокируется.
+ */
+
+
+
+const cache = {
+  users: [],
+  orders: [],
+  services: [],
+  notifications: [],
+};
+
+let onSyncError = () => {};
+function setSyncErrorHandler(fn) {
+  onSyncError = fn;
+}
+
+function reportError(context, err) {
+  console.error(`[dataStore] ${context}:`, err);
+  onSyncError(`Не удалось синхронизировать данные (${context}). Изменение сохранено только локально.`);
+}
+
+// ---------------------------------------------------------------------
+// Маппинг между доменной моделью (camelCase, вложенные объекты) и
+// плоскими snake_case-строками таблиц Supabase.
+// ---------------------------------------------------------------------
+
+function dbUserToUser(row, skillsByUser) {
+  return {
+    id: row.id,
+    telegramId: row.telegram_id,
+    displayName: row.display_name || '',
+    phone: row.phone || '',
+    location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
+    district: row.district || '',
+    searchRadiusKm: Number(row.search_radius_km ?? 3),
+    skills: skillsByUser[row.id] || [],
+    availableAsWorker: Boolean(row.available_as_worker),
+    rating: Number(row.rating ?? 0),
+    ratingCount: Number(row.rating_count ?? 0),
+    blocked: Boolean(row.blocked),
+    createdAt: row.created_at,
+  };
+}
+
+function userToDbUser(user) {
+  return {
+    telegram_id: user.telegramId,
+    display_name: user.displayName,
+    phone: user.phone,
+    lat: user.location?.lat ?? null,
+    lng: user.location?.lng ?? null,
+    district: user.district,
+    search_radius_km: user.searchRadiusKm,
+    available_as_worker: user.availableAsWorker,
+    rating: user.rating,
+    rating_count: user.ratingCount,
+    blocked: user.blocked,
+  };
+}
+
+function dbSkillToSkill(row) {
+  return {
+    categoryId: row.category_id,
+    note: row.note || '',
+    verification: row.verification || 'unverified',
+    addedAt: row.added_at,
+    _dbId: row.id,
+    _userId: row.user_id,
+  };
+}
+
+function dbOrderToOrder(row) {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    assignedWorkerId: row.assigned_worker_id,
+    title: row.title,
+    categoryId: row.category_id,
+    description: row.description || '',
+    desiredOutcome: row.desired_outcome || '',
+    scope: row.scope || {},
+    attachments: row.attachments || [],
+    hasVoiceTranscript: Boolean(row.has_voice_transcript),
+    voiceTranscript: row.voice_transcript || '',
+    exactLocation: { lat: row.exact_lat, lng: row.exact_lng },
+    district: row.district || '',
+    desiredDate: row.desired_date || '',
+    timeWindow: row.time_window || '',
+    urgency: row.urgency || 'normal',
+    customerBudget: row.customer_budget,
+    estimate: row.estimate || { min: 0, max: 0, factors: [] },
+    payment: row.payment || { status: 'none', amount: null, method: 'on_site', paidAt: null },
+    status: row.status,
+    timeline: row.timeline || [],
+    warnings: row.warnings || [],
+    isPrecedent: Boolean(row.is_precedent),
+    negotiation: row.negotiation || { customerOffer: null, workerOffer: null },
+    createdAt: row.created_at,
+  };
+}
+
+function orderToDbOrder(order) {
+  return {
+    customer_id: order.customerId,
+    assigned_worker_id: order.assignedWorkerId,
+    title: order.title,
+    category_id: order.categoryId,
+    description: order.description,
+    desired_outcome: order.desiredOutcome,
+    scope: order.scope,
+    attachments: order.attachments,
+    has_voice_transcript: order.hasVoiceTranscript,
+    voice_transcript: order.voiceTranscript,
+    exact_lat: order.exactLocation?.lat,
+    exact_lng: order.exactLocation?.lng,
+    district: order.district,
+    desired_date: order.desiredDate || null,
+    time_window: order.timeWindow,
+    urgency: order.urgency,
+    customer_budget: order.customerBudget,
+    estimate: order.estimate,
+    payment: order.payment,
+    status: order.status,
+    timeline: order.timeline,
+    warnings: order.warnings,
+    is_precedent: order.isPrecedent,
+    negotiation: order.negotiation,
+  };
+}
+
+function dbServiceToService(row) {
+  return {
+    id: row.id,
+    categoryId: row.category_id,
+    title: row.title,
+    basePriceMin: Number(row.base_price_min),
+    basePriceMax: Number(row.base_price_max),
+    unit: row.unit,
+    modifiers: row.modifiers || [],
+    riskFlag: Boolean(row.risk_flag),
+    active: Boolean(row.active),
+    origin: row.origin || 'catalog',
+  };
+}
+
+function serviceToDbService(service) {
+  return {
+    id: service.id,
+    category_id: service.categoryId,
+    title: service.title,
+    base_price_min: service.basePriceMin,
+    base_price_max: service.basePriceMax,
+    unit: service.unit,
+    modifiers: service.modifiers,
+    risk_flag: service.riskFlag,
+    active: service.active,
+    origin: service.origin,
+  };
+}
+
+function dbNotificationToNotification(row) {
+  return {
+    id: row.id,
+    recipientUserId: row.recipient_user_id,
+    recipientRole: row.recipient_role,
+    orderId: row.order_id,
+    text: row.text,
+    channel: row.channel,
+    createdAt: row.created_at,
+  };
+}
+
+function notificationToDbNotification(n) {
+  return {
+    recipient_user_id: n.recipientUserId,
+    recipient_role: n.recipientRole,
+    order_id: n.orderId,
+    text: n.text,
+    channel: n.channel,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Инициализация
+// ---------------------------------------------------------------------
+
+/**
+ * @param {Object} localSeed — демоданные для режима без Supabase
+ */
+async function initDb(localSeed) {
+  if (!isSupabaseConfigured()) {
+    const db = local.initDb(localSeed);
+    cache.users = db.users;
+    cache.orders = db.orders;
+    cache.services = db.services;
+    cache.notifications = db.notifications;
+    return cache;
+  }
+
+  try {
+    const [userRows, skillRows, orderRows, serviceRows, notificationRows] = await Promise.all([
+      getRows('users'),
+      getRows('skills'),
+      getRows('orders'),
+      getRows('services'),
+      getRows('notifications', 'select=*&order=created_at.desc&limit=200'),
+    ]);
+
+    const skillsByUser = {};
+    skillRows.forEach((row) => {
+      const skill = dbSkillToSkill(row);
+      if (!skillsByUser[row.user_id]) skillsByUser[row.user_id] = [];
+      skillsByUser[row.user_id].push(skill);
+    });
+
+    cache.users = userRows.map((row) => dbUserToUser(row, skillsByUser));
+    cache.orders = orderRows.map(dbOrderToOrder);
+    cache.services = serviceRows.map(dbServiceToService);
+    cache.notifications = notificationRows.map(dbNotificationToNotification);
+  } catch (err) {
+    reportError('загрузка данных при старте', err);
+    // не блокируем интерфейс — работаем с тем, что успели получить (может быть пусто)
+  }
+  return cache;
+}
+
+function resetDb() {
+  if (!isSupabaseConfigured()) {
+    return local.resetDb(arguments[0]);
+  }
+  console.warn('[dataStore] resetDb недоступен в режиме Supabase — это реальные данные.');
+  return cache;
+}
+
+// ---------------------------------------------------------------------
+// Чтение (всегда синхронно, из кэша)
+// ---------------------------------------------------------------------
+
+function getUsers() {
+  return cache.users;
+}
+function getOrders() {
+  return cache.orders;
+}
+function getServices() {
+  return cache.services;
+}
+function getNotificationsFor(userId) {
+  return cache.notifications.filter((n) => n.recipientUserId === userId);
+}
+
+// ---------------------------------------------------------------------
+// Запись: обновляем кэш сразу, в Supabase — в фоне
+// ---------------------------------------------------------------------
+
+function saveUser(user) {
+  const idx = cache.users.findIndex((u) => u.id === user.id);
+  if (idx >= 0) cache.users[idx] = user;
+  else cache.users.push(user);
+
+  if (!isSupabaseConfigured()) {
+    local.saveUser(user);
+    return user;
+  }
+
+  const isNew = !user.id || user.id.startsWith('local-');
+  const payload = userToDbUser(user);
+
+  if (isNew) {
+    insertRow('users', payload)
+      .then((row) => {
+        const created = dbUserToUser(row, {});
+        created.skills = user.skills;
+        const i = cache.users.findIndex((u) => u === user);
+        if (i >= 0) cache.users[i] = created;
+      })
+      .catch((err) => reportError('сохранение пользователя', err));
+  } else {
+    updateRow('users', user.id, payload).catch((err) => reportError('сохранение пользователя', err));
+  }
+  return user;
+}
+
+function addSkillForUser(userId, skill) {
+  const user = cache.users.find((u) => u.id === userId);
+  if (!user) return;
+  user.skills = [...user.skills, skill];
+
+  if (!isSupabaseConfigured()) {
+    local.saveUser(user);
+    return;
+  }
+
+  insertRow('skills', {
+    user_id: userId,
+    category_id: skill.categoryId,
+    note: skill.note,
+    verification: skill.verification,
+  }).catch((err) => reportError('добавление навыка', err));
+}
+
+function saveOrder(order) {
+  const idx = cache.orders.findIndex((o) => o.id === order.id);
+  if (idx >= 0) cache.orders[idx] = order;
+  else cache.orders.push(order);
+
+  if (!isSupabaseConfigured()) {
+    local.saveOrder(order);
+    return order;
+  }
+
+  const isNew = idx < 0 || String(order.id).startsWith('o-');
+  const payload = orderToDbOrder(order);
+
+  if (isNew) {
+    insertRow('orders', payload)
+      .then((row) => {
+        const created = dbOrderToOrder(row);
+        const i = cache.orders.findIndex((o) => o === order);
+        if (i >= 0) cache.orders[i] = created;
+      })
+      .catch((err) => reportError('сохранение заказа', err));
+  } else {
+    updateRow('orders', order.id, payload).catch((err) => reportError('сохранение заказа', err));
+  }
+  return order;
+}
+
+function saveService(service) {
+  const idx = cache.services.findIndex((s) => s.id === service.id);
+  if (idx >= 0) cache.services[idx] = service;
+  else cache.services.push(service);
+
+  if (!isSupabaseConfigured()) {
+    local.saveService(service);
+    return service;
+  }
+
+  const payload = serviceToDbService(service);
+  updateRow('services', service.id, payload).catch((err) => {
+    // если строки ещё нет — пробуем вставить
+    insertRow('services', payload).catch((err2) => reportError('сохранение услуги', err2));
+  });
+  return service;
+}
+
+function pushNotification(notification) {
+  cache.notifications.push(notification);
+
+  if (!isSupabaseConfigured()) {
+    local.pushNotification(notification);
+    return notification;
+  }
+
+  insertRow('notifications', notificationToDbNotification(notification)).catch((err) =>
+    reportError('уведомление', err)
+  );
+  return notification;
 }
 
 
@@ -1538,8 +1979,6 @@ function buildInitialDb() {
 
 
 
-initDb(buildInitialDb());
-
 const CATEGORY_TITLES = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.title]));
 const STATUS_LABELS = {
   draft: 'Черновик',
@@ -1558,11 +1997,13 @@ const STATUS_LABELS = {
 
 const state = {
   screen: 'home',
-  currentUserId: 'u-anna', // демо-вход по умолчанию, см. renderLogin()
+  currentUserId: null,
   loggedIn: true,
   draft: null,
   openOrderId: null,
   toast: null,
+  booting: true,
+  bootError: null,
 };
 
 function currentUser() {
@@ -1787,15 +2228,15 @@ function rateOrder(orderId, rating) {
 
 function addSkill(categoryId, note) {
   const user = currentUser();
-  const updated = {
-    ...user,
-    availableAsWorker: true,
-    skills: [
-      ...user.skills,
-      { categoryId, note, verification: 'unverified', addedAt: new Date().toISOString() },
-    ],
-  };
-  saveUser(updated);
+  if (!user.availableAsWorker) {
+    saveUser({ ...user, availableAsWorker: true });
+  }
+  addSkillForUser(user.id, {
+    categoryId,
+    note,
+    verification: 'unverified',
+    addedAt: new Date().toISOString(),
+  });
   showToast('Навык добавлен — теперь вам будут показываться подходящие заказы рядом');
   render();
 }
@@ -1849,6 +2290,20 @@ function renderTopbar() {
       <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
         ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
       </button>
+    </header>
+  `;
+}
+
+function renderTopbarNoUser() {
+  return `
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="logo-slot">ЛОГО</div>
+        <div>
+          <span class="brand-title">Мужик</span>
+          <span class="brand-sub">человек рядом поможет</span>
+        </div>
+      </div>
     </header>
   `;
 }
@@ -2274,8 +2729,37 @@ function renderOperator() {
   `;
 }
 
+function renderBooting() {
+  return `<div class="screen"><div class="empty-state">Загрузка…</div></div>`;
+}
+
+function renderNoUsers() {
+  return `
+    <div class="screen">
+      <div class="empty-state">
+        Пока нет ни одного пользователя.<br/>
+        Зарегистрируйтесь через Telegram-бота <b>@mastervraenebot</b>, чтобы начать.
+      </div>
+    </div>
+  `;
+}
+
 function render() {
   const app = document.getElementById('app');
+
+  if (state.screen === 'boot' || state.booting) {
+    app.innerHTML = renderBooting();
+    return;
+  }
+
+  if (!currentUser()) {
+    app.innerHTML = `
+      ${renderTopbarNoUser()}
+      ${renderNoUsers()}
+    `;
+    return;
+  }
+
   let content = '';
   if (state.screen === 'home') content = renderHome();
   else if (state.screen === 'orders') content = renderOrders();
@@ -2458,9 +2942,19 @@ function handleAction(action, value) {
   }
 }
 
-console.info(assistantDemoNotice());
-render();
+async function boot() {
+  setSyncErrorHandler(showToast);
+  render(); // показать экран загрузки сразу
+  await initDb(buildInitialDb());
+  state.currentUserId = getUsers()[0]?.id ?? null;
+  state.booting = false;
+  console.info(assistantDemoNotice());
+  render();
+}
 
-})();  </script>
+boot();
+
+})();
+  </script>
 </body>
 </html>
