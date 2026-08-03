@@ -2804,8 +2804,8 @@ function renderProfile() {
         <p class="order-meta"><span>Район: ${escapeHtml(user.district)}</span></p>
         <button class="secondary-button" data-action="use-geo-profile">📍 Обновить геопозицию</button>
         <label style="margin-top:10px;">Радиус поиска заказов рядом (км)</label>
-        <input type="number" id="field-radius" value="${user.searchRadiusKm}" />
-        <button class="secondary-button" data-action="save-radius">Сохранить радиус</button>
+        <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
+        <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
       </div>
 
       <div class="section-title">Мои навыки</div>
