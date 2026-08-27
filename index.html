@@ -1624,7 +1624,7 @@ function saveUser(user) {
         const created = dbUserToUser(row, {});
         created.skills = user.skills;
         const i = cache.users.findIndex((u) => u === user);
-        if (i >= 0) cache.users[i] = created;
+        if (i >= 0) cache.users[i] = created; if (state.currentUserId === user.id) state.currentUserId = created.id;
       })
       .catch((err) => reportError('сохранение пользователя', err));
   } else {
@@ -1665,15 +1665,15 @@ function saveOrder(order) {
   const payload = orderToDbOrder(order);
 
   if (isNew) {
-    insertRow('orders', payload)
+    return insertRow('orders', payload)
       .then((row) => {
         const created = dbOrderToOrder(row);
         const i = cache.orders.findIndex((o) => o === order);
-        if (i >= 0) cache.orders[i] = created;
+        if (i >= 0) cache.orders[i] = created; return created;
       })
-      .catch((err) => reportError('сохранение заказа', err));
+      .catch((err) => { reportError('сохранение заказа', err); return order; });
   } else {
-    updateRow('orders', order.id, payload).catch((err) => reportError('сохранение заказа', err));
+    return updateRow('orders', order.id, payload).then(() => order).catch((err) => { reportError('сохранение заказа', err); return order; });
   }
   return order;
 }
@@ -2249,7 +2249,7 @@ function computeEstimateForDraft() {
   });
 }
 
-function publishDraft() {
+async function publishDraft() {
   const d = state.draft;
   const budgetWarning = d.isPrecedent
     ? null
@@ -2300,7 +2300,7 @@ function publishDraft() {
   order = transition(order, 'collecting_details');
   order = transition(order, 'estimate_ready');
   order = transition(order, 'searching');
-  saveOrder(order);
+  order = await saveOrder(order);
 
   pushNotification(
     createNotification(order.customerId, 'customer', order.id, 'order_published')
