@@ -85,9 +85,9 @@ body {
 }
 
 .logo-slot {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
   object-fit: cover;
   flex-shrink: 0;
 }
@@ -2493,7 +2493,17 @@ function getTelegramLinkLimitState() {
   const waitMs = last ? Math.max(0, last + cooldownMs - now) : 0;
   const overHour = hourCount >= 5;
   const overDay = dayCount >= 10;
-  return { canRequest: waitMs <= 0 && !overHour && !overDay, waitSeconds: Math.ceil(waitMs / 1000), overHour, overDay };
+  return {
+    canRequest: waitMs <= 0 && !overHour && !overDay,
+    waitSeconds: Math.ceil(waitMs / 1000),
+    overHour,
+    overDay,
+    // Поле ввода кода показываем только после того, как человек хотя бы раз
+    // нажал «Открыть бота» — до этого вводить туда просто нечего (бот ещё
+    // ничего не присылал), и поле не должно быть открыто для произвольного
+    // подбора кода.
+    hasRequested: attempts.length > 0,
+  };
 }
 
 /**
@@ -2578,9 +2588,14 @@ function renderTelegramLinkCard(purposeText) {
       <p class="order-meta">Нажмите кнопку — откроется бот и пришлёт код в чат. Введите этот код здесь, чтобы подключить Telegram и ${escapeHtml(purposeText)}.</p>
       <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
       ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
+      ${
+        limit.hasRequested
+          ? `
       <label style="margin-top:10px;">Код из бота</label>
       <input type="text" id="telegram-link-code" inputmode="numeric" placeholder="0000" />
-      <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>
+      <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>`
+          : ''
+      }
     </div>
   `;
 }
@@ -3572,9 +3587,14 @@ function renderPhoneGate() {
         <p class="order-meta">Telegram — для получения уведомлений о заказах</p>
         <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
         ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
+        ${
+          limit.hasRequested
+            ? `
         <label style="margin-top:6px;">Код из бота</label>
         <input type="text" id="telegram-link-code" inputmode="numeric" placeholder="0000" />
-        <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>
+        <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>`
+            : ''
+        }
       </div>
     </div>
   `;
