@@ -396,6 +396,28 @@ body {
   background: var(--gray-300);
 }
 
+.tool-button.recording {
+  background: var(--gray-900);
+  color: var(--gray-0);
+}
+
+.composer-geo-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.composer-geo-button svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.composer-assistant-hint:empty {
+  display: none;
+}
+
 .attachment-preview {
   display: flex;
   gap: 8px;
@@ -758,6 +780,15 @@ body {
       SUPABASE_ANON_KEY: 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw',
       YANDEX_GPT_ENABLED: false,
       TELEGRAM_BOT_USERNAME: 'mastervraenebot',
+      // Ключ HTTP-Геокодера Яндекс.Карт — клиентский, привязывается к домену
+      // сайта в кабинете Yandex Cloud, поэтому безопасен на клиенте (в отличие
+      // от ключа YandexGPT/SpeechKit). Пусто — автоопределение адреса просто
+      // возьмёт сырые координаты без красивого текста.
+      YANDEX_GEOCODER_API_KEY: '',
+      // Базовый URL Supabase Edge Function с расшифровкой голоса (/transcribe)
+      // и уточняющими вопросами по тексту заявки (/interpret). Пусто —
+      // ассистент выключен, сайт работает как раньше (ручной ввод).
+      ASSISTANT_FUNCTION_URL: '',
     };
   </script>
   <script>
@@ -2395,6 +2426,7 @@ function logout() {
   composerTimeFrom = '';
   composerTimeTo = '';
   composerExpandedField = null;
+  composerExactLocation = null;
   render();
 }
 
@@ -2572,7 +2604,7 @@ function renderTelegramLinkCard(purposeText) {
  * разумные значения по умолчанию, которые при желании можно будет
  * уточнить в диалоге с мастером.
  */
-function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTimeFrom, desiredTimeTo) {
+function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTimeFrom, desiredTimeTo, exactLocation) {
   const interpretation = interpretCustomerMessage(rawMessage);
   const user = currentUser();
   state.draft = {
@@ -2588,7 +2620,10 @@ function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredT
     houseNumberPublic: '',
     fullAddress: address || '',
     useMyLocation: true,
-    exactLocation: user?.location || CENTER,
+    // Точный адрес из композера (геолокация + Яндекс.Геокодер) в приоритете
+    // над местоположением профиля — так подбор мастеров считает расстояние
+    // от реального адреса заявки, а не от прежнего/дефолтного местоположения.
+    exactLocation: exactLocation || user?.location || CENTER,
     // Храним «сырую» ISO-дату (yyyy-mm-dd), а не отформатированную метку —
     // именно она пойдёт в реальную колонку orders.desired_date (тип date).
     // Человекочитаемое форматирование делается только на отображении.
@@ -2811,6 +2846,196 @@ function captureGeolocation() {
 }
 
 // ---------------------------------------------------------------------
+// Автоопределение адреса в композере через геолокацию браузера +
+// обратное геокодирование Яндекс.Карт. Это бонус: если ключ геокодера не
+// подключён (YANDEX_GEOCODER_API_KEY пуст) или запрос не удался, поле
+// адреса всё равно можно заполнить руками — форма ничего не теряет.
+// ---------------------------------------------------------------------
+
+/** @returns {Promise<string|null>} человекочитаемый адрес либо null, если ключ не подключён */
+async function reverseGeocodeYandex(lat, lng) {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  const apiKey = env.YANDEX_GEOCODER_API_KEY;
+  if (!apiKey) return null;
+  const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${encodeURIComponent(apiKey)}&geocode=${lng},${lat}&format=json&kind=house&results=1`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Yandex geocoder ${res.status}`);
+  const data = await res.json();
+  const found = data?.response?.GeoObjectCollection?.featureMember?.[0]?.GeoObject;
+  return found?.metaDataProperty?.GeocoderMetaData?.text || found?.name || null;
+}
+
+function captureComposerAddressGeo() {
+  if (!navigator.geolocation) {
+    showToast('Геолокация недоступна в этом браузере — введите адрес вручную');
+    return;
+  }
+  const btn = document.getElementById('composer-geo-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'Определяем…';
+  }
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude, longitude } = pos.coords;
+      composerExactLocation = { lat: latitude, lng: longitude };
+      try {
+        const address = await reverseGeocodeYandex(latitude, longitude);
+        if (address) composerAddressValue = address;
+      } catch (err) {
+        console.warn('[geo] обратное геокодирование не удалось', err);
+      }
+      if (!composerAddressValue.trim()) {
+        composerAddressValue = `Координаты: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+      }
+      showToast('Адрес определён автоматически — проверьте и уточните при необходимости');
+      render();
+      document.getElementById('composer-address')?.focus();
+    },
+    () => {
+      showToast('Доступ к геолокации отклонён — введите адрес вручную');
+      if (btn) {
+        btn.disabled = false;
+        btn.querySelector('span').textContent = 'Определить автоматически';
+      }
+    },
+    { timeout: 8000, enableHighAccuracy: true }
+  );
+}
+
+// ---------------------------------------------------------------------
+// ИИ-ассистент (YandexGPT + SpeechKit через Supabase Edge Function).
+// Полностью необязателен: если ASSISTANT_FUNCTION_URL не задан (или
+// запрос не удался), функции ниже просто ничего не делают — сайт и так
+// собирает нужные данные вручную (текст/адрес/дата/фото). См. также
+// interpretCustomerMessage() выше — офлайн-заглушка на ключевых словах,
+// которая продолжает работать независимо от этого блока.
+// ---------------------------------------------------------------------
+
+function isAssistantConfigured() {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  return Boolean(env.ASSISTANT_FUNCTION_URL);
+}
+
+let mediaRecorderInstance = null;
+let mediaRecorderChunks = [];
+let isRecordingVoice = false;
+
+function updateVoiceButtonUi() {
+  const btn = document.querySelector('[data-action="voice-toggle"]');
+  if (!btn) return;
+  btn.classList.toggle('recording', isRecordingVoice);
+  btn.title = isRecordingVoice ? 'Остановить запись' : 'Голосовое сообщение';
+}
+
+async function toggleVoiceRecording() {
+  if (!isAssistantConfigured()) {
+    return showToast('Демо: голосовое сообщение имитируется текстовой расшифровкой');
+  }
+  if (isRecordingVoice) {
+    mediaRecorderInstance?.stop();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast('Запись голоса не поддерживается этим браузером — введите текст вручную');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorderChunks = [];
+    mediaRecorderInstance = new MediaRecorder(stream);
+    mediaRecorderInstance.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) mediaRecorderChunks.push(e.data);
+    };
+    mediaRecorderInstance.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      isRecordingVoice = false;
+      updateVoiceButtonUi();
+      const blob = new Blob(mediaRecorderChunks, { type: mediaRecorderInstance.mimeType || 'audio/webm' });
+      await sendVoiceForTranscription(blob);
+    };
+    mediaRecorderInstance.start();
+    isRecordingVoice = true;
+    updateVoiceButtonUi();
+    showToast('Идёт запись — нажмите ещё раз, чтобы остановить');
+  } catch (err) {
+    console.error('[voice] доступ к микрофону не получен', err);
+    showToast('Не удалось получить доступ к микрофону — введите текст вручную');
+  }
+}
+
+async function sendVoiceForTranscription(blob) {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  showToast('Расшифровываем голосовое сообщение…');
+  try {
+    const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`transcribe ${res.status}`);
+    const data = await res.json();
+    const text = (data && data.text) || '';
+    if (!text.trim()) {
+      showToast('Не удалось распознать речь — попробуйте ещё раз или введите текст вручную');
+      return;
+    }
+    const input = document.getElementById('composer-input');
+    if (input) {
+      input.value = input.value.trim() ? `${input.value.trim()} ${text.trim()}` : text.trim();
+      updateComposerSendState();
+      autosizeComposerTextarea(input);
+      updateHomeHeroVisibility(input);
+      scheduleComposerAssistantCheck(input.value);
+    }
+    showToast('Голосовое расшифровано — проверьте текст');
+  } catch (err) {
+    console.error('[voice] расшифровка не удалась', err);
+    showToast('Не получилось расшифровать — попробуйте ещё раз или напишите текст вручную');
+  }
+}
+
+let composerAssistantTimer = null;
+let composerAssistantRequestId = 0;
+
+/** Вызывается при каждом вводе текста в композере — с задержкой спрашивает ассистента, не нужно ли уточнение. */
+function scheduleComposerAssistantCheck(text) {
+  if (!isAssistantConfigured()) return;
+  if (composerAssistantTimer) clearTimeout(composerAssistantTimer);
+  const trimmed = text.trim();
+  if (trimmed.length < 8) {
+    const hintEl = document.getElementById('composer-assistant-hint');
+    if (hintEl) hintEl.innerHTML = '';
+    return;
+  }
+  composerAssistantTimer = setTimeout(() => runComposerAssistantCheck(trimmed), 1500);
+}
+
+async function runComposerAssistantCheck(text) {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  const requestId = ++composerAssistantRequestId;
+  try {
+    const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/interpret`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error(`interpret ${res.status}`);
+    const data = await res.json();
+    if (requestId !== composerAssistantRequestId) return; // текст уже изменился — ответ устарел
+    const hintEl = document.getElementById('composer-assistant-hint');
+    if (!hintEl) return;
+    hintEl.innerHTML =
+      data && data.clarifyingQuestion
+        ? `<div class="msg assistant">${escapeHtml(data.clarifyingQuestion)}</div>`
+        : '';
+  } catch (err) {
+    console.warn('[assistant] уточнение не удалось получить', err);
+    // Тихо игнорируем — ассистент необязателен, форма и так собирает нужные данные.
+  }
+}
+
+// ---------------------------------------------------------------------
 // Рендер
 // ---------------------------------------------------------------------
 
@@ -2833,6 +3058,8 @@ const ICON_MIC =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg>';
 const ICON_ARROW_UP =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+const ICON_PIN =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-7.58 7-12.5A7 7 0 0 0 5 9.5C5 14.42 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.3"/></svg>';
 
 // Единственная точка входа в шапке — иконка профиля: по ней и происходит
 // вход (номер телефона), и через неё же специалист позже попадёт в
@@ -2921,11 +3148,13 @@ function renderHome() {
       }
       <div class="composer-card">
         <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу" rows="1"></textarea>
+        <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
           composerExpandedField === 'address'
             ? `
         <div class="composer-field-inline">
           <input type="text" id="composer-address" placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44" value="${escapeHtml(composerAddressValue)}" />
+          <button type="button" class="secondary-button composer-geo-button" id="composer-geo-btn" data-action="capture-composer-geo" style="margin-top:0;">${ICON_PIN}<span>Определить автоматически</span></button>
           <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
         </div>
         `
@@ -2964,7 +3193,7 @@ function renderHome() {
             <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
           </div>
           <div class="composer-tools">
-            <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">${ICON_MIC}</button>
+            <button class="tool-button" data-action="voice-toggle" title="Голосовое сообщение">${ICON_MIC}</button>
             <button class="send-button" id="composer-send" disabled>${ICON_ARROW_UP}</button>
           </div>
         </div>
@@ -3412,6 +3641,11 @@ let composerAddressValue = '';
 let composerDesiredDate = ''; // yyyy-mm-dd из <input type="date">
 let composerTimeFrom = ''; // HH:MM из <input type="time">
 let composerTimeTo = ''; // HH:MM из <input type="time">
+// Точные координаты, захваченные кнопкой «Определить автоматически» —
+// если заданы, используются как exactLocation заказа вместо CENTER/
+// местоположения профиля (см. startQuickDraft). Сбрасываются при ручном
+// редактировании адреса — текст и координаты не должны разъезжаться.
+let composerExactLocation = null;
 
 const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
@@ -3576,6 +3810,9 @@ function wireEvents() {
   if (composerAddress) {
     composerAddress.addEventListener('input', () => {
       composerAddressValue = composerAddress.value;
+      // Ручное редактирование адреса — сброс координат, захваченных геолокацией,
+      // чтобы текст и точка на карте не расходились.
+      composerExactLocation = null;
       updateComposerSendState();
     });
   }
@@ -3610,6 +3847,7 @@ function wireEvents() {
       updateComposerSendState();
       autosizeComposerTextarea(composerInput);
       updateHomeHeroVisibility(composerInput);
+      scheduleComposerAssistantCheck(composerInput.value);
     });
   }
   updateComposerSendState();
@@ -3633,8 +3871,9 @@ function wireEvents() {
       pendingAttachments = [];
       // Телефон (для новых пользователей) запрашивается позже, на экране
       // подтверждения заявки — см. renderCompose()/case 'publish-draft'.
-      startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo);
+      startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo, composerExactLocation);
       composerExpandedField = null;
+      composerExactLocation = null;
     });
   }
 
@@ -3698,8 +3937,10 @@ async function handleAction(action, value) {
     case 'go-profile': return go('profile');
     case 'go-operator': return go('operator');
     case 'open-order': return go('orderDetail', { openOrderId: value });
-    case 'voice-stub':
-      return showToast('Демо: голосовое сообщение имитируется текстовой расшифровкой');
+    case 'voice-toggle':
+      return toggleVoiceRecording();
+    case 'capture-composer-geo':
+      return captureComposerAddressGeo();
 
     case 'request-telegram-code': {
       const limit = getTelegramLinkLimitState();
