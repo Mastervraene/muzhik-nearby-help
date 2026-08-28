@@ -2324,7 +2324,7 @@ function startQuickDraft(rawMessage, attachments, address) {
     houseNumberPublic: '',
     fullAddress: address || '',
     useMyLocation: true,
-    exactLocation: pendingExactLocation || user?.location || CENTER,
+    exactLocation: user?.location || CENTER,
     desiredDate: '',
     timeWindow: '',
     urgency: 'normal',
@@ -2332,7 +2332,6 @@ function startQuickDraft(rawMessage, attachments, address) {
     paymentMethod: 'on_site',
     negotiationOffer: '',
   };
-  pendingExactLocation = null;
   go('compose');
 }
 
@@ -2660,9 +2659,6 @@ function renderHome() {
         `
             : ''
         }
-        <button type="button" class="tool-button" id="composer-geo" style="width:auto;padding:6px 10px;font-size:12px;gap:6px;margin-top:6px;">
-          📍 Определить моё местоположение
-        </button>
         <div id="composer-attachments" class="attachment-preview"></div>
         <div class="composer-actions">
           <div class="composer-tools">
@@ -3072,7 +3068,6 @@ function render() {
 }
 
 let pendingAttachments = [];
-let pendingExactLocation = null;
 
 /**
  * Загружает файл в Supabase Storage (бакет order-attachments, публичный
@@ -3145,31 +3140,8 @@ function wireEvents() {
   const composerSend = document.getElementById('composer-send');
   const composerFile = document.getElementById('composer-file');
   const composerAttachments = document.getElementById('composer-attachments');
-  const composerGeo = document.getElementById('composer-geo');
   const composerAddress = document.getElementById('composer-address');
   const composerPhone = document.getElementById('composer-phone');
-
-  if (composerGeo) {
-    composerGeo.addEventListener('click', () => {
-      if (!navigator.geolocation) {
-        showToast('Геолокация недоступна в этом браузере — просто укажите адрес текстом');
-        return;
-      }
-      composerGeo.disabled = true;
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          pendingExactLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          composerGeo.textContent = '📍 Геопозиция определена';
-          showToast('Геопозиция сохранена — виден будет только мастеру, кому назначите заказ');
-        },
-        () => {
-          composerGeo.disabled = false;
-          showToast('Не удалось получить геопозицию — можно указать адрес текстом');
-        },
-        { timeout: 8000 }
-      );
-    });
-  }
 
   if (composerPhone) {
     const errorEl = document.getElementById('composer-phone-error');
@@ -3208,7 +3180,7 @@ function wireEvents() {
             saveUser(updated);
           } else {
             const user = await ensureUserByPhone(phone, {
-              location: pendingExactLocation || CENTER,
+              location: CENTER,
               district: address,
             });
             state.currentUserId = user.id;
