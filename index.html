@@ -2857,8 +2857,8 @@ function renderHome() {
   const user = currentUser();
   if (!composerAddressValue.trim() && user?.district) composerAddressValue = user.district;
 
-  const addressLabel = composerAddressValue.trim() ? `📍 ${composerAddressValue.trim()}` : '📍 Адрес';
-  const dateLabel = `📅 ${formatComposerDateLabel(composerDesiredDate, composerTimeFrom, composerTimeTo)}`;
+  const addressLabel = composerAddressValue.trim() ? composerAddressValue.trim() : 'Адрес';
+  const dateLabel = formatComposerDateLabel(composerDesiredDate, composerTimeFrom, composerTimeTo);
   const dateBounds = composerDateBounds();
 
   return `
