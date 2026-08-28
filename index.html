@@ -2269,7 +2269,10 @@ const state = {
   booting: true,
   bootError: null,
   specialistMode: false, // показать доп. кнопки специалиста над формой заявки
-  showOnboarding: false, // окно «Как это работает»: авто при старте без входа, либо вручную кнопкой «?»
+  // Какое из двух всплывающих окон открыто: null — ни одно; 'short' —
+  // краткая карточка «Локация — самое важное» (авто при старте без
+  // входа); 'long' — подробное «Как это работает» (по кнопке «?»).
+  infoOverlay: null,
 };
 
 function currentUser() {
@@ -3690,7 +3693,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.showOnboarding ? renderOnboardingOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -3718,7 +3721,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.showOnboarding ? renderOnboardingOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : ''}
   `;
 
   wireEvents();
@@ -3785,10 +3788,38 @@ function formatComposerDateLabel(dateStr, timeFrom, timeTo) {
   return time ? `${label}, ${time}` : label;
 }
 
-// Окно «Как это работает»: всплывает само при старте сайта, пока человек
-// не авторизован (см. boot()), и его же в любой момент можно открыть
-// заново кнопкой «?» в шапке (см. data-action="show-help").
+// Краткая карточка-подсказка: всплывает сама при старте сайта, пока
+// человек не авторизован (см. boot()). Подробное объяснение работы
+// сайта — отдельное окно renderHelpOverlay(), открывается кнопкой «?».
 function renderOnboardingOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-art">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
+          <svg viewBox="0 0 400 200" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Карта с точкой">
+            <rect width="400" height="200" fill="none" />
+            <path d="M0 40 H400 M0 90 H400 M0 140 H400" stroke="#bfdbfe" stroke-width="2" />
+            <path d="M70 0 V200 M180 0 V200 M300 0 V200" stroke="#bfdbfe" stroke-width="2" />
+            <circle cx="200" cy="100" r="34" fill="#2563eb" opacity="0.15" />
+            <path d="M200 74c-14 0-25 11-25 25 0 18 25 41 25 41s25-23 25-41c0-14-11-25-25-25z" fill="#2563eb" />
+            <circle cx="200" cy="99" r="9" fill="#ffffff" />
+          </svg>
+        </div>
+        <div class="onboarding-body">
+          <h2>Локация — самое важное</h2>
+          <p>Опишите задачу одним сообщением — рядом найдётся человек, который поможет. Чем точнее адрес, тем быстрее откликнется мастер поблизости.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Начать</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Подробное окно «Как это работает» — открывается кнопкой «?» в шапке
+// (см. data-action="show-help"), в любой момент, вне зависимости от
+// того, авторизован человек или нет.
+function renderHelpOverlay() {
   return `
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
@@ -4077,10 +4108,10 @@ async function handleAction(action, value) {
       composerExpandedField = null;
       return render();
     case 'dismiss-onboarding':
-      state.showOnboarding = false;
+      state.infoOverlay = null;
       return render();
     case 'show-help':
-      state.showOnboarding = true;
+      state.infoOverlay = 'long';
       return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
@@ -4196,10 +4227,10 @@ async function boot() {
   }
   state.screen = 'home';
 
-  // Окно «Как это работает» — само всплывает при старте, пока человек не
-  // авторизован (телефон/Telegram не привязаны). После входа не мешает;
-  // в любой момент его можно открыть заново кнопкой «?» в шапке.
-  state.showOnboarding = !currentUser();
+  // Краткая карточка-подсказка сама всплывает при старте, пока человек не
+  // авторизован (телефон/Telegram не привязаны). Подробное объяснение
+  // работы сайта в любой момент открывается кнопкой «?» в шапке.
+  state.infoOverlay = currentUser() ? null : 'short';
 
   state.booting = false;
   console.info(assistantDemoNotice());
