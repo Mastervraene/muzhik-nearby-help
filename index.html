@@ -37,6 +37,8 @@
 html, body {
   margin: 0;
   padding: 0;
+  height: 100%;
+  overflow: hidden; /* страница не скроллится целиком — внутри скроллится только .screen */
   background: var(--gray-0);
   color: var(--gray-800);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
@@ -46,12 +48,17 @@ html, body {
 body {
   display: flex;
   justify-content: center;
+  /* 100dvh, а не 100vh — на мобильных 100vh считает высоту без вычета
+     адресной строки браузера, из-за чего низ страницы (поле ввода)
+     оказывался за пределами видимой области и требовал прокрутки. */
+  height: 100vh;
+  height: 100dvh;
 }
 
 .app-shell {
   width: 100%;
   max-width: var(--max-width);
-  min-height: 100vh;
+  height: 100%;
   background: var(--gray-0);
   display: flex;
   flex-direction: column;
@@ -2791,8 +2798,11 @@ const ICON_MIC =
 const ICON_ARROW_UP =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 
+// Единственная точка входа в шапке — иконка профиля: по ней и происходит
+// вход (номер телефона), и через неё же специалист позже попадёт в
+// профиль вводить навыки/специализацию. Отдельная кнопка «режим
+// специалиста» и колокольчик уведомлений сюда больше не выводятся.
 function renderTopbar() {
-  const notifications = getNotificationsFor(state.currentUserId);
   return `
     <header class="topbar">
       <div class="brand-block">
@@ -2802,13 +2812,7 @@ function renderTopbar() {
           <span class="brand-sub">человек рядом поможет</span>
         </div>
       </div>
-      <div style="display:flex;gap:8px;">
-        <button class="icon-button" data-action="toggle-specialist-mode" aria-label="Войти как специалист" title="Войти как специалист" style="${state.specialistMode ? 'background:var(--gray-800);color:var(--gray-0);' : ''}">🔧</button>
-        <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
-          ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
-        </button>
-        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
-      </div>
+      <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
     </header>
   `;
 }
@@ -2823,22 +2827,22 @@ function renderTopbarNoUser() {
           <span class="brand-sub">человек рядом поможет</span>
         </div>
       </div>
-      <button class="icon-button" data-action="toggle-specialist-mode" aria-label="Войти как специалист" title="Войти как специалист" style="${state.specialistMode ? 'background:var(--gray-800);color:var(--gray-0);' : ''}">🔧</button>
+      <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
     </header>
   `;
 }
 
 function renderBottomNav() {
-  // Заказы/профиль появляются в нижней навигации только после входа в
-  // аккаунт (через иконку профиля в шапке) — до входа заявку можно
-  // отправить и без них.
-  const tabs = currentUser()
-    ? [
-        ['home', '✍︎', 'Заявка'],
-        ['orders', '▤', 'Заказы'],
-        ['profile', '◍', 'Профиль'],
-      ]
-    : [['home', '✍︎', 'Заявка']];
+  // Нижняя навигация целиком появляется только после входа в аккаунт
+  // (через иконку профиля в шапке) — до входа заявку и так видно и
+  // отправляют её прямо с главного экрана, отдельная вкладка «Заявка»
+  // там не нужна.
+  if (!currentUser()) return '';
+  const tabs = [
+    ['home', '✍︎', 'Заявка'],
+    ['orders', '▤', 'Заказы'],
+    ['profile', '◍', 'Профиль'],
+  ];
   return `
     <nav class="bottom-nav">
       ${tabs
