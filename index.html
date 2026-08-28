@@ -1455,8 +1455,15 @@ function dbUserToUser(row, skillsByUser) {
     searchRadiusKm: Number(row.search_radius_km ?? 3),
     skills: skillsByUser[row.id] || [],
     availableAsWorker: Boolean(row.available_as_worker),
+    // Рейтинг человека как специалиста (ставит заказчик после выполнения
+    // заказа, см. rateOrder()) — уже используется.
     rating: Number(row.rating ?? 0),
     ratingCount: Number(row.rating_count ?? 0),
+    // Рейтинг человека как заказчика (ставил бы специалист после сдачи
+    // заказа) — колонки заведены заранее, UI и логика простановки оценки
+    // пока не реализованы, поля всегда пустые (0).
+    customerRating: Number(row.customer_rating ?? 0),
+    customerRatingCount: Number(row.customer_rating_count ?? 0),
     blocked: Boolean(row.blocked),
     createdAt: row.created_at,
   };
@@ -1478,6 +1485,8 @@ function userToDbUser(user) {
     available_as_worker: user.availableAsWorker,
     rating: user.rating,
     rating_count: user.ratingCount,
+    customer_rating: user.customerRating ?? 0,
+    customer_rating_count: user.customerRatingCount ?? 0,
     blocked: user.blocked,
   };
 }
@@ -1837,6 +1846,8 @@ const USERS_SEED = [
     availableAsWorker: false,
     rating: 0,
     ratingCount: 0,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: '2026-07-01T10:00:00.000Z',
   },
@@ -1854,6 +1865,8 @@ const USERS_SEED = [
     availableAsWorker: true,
     rating: 4.8,
     ratingCount: 34,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: '2026-07-01T10:00:00.000Z',
   },
@@ -1871,6 +1884,8 @@ const USERS_SEED = [
     availableAsWorker: true,
     rating: 4.6,
     ratingCount: 21,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: '2026-07-01T10:00:00.000Z',
   },
@@ -1888,6 +1903,8 @@ const USERS_SEED = [
     availableAsWorker: true,
     rating: 4.9,
     ratingCount: 12,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: '2026-07-01T10:00:00.000Z',
   },
@@ -1905,6 +1922,8 @@ const USERS_SEED = [
     availableAsWorker: true,
     rating: 4.5,
     ratingCount: 18,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: '2026-07-01T10:00:00.000Z',
   },
@@ -2294,6 +2313,8 @@ async function ensureUserByPhone(phone, extra = {}) {
     availableAsWorker: false,
     rating: 0,
     ratingCount: 0,
+    customerRating: 0,
+    customerRatingCount: 0,
     blocked: false,
     createdAt: new Date().toISOString(),
   };
