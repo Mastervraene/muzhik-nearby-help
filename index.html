@@ -75,19 +75,36 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, 0.92);
+  /* Плавный переход вместо жёсткой границы: верх шапки почти непрозрачный
+     (логотип/заголовок/иконка профиля остаются чёткими), к низу самой
+     шапки уже уходит в прозрачность — контент под ней не обрезается
+     резкой линией, а мягко тает. Основную часть растяжки даёт ::after
+     ниже — она продолжает угасание на content под шапкой. */
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.97) 0%, rgba(255, 255, 255, 0.97) 65%, rgba(255, 255, 255, 0) 100%);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  box-shadow: var(--shadow-sm);
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 28px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
 .logo-slot {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   object-fit: cover;
   flex-shrink: 0;
 }
