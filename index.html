@@ -2468,7 +2468,12 @@ function logout() {
  */
 async function getLoginCodeStatus(code) {
   if (!isSupabaseConfigured()) return null;
-  const rows = await getRows('login_codes', `code=eq.${encodeURIComponent(code)}&select=telegram_id`);
+  // expires_at=gt.now — просроченный код (бот выдаёт их на 10 минут) не
+  // должен больше проходить как действительный.
+  const rows = await getRows(
+    'login_codes',
+    `code=eq.${encodeURIComponent(code)}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&select=telegram_id`
+  );
   return rows[0] || null;
 }
 
