@@ -21,7 +21,13 @@
   --gray-700: #383838;
   --gray-800: #232323;
   --gray-900: #121212;
-  --radius: 14px;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --radius: 20px;
+  --radius-sm: 14px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 2px 6px rgba(15, 23, 42, 0.05), 0 14px 32px rgba(15, 23, 42, 0.08);
   --danger: #6b6b6b; /* без цвета — предупреждения выделяются текстурой/жирностью, не цветом */
   --max-width: 480px;
 }
@@ -46,7 +52,7 @@ body {
   width: 100%;
   max-width: var(--max-width);
   min-height: 100vh;
-  background: var(--gray-50);
+  background: var(--gray-0);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -59,8 +65,10 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  background: var(--gray-0);
-  border-bottom: 1px solid var(--gray-200);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-sm);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -133,8 +141,10 @@ body {
 
 .bottom-nav {
   display: flex;
-  border-top: 1px solid var(--gray-200);
-  background: var(--gray-0);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 -1px 2px rgba(15, 23, 42, 0.04), 0 -8px 24px rgba(15, 23, 42, 0.06);
   position: sticky;
   bottom: 0;
   z-index: 10;
@@ -154,7 +164,7 @@ body {
 }
 
 .bottom-nav button.active {
-  color: var(--gray-900);
+  color: var(--accent);
   font-weight: 700;
 }
 
@@ -179,7 +189,9 @@ body {
 }
 
 .home-hero h1 {
-  font-size: 19px;
+  font-size: 23px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   margin: 10px 0 6px;
   color: var(--gray-900);
 }
@@ -192,9 +204,9 @@ body {
 
 .composer-card {
   background: var(--gray-0);
-  border: 1px solid var(--gray-200);
   border-radius: var(--radius);
-  padding: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 14px;
 }
 
 .composer-textarea {
@@ -219,12 +231,89 @@ body {
   margin: 2px 0 10px;
 }
 
+.composer-chip-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.composer-chip {
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-chip.filled {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.composer-field-inline {
+  margin-top: 10px;
+  background: var(--gray-50);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composer-field-inline input[type="text"],
+.composer-field-inline input[type="date"],
+.composer-field-inline input[type="time"] {
+  width: 100%;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-0);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--gray-900);
+}
+
+.composer-field-inline .composer-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.composer-field-inline .composer-field-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer-field-done {
+  align-self: flex-end;
+  border: none;
+  background: var(--accent);
+  color: var(--gray-0);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
 .composer-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid var(--gray-100);
   padding-top: 10px;
+  margin-top: 10px;
 }
 
 .composer-tools {
@@ -233,11 +322,11 @@ body {
 }
 
 .tool-button {
-  border: 1px solid var(--gray-200);
-  background: var(--gray-50);
+  border: none;
+  background: var(--gray-100);
   width: 38px;
   height: 38px;
-  border-radius: 10px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -247,7 +336,7 @@ body {
 
 .send-button {
   border: none;
-  background: var(--gray-900);
+  background: var(--accent);
   color: var(--gray-0);
   width: 40px;
   height: 40px;
@@ -336,9 +425,9 @@ body {
 
 .field-card {
   background: var(--gray-0);
-  border: 1px solid var(--gray-200);
   border-radius: var(--radius);
-  padding: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 14px;
   margin-top: 10px;
 }
 
@@ -373,8 +462,8 @@ body {
 }
 
 .chip-row button {
-  border: 1px solid var(--gray-300);
-  background: var(--gray-0);
+  border: none;
+  background: var(--gray-100);
   color: var(--gray-700);
   padding: 7px 12px;
   border-radius: 999px;
@@ -382,18 +471,17 @@ body {
 }
 
 .chip-row button.selected {
-  background: var(--gray-900);
+  background: var(--accent);
   color: var(--gray-0);
-  border-color: var(--gray-900);
 }
 
 .primary-button {
   width: 100%;
   border: none;
-  background: var(--gray-900);
+  background: var(--accent);
   color: var(--gray-0);
   padding: 13px;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   font-size: 14.5px;
   font-weight: 700;
 }
@@ -404,11 +492,11 @@ body {
 
 .secondary-button {
   width: 100%;
-  border: 1px solid var(--gray-300);
-  background: var(--gray-0);
+  border: none;
+  background: var(--gray-100);
   color: var(--gray-700);
   padding: 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   margin-top: 8px;
 }
@@ -417,9 +505,9 @@ body {
 
 .order-card {
   background: var(--gray-0);
-  border: 1px solid var(--gray-200);
   border-radius: var(--radius);
-  padding: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 14px;
   margin-bottom: 10px;
 }
 
@@ -533,6 +621,86 @@ body {
   max-width: 90%;
   text-align: center;
   z-index: 50;
+}
+
+/* ---------- Онбординг (первый визит) ---------- */
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 18, 18, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+  padding: 0;
+}
+
+.onboarding-card {
+  width: 100%;
+  max-width: var(--max-width);
+  background: var(--gray-0);
+  border-radius: 28px 28px 0 0;
+  box-shadow: 0 -8px 40px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+  animation: onboarding-rise 0.25s ease-out;
+}
+
+@keyframes onboarding-rise {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.onboarding-art {
+  position: relative;
+  height: 200px;
+  background: linear-gradient(160deg, #dbeafe 0%, #eff6ff 55%, #ffffff 100%);
+}
+
+.onboarding-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--gray-700);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.onboarding-body {
+  padding: 22px 22px 24px;
+}
+
+.onboarding-body h2 {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--gray-900);
+  margin: 0 0 10px;
+}
+
+.onboarding-body p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--gray-600);
+  margin: 0 0 20px;
+}
+
+.onboarding-cta {
+  width: 100%;
+  border: none;
+  background: var(--accent);
+  color: var(--gray-0);
+  padding: 15px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 </style>
@@ -1979,6 +2147,7 @@ const state = {
   booting: true,
   bootError: null,
   specialistMode: false, // показать доп. кнопки специалиста над формой заявки
+  showOnboarding: false, // карточка-инструкция при первом визите
 };
 
 function currentUser() {
@@ -2155,6 +2324,10 @@ function logout() {
   clearSession();
   state.currentUserId = null;
   state.screen = 'home';
+  composerAddressValue = '';
+  composerPhoneValue = '';
+  composerPhoneValid = false;
+  composerExpandedField = null;
   render();
 }
 
@@ -2308,7 +2481,7 @@ function renderTelegramLinkCard(purposeText) {
  * разумные значения по умолчанию, которые при желании можно будет
  * уточнить в диалоге с мастером.
  */
-function startQuickDraft(rawMessage, attachments, address) {
+function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTime) {
   const interpretation = interpretCustomerMessage(rawMessage);
   const user = currentUser();
   state.draft = {
@@ -2325,8 +2498,8 @@ function startQuickDraft(rawMessage, attachments, address) {
     fullAddress: address || '',
     useMyLocation: true,
     exactLocation: user?.location || CENTER,
-    desiredDate: '',
-    timeWindow: '',
+    desiredDate: desiredDate ? formatComposerDateLabel(desiredDate, '') : '',
+    timeWindow: desiredTime || '',
     urgency: 'normal',
     budget: '',
     paymentMethod: 'on_site',
@@ -2616,12 +2789,22 @@ function renderBottomNav() {
 function renderHome() {
   const user = currentUser();
   const needPhone = !user || state.specialistMode;
+  if (!composerAddressValue.trim() && user?.district) composerAddressValue = user.district;
+  if (needPhone && !composerPhoneValue.trim() && user?.phone) {
+    composerPhoneValue = user.phone;
+    composerPhoneValid = Boolean(parsePhoneToLocal10(user.phone));
+  }
+
+  const addressLabel = composerAddressValue.trim() ? `📍 ${composerAddressValue.trim()}` : '📍 Адрес';
+  const dateLabel = `📅 ${formatComposerDateLabel(composerDesiredDate, composerDesiredTime)}`;
+  const phoneLabel = composerPhoneValue.trim() ? `📞 ${composerPhoneValue.trim()}` : '📞 Телефон';
+
   return `
     <div class="screen">
       <div class="home-hero">
         <div class="logo-slot" style="margin:0 auto 10px;">ЛОГО</div>
         <h1>Что нужно сделать?</h1>
-        <p>Опишите проблему, адрес, телефон и удобное время одним сообщением — рядом найдётся человек, который поможет.</p>
+        <p>Опишите проблему одним сообщением — рядом найдётся человек, который поможет.</p>
       </div>
       ${
         state.specialistMode
@@ -2636,26 +2819,47 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу&#10;Дата и время, когда нужно сделать (необязательно)"></textarea>
-        <input
-          type="text"
-          id="composer-address"
-          class="composer-textarea"
-          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
-          placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44"
-          value="${escapeHtml(user?.district || '')}"
-        />
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу"></textarea>
+        <div class="composer-chip-row">
+          <button type="button" class="composer-chip ${composerAddressValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="address">${escapeHtml(addressLabel)}</button>
+          <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
+          ${
+            needPhone
+              ? `<button type="button" class="composer-chip ${composerPhoneValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="phone">${escapeHtml(phoneLabel)}</button>`
+              : ''
+          }
+        </div>
         ${
-          needPhone
+          composerExpandedField === 'address'
             ? `
-        <input
-          type="text"
-          id="composer-phone"
-          class="composer-textarea"
-          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
-          value="${escapeHtml(user?.phone || '+7 ')}"
-        />
-        <div class="order-warning" id="composer-phone-error" style="display:none;"></div>
+        <div class="composer-field-inline">
+          <input type="text" id="composer-address" placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44" value="${escapeHtml(composerAddressValue)}" />
+          <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
+        </div>
+        `
+            : ''
+        }
+        ${
+          composerExpandedField === 'date'
+            ? `
+        <div class="composer-field-inline">
+          <div class="composer-field-row">
+            <input type="date" id="composer-date" value="${escapeHtml(composerDesiredDate)}" />
+            <input type="time" id="composer-time" value="${escapeHtml(composerDesiredTime)}" />
+          </div>
+          <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
+        </div>
+        `
+            : ''
+        }
+        ${
+          composerExpandedField === 'phone' && needPhone
+            ? `
+        <div class="composer-field-inline">
+          <input type="text" id="composer-phone" value="${escapeHtml(composerPhoneValue || '+7 ')}" />
+          <div class="order-warning" id="composer-phone-error" style="display:none;"></div>
+          <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
+        </div>
         `
             : ''
         }
@@ -3035,6 +3239,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
+      ${state.showOnboarding ? renderOnboardingOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -3062,12 +3267,69 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
+    ${state.showOnboarding ? renderOnboardingOverlay() : ''}
   `;
 
   wireEvents();
 }
 
 let pendingAttachments = [];
+
+// ---------------------------------------------------------------------
+// Composer: поля адрес/дата/телефон свёрнуты в чипы (раскрываются по
+// клику). Значения живут вне state, т.к. это черновой ввод конкретной
+// формы, а не данные заказа/пользователя.
+// ---------------------------------------------------------------------
+let composerExpandedField = null; // 'address' | 'date' | 'phone' | null
+let composerAddressValue = '';
+let composerPhoneValue = '';
+let composerPhoneValid = false;
+let composerDesiredDate = ''; // yyyy-mm-dd из <input type="date">
+let composerDesiredTime = ''; // HH:MM из <input type="time">
+
+const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+/** @param {string} dateStr — yyyy-mm-dd, @param {string} timeStr — HH:MM */
+function formatComposerDateLabel(dateStr, timeStr) {
+  if (!dateStr) return 'Когда удобно';
+  const d = new Date(dateStr + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return 'Когда удобно';
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  let label;
+  if (d.toDateString() === today.toDateString()) label = 'Сегодня';
+  else if (d.toDateString() === tomorrow.toDateString()) label = 'Завтра';
+  else label = `${d.getDate()} ${RU_MONTHS_SHORT[d.getMonth()]}`;
+  return timeStr ? `${label}, ${timeStr}` : label;
+}
+
+const ONBOARDING_SEEN_KEY = 'muzhik_onboarding_seen_v1';
+
+function renderOnboardingOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-art">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
+          <svg viewBox="0 0 400 200" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Карта с точкой">
+            <rect width="400" height="200" fill="none" />
+            <path d="M0 40 H400 M0 90 H400 M0 140 H400" stroke="#bfdbfe" stroke-width="2" />
+            <path d="M70 0 V200 M180 0 V200 M300 0 V200" stroke="#bfdbfe" stroke-width="2" />
+            <circle cx="200" cy="100" r="34" fill="#2563eb" opacity="0.15" />
+            <path d="M200 74c-14 0-25 11-25 25 0 18 25 41 25 41s25-23 25-41c0-14-11-25-25-25z" fill="#2563eb" />
+            <circle cx="200" cy="99" r="9" fill="#ffffff" />
+          </svg>
+        </div>
+        <div class="onboarding-body">
+          <h2>Локация — самое важное</h2>
+          <p>Опишите задачу одним сообщением — рядом найдётся человек, который поможет. Чем точнее адрес, тем быстрее откликнется мастер поблизости.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Начать</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 /**
  * Загружает файл в Supabase Storage (бакет order-attachments, публичный
@@ -3125,13 +3387,12 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
 
 function updateComposerSendState() {
   const composerInput = document.getElementById('composer-input');
-  const composerAddress = document.getElementById('composer-address');
-  const composerPhone = document.getElementById('composer-phone');
   const composerSend = document.getElementById('composer-send');
   if (!composerSend) return;
+  const needPhone = !currentUser() || state.specialistMode;
   const textOk = Boolean(composerInput && composerInput.value.trim());
-  const addressOk = Boolean(composerAddress && composerAddress.value.trim());
-  const phoneOk = !composerPhone || composerPhone.dataset.valid === 'true';
+  const addressOk = Boolean(composerAddressValue.trim());
+  const phoneOk = !needPhone || composerPhoneValid;
   composerSend.disabled = !(textOk && addressOk && phoneOk);
 }
 
@@ -3142,13 +3403,34 @@ function wireEvents() {
   const composerAttachments = document.getElementById('composer-attachments');
   const composerAddress = document.getElementById('composer-address');
   const composerPhone = document.getElementById('composer-phone');
+  const composerDate = document.getElementById('composer-date');
+  const composerTime = document.getElementById('composer-time');
 
   if (composerPhone) {
     const errorEl = document.getElementById('composer-phone-error');
-    wirePhoneField(composerPhone, errorEl, updateComposerSendState);
+    wirePhoneField(composerPhone, errorEl, () => {
+      composerPhoneValue = composerPhone.value;
+      composerPhoneValid = composerPhone.dataset.valid === 'true';
+      updateComposerSendState();
+    });
+  }
+  if (composerAddress) {
+    composerAddress.addEventListener('input', () => {
+      composerAddressValue = composerAddress.value;
+      updateComposerSendState();
+    });
+  }
+  if (composerDate) {
+    composerDate.addEventListener('change', () => {
+      composerDesiredDate = composerDate.value;
+    });
+  }
+  if (composerTime) {
+    composerTime.addEventListener('change', () => {
+      composerDesiredTime = composerTime.value;
+    });
   }
   if (composerInput) composerInput.addEventListener('input', updateComposerSendState);
-  if (composerAddress) composerAddress.addEventListener('input', updateComposerSendState);
   updateComposerSendState();
 
   if (composerFile) {
@@ -3163,17 +3445,18 @@ function wireEvents() {
   if (composerSend) {
     composerSend.addEventListener('click', async () => {
       const text = composerInput.value.trim();
-      const address = composerAddress.value.trim();
+      const address = composerAddressValue.trim();
+      const needPhone = !currentUser() || state.specialistMode;
       if (!text || !address) return;
-      if (composerPhone && composerPhone.dataset.valid !== 'true') return;
+      if (needPhone && !composerPhoneValid) return;
 
       composerSend.disabled = true;
       const atts = pendingAttachments;
       pendingAttachments = [];
 
       try {
-        if (composerPhone) {
-          const phone = composerPhone.value;
+        if (needPhone) {
+          const phone = composerPhoneValue;
           if (currentUser()) {
             // режим специалиста: обновляем телефон уже вошедшего пользователя
             const updated = { ...currentUser(), phone, phoneVerified: false };
@@ -3187,7 +3470,8 @@ function wireEvents() {
             saveSession(user.id);
           }
         }
-        startQuickDraft(text, atts, address);
+        startQuickDraft(text, atts, address, composerDesiredDate, composerDesiredTime);
+        composerExpandedField = null;
       } catch (err) {
         console.error('[composer] send failed', err);
         showToast('Не получилось отправить заявку — попробуйте ещё раз');
@@ -3268,16 +3552,36 @@ function handleAction(action, value) {
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
       return render();
-    case 'specialist-focus-phone': {
-      const el = document.getElementById('composer-phone');
-      if (el) el.focus();
+    case 'specialist-focus-phone':
+      composerExpandedField = 'phone';
+      render();
+      document.getElementById('composer-phone')?.focus();
+      return;
+    case 'specialist-focus-address':
+      composerExpandedField = 'address';
+      render();
+      document.getElementById('composer-address')?.focus();
+      return;
+    case 'toggle-composer-field': {
+      composerExpandedField = composerExpandedField === value ? null : value;
+      render();
+      const idByField = { address: 'composer-address', date: 'composer-date', phone: 'composer-phone' };
+      if (composerExpandedField && idByField[composerExpandedField]) {
+        document.getElementById(idByField[composerExpandedField])?.focus();
+      }
       return;
     }
-    case 'specialist-focus-address': {
-      const el = document.getElementById('composer-address');
-      if (el) el.focus();
-      return;
-    }
+    case 'collapse-composer-field':
+      composerExpandedField = null;
+      return render();
+    case 'dismiss-onboarding':
+      state.showOnboarding = false;
+      try {
+        localStorage.setItem(ONBOARDING_SEEN_KEY, '1');
+      } catch {
+        // localStorage недоступен — просто не запоминаем, покажем снова в следующий раз
+      }
+      return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
       if (fullAddressField) state.draft.fullAddress = fullAddressField.value.trim();
@@ -3361,6 +3665,12 @@ async function boot() {
     state.currentUserId = getUsers()[0]?.id ?? null;
   }
   state.screen = 'home';
+
+  try {
+    state.showOnboarding = !localStorage.getItem(ONBOARDING_SEEN_KEY);
+  } catch {
+    state.showOnboarding = false; // localStorage недоступен — не блокируем интерфейс
+  }
 
   state.booting = false;
   console.info(assistantDemoNotice());
