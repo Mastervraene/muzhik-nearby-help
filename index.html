@@ -1002,48 +1002,23 @@ async function updateRow(table, id, patch) {
 }
 
 
-// ---- js/adapters/telegramAuth.js ----
+// ---- js/adapters/session.js ----
 /**
- * Вход через Telegram: код через бота вместо официального JS-виджета.
+ * Вход по номеру телефона (см. app.js: ensureUserByPhone).
  *
- * Почему не виджет telegram-widget.js: он тяжёлый, требует подтвердить
- * некрасивый punycode-домен (xn--80aaflcxqniqbin.xn--p1ai) и на практике
- * подвисает без VPN у части пользователей в России.
+ * Раньше вход был через Telegram-бота (код в диплинке); от этого отказались
+ * в пользу прямого ввода телефона в форме заявки — быстрее и не требует
+ * стороннего мессенджера. Телефон сразу привязывается к id пользователя;
+ * поле phone_verified пока всегда false — подтверждение по SMS добавится
+ * отдельным шагом позже, тогда же появится и реальная проверка личности.
  *
- * Почему код вводится в боте вручную, а не передаётся автоматически через
- * параметр диплинка: BotHelp не даёт прочитать параметр /start как
- * переменную в вебхуке. Вместо этого используется диплинк на конкретный
- * шаг бота (BotHelp → шаг "Ждём код" → кнопка "Диплинк", формат
- * t.me/<bot>?start=dl-<ref_шага>), который сразу спрашивает код. Это же
- * исключает гонку условий при одновременном входе нескольких людей —
- * код всегда проверяется точным совпадением, а не "последним по времени".
- *
- * Как работает код через бота (см. app.js: startLoginFlow/completeLogin):
- * 1. Сайт создаёт короткий одноразовый код (4 цифры) и строку в таблице
- *    public.login_codes (см. store/dataStore.js: createLoginCode/
- *    getLoginCodeStatus), code, telegram_id = null.
- * 2. Человек нажимает кнопку на сайте — открывается Telegram сразу на
- *    шаге бота, который просит отправить код. Человек вручную
- *    набирает и отправляет код в чат с ботом.
- * 3. BotHelp своим действием (вебхук PATCH .../login_codes?code=eq.<код>)
- *    записывает telegram_id этого человека в найденную по коду строку.
- * 4. Сайт каждые 2.5 сек проверяет статус кода; как только telegram_id
- *    появился — ищет пользователя по нему (findUserByTelegramId) и
- *    логинит.
- *
- * Привязка к личности опирается на то, что отправить именно этот код в
- * бота может только тот, кто увидел его на сайте и у кого есть доступ к
- * соответствующему Telegram-аккаунту — сайт никогда не видит и не хранит
- * секретов бота, только сверяет короткий код.
- *
- * Резервный способ (submitPhoneFallback в app.js) — имя и телефон без
- * какой-либо проверки. Используется, только если бот недоступен;
- * сознательно менее надёжен, помечен в интерфейсе как резервный.
+ * saveSession/loadSession хранят только id пользователя в localStorage,
+ * чтобы не спрашивать телефон заново при каждом визите с того же устройства.
  */
 
-const SESSION_KEY = 'muzhik_tg_session_v1';
+const SESSION_KEY = 'muzhik_session_v1';
 
-/** Сохранить идентификатор вошедшего пользователя (telegram_id или id), чтобы не логиниться заново при каждом визите. */
+/** Сохранить id вошедшего пользователя, чтобы не спрашивать телефон заново при каждом визите. */
 function saveSession(id) {
   if (typeof localStorage !== 'undefined' && id) {
     localStorage.setItem(SESSION_KEY, String(id));
@@ -1327,6 +1302,7 @@ function dbUserToUser(row, skillsByUser) {
     telegramId: row.telegram_id,
     displayName: row.display_name || '',
     phone: row.phone || '',
+    phoneVerified: Boolean(row.phone_verified),
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
@@ -1344,6 +1320,7 @@ function userToDbUser(user) {
     telegram_id: user.telegramId,
     display_name: user.displayName,
     phone: user.phone,
+    phone_verified: Boolean(user.phoneVerified),
     lat: user.location?.lat ?? null,
     lng: user.location?.lng ?? null,
     district: user.district,
@@ -1548,57 +1525,6 @@ function getServices() {
 }
 function getNotificationsFor(userId) {
   return cache.notifications.filter((n) => n.recipientUserId === userId);
-}
-
-/**
- * Ищет пользователя по telegram_id сначала в кэше, а если не нашёл —
- * перечитывает users+skills из Supabase (на случай, если человек только
- * что зарегистрировался через бота и наш кэш ещё не знает о нём).
- * В режиме локальной заглушки ищет только в кэше.
- * @param {string|number} telegramId
- */
-async function findUserByTelegramId(telegramId) {
-  const key = String(telegramId);
-  let user = cache.users.find((u) => String(u.telegramId) === key);
-  if (user || !isSupabaseConfigured()) return user || null;
-
-  try {
-    const [userRows, skillRows] = await Promise.all([
-      getRows('users'),
-      getRows('skills'),
-    ]);
-    const skillsByUser = {};
-    skillRows.forEach((row) => {
-      const skill = dbSkillToSkill(row);
-      if (!skillsByUser[row.user_id]) skillsByUser[row.user_id] = [];
-      skillsByUser[row.user_id].push(skill);
-    });
-    cache.users = userRows.map((row) => dbUserToUser(row, skillsByUser));
-  } catch (err) {
-    reportError('поиск пользователя по telegram_id', err);
-    return null;
-  }
-  return cache.users.find((u) => String(u.telegramId) === key) || null;
-}
-
-// ---------------------------------------------------------------------
-// Одноразовые коды входа (логин через бота вместо JS-виджета)
-// ---------------------------------------------------------------------
-
-/** @param {string} code */
-async function createLoginCode(code) {
-  if (!isSupabaseConfigured()) return { code, telegram_id: null };
-  return insertRow('login_codes', { code });
-}
-
-/**
- * @param {string} code
- * @returns {Promise<{telegram_id: string|null, display_name: string|null}|null>}
- */
-async function getLoginCodeStatus(code) {
-  if (!isSupabaseConfigured()) return null;
-  const rows = await getRows('login_codes', `code=eq.${encodeURIComponent(code)}&select=telegram_id,display_name`);
-  return rows[0] || null;
 }
 
 // ---------------------------------------------------------------------
@@ -2067,8 +1993,7 @@ const state = {
   toast: null,
   booting: true,
   bootError: null,
-  auth: null, // { code, showPhoneFallback, notRegistered } — состояние текущей попытки входа
-  afterLogin: null, // { type: 'draft', step } | { type: 'go', screen } — куда вернуться после входа
+  specialistMode: false, // показать доп. кнопки специалиста над формой заявки
 };
 
 function currentUser() {
@@ -2091,85 +2016,111 @@ function go(screen, extra = {}) {
 }
 
 // ---------------------------------------------------------------------
-// Вход: код через бота (без тяжёлого JS-виджета) + резерв по телефону
+// Вход по номеру телефона (без проверки — верификация по SMS появится
+// позже; факт подтверждения будет отмечаться полем phone_verified).
 // ---------------------------------------------------------------------
 
-let loginPollTimer = null;
+/**
+ * Нормализует произвольный ввод телефона до 10 цифр локального номера.
+ * Понимает: вставленный номер целиком (+7/8 и 11 цифр), дефисы/пробелы,
+ * либо уже голые 10 цифр. Возвращает null, если цифр больше/меньше, чем
+ * ожидается — тогда UI должен показать ошибку и заблокировать отправку.
+ * @param {string} raw
+ * @returns {string|null}
+ */
+function parsePhoneToLocal10(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.length === 11 && (d[0] === '8' || d[0] === '7')) {
+    d = d.slice(1);
+  }
+  if (d.length !== 10) return null;
+  return d;
+}
 
-function generateLoginCode() {
-  return String(Math.floor(1000 + Math.random() * 9000));
+/** @param {string} local10 — ровно 10 цифр */
+function formatPhoneRu(local10) {
+  const p = local10;
+  let out = '+7';
+  if (p.length > 0) out += ' ' + p.slice(0, 3);
+  if (p.length > 3) out += ' ' + p.slice(3, 6);
+  if (p.length > 6) out += ' ' + p.slice(6, 8);
+  if (p.length > 8) out += ' ' + p.slice(8, 10);
+  return out;
 }
 
 /**
- * Запускает попытку входа: создаёт код, показывает панель входа,
- * начинает опрашивать Supabase — как только бот подтвердит код
- * (см. login_codes), пользователь автоматически войдёт.
- * @param {{type:'draft', step:string}|{type:'go', screen:string}} afterLogin
+ * Живое форматирование поля телефона по мере ввода/вставки.
+ * @param {HTMLInputElement} input
+ * @param {HTMLElement} errorEl
+ * @param {() => void} onChange — вызывается после каждого пересчёта (обновить кнопку отправки и т.п.)
  */
-function startLoginFlow(afterLogin) {
-  if (loginPollTimer) clearInterval(loginPollTimer);
-  const code = generateLoginCode();
-  state.afterLogin = afterLogin;
-  state.auth = { code, showPhoneFallback: false, notRegistered: false };
-  createLoginCode(code).catch((err) => console.error('[auth] createLoginCode', err));
-  render();
-
-  loginPollTimer = setInterval(async () => {
-    if (!state.auth || state.auth.code !== code) {
-      clearInterval(loginPollTimer);
+function wirePhoneField(input, errorEl, onChange) {
+  const recalc = () => {
+    const raw = input.value;
+    let d = raw.replace(/\D/g, '');
+    if (d.length > 10 && (d[0] === '7' || d[0] === '8')) {
+      d = d.slice(1);
+    }
+    if (d.length > 10) {
+      input.dataset.valid = 'false';
+      if (errorEl) {
+        errorEl.textContent = 'Проверьте номер — похоже, в нём лишние цифры';
+        errorEl.style.display = 'block';
+      }
+      onChange();
       return;
     }
+    if (errorEl) errorEl.style.display = 'none';
+    input.value = formatPhoneRu(d);
+    input.dataset.valid = parsePhoneToLocal10(d) ? 'true' : 'false';
+    onChange();
+  };
+  input.addEventListener('input', recalc);
+  input.addEventListener('paste', () => setTimeout(recalc, 0));
+  recalc();
+}
+
+/**
+ * Находит пользователя по телефону (сначала в кэше, затем в Supabase),
+ * а если такого ещё нет — создаёт нового и ЖДЁТ реальный id из базы
+ * (важно: без этого id, полученный сразу после saveOrder, ещё был бы
+ * временным local-... и заказ не сохранился бы — та же причина, по
+ * которой раньше не проходила публикация заказа).
+ * @param {string} phone — уже отформатированный «+7 XXX XXX XX XX»
+ * @param {{location?: {lat:number,lng:number}, district?: string}} [extra]
+ */
+async function ensureUserByPhone(phone, extra = {}) {
+  let user = cache.users.find((u) => u.phone === phone);
+  if (user) return user;
+
+  if (isSupabaseConfigured()) {
     try {
-      const row = await getLoginCodeStatus(code);
-      if (row && row.telegram_id) {
-        clearInterval(loginPollTimer);
-        const user = await findUserByTelegramId(row.telegram_id);
-        if (user) {
-          completeLogin(user.id);
-        } else {
-          state.auth.notRegistered = true;
-          render();
-        }
+      const rows = await getRows('users', `phone=eq.${encodeURIComponent(phone)}&select=*`);
+      if (rows[0]) {
+        const skillRows = await getRows('skills', `user_id=eq.${rows[0].id}`);
+        const skillsByUser = {};
+        skillRows.forEach((row) => {
+          const skill = dbSkillToSkill(row);
+          if (!skillsByUser[row.user_id]) skillsByUser[row.user_id] = [];
+          skillsByUser[row.user_id].push(skill);
+        });
+        user = dbUserToUser(rows[0], skillsByUser);
+        cache.users.push(user);
+        return user;
       }
     } catch (err) {
-      console.error('[auth] опрос кода входа', err);
+      reportError('поиск пользователя по телефону', err);
     }
-  }, 2500);
-}
-
-function completeLogin(userId) {
-  if (loginPollTimer) {
-    clearInterval(loginPollTimer);
-    loginPollTimer = null;
   }
-  const user = getUsers().find((u) => u.id === userId);
-  state.currentUserId = userId;
-  saveSession(user?.telegramId || userId);
 
-  const after = state.afterLogin;
-  state.afterLogin = null;
-  state.auth = null;
-
-  if (after?.type === 'draft' && state.draft) {
-    state.draft.step = after.step;
-  } else if (after?.type === 'go') {
-    state.screen = after.screen;
-  }
-  showToast(`Добро пожаловать, ${user?.displayName || 'друг'}!`);
-  render();
-}
-
-/** Резервный вход без Telegram: имя + телефон, без проверки. */
-function createPhoneOnlyUser(displayName, phone) {
-  const draftLoc = state.draft?.exactLocation;
-  const draftDistrict = state.draft?.district;
-  const user = {
+  const draft = {
     id: `local-${Date.now()}`,
     telegramId: '',
-    displayName: displayName || 'Гость',
-    phone: phone || '',
-    location: draftLoc || { lat: 0, lng: 0 },
-    district: draftDistrict || '',
+    displayName: 'Гость',
+    phone,
+    phoneVerified: false,
+    location: extra.location || CENTER,
+    district: extra.district || '',
     searchRadiusKm: 3,
     skills: [],
     availableAsWorker: false,
@@ -2178,15 +2129,29 @@ function createPhoneOnlyUser(displayName, phone) {
     blocked: false,
     createdAt: new Date().toISOString(),
   };
-  saveUser(user);
-  return user;
+  cache.users.push(draft);
+
+  if (!isSupabaseConfigured()) {
+    local.saveUser(draft);
+    return draft;
+  }
+
+  try {
+    const row = await insertRow('users', userToDbUser(draft));
+    const created = dbUserToUser(row, {});
+    created.skills = [];
+    const i = cache.users.findIndex((u) => u === draft);
+    if (i >= 0) cache.users[i] = created;
+    return created;
+  } catch (err) {
+    reportError('создание пользователя по телефону', err);
+    return draft;
+  }
 }
 
 function logout() {
-  if (loginPollTimer) clearInterval(loginPollTimer);
   clearSession();
   state.currentUserId = null;
-  state.auth = null;
   state.screen = 'home';
   render();
 }
@@ -2195,11 +2160,19 @@ function logout() {
 // Composer / диалог создания заказа
 // ---------------------------------------------------------------------
 
-function startDraft(rawMessage, attachments, addressInfo = {}) {
+/**
+ * Заявка в одно сообщение: описание + адрес (+телефон, если не был
+ * авторизован) уже собраны на главном экране — сразу показываем
+ * короткую карточку проверки (категория/цена/фото) без пошагового
+ * мастера. Категория и время — по тексту сообщения; всё остальное —
+ * разумные значения по умолчанию, которые при желании можно будет
+ * уточнить в диалоге с мастером.
+ */
+function startQuickDraft(rawMessage, attachments, address) {
   const interpretation = interpretCustomerMessage(rawMessage);
   const user = currentUser();
   state.draft = {
-    step: interpretation.categoryId ? 'confirmCategory' : 'pickCategory',
+    step: 'quickReview',
     rawMessage,
     attachments,
     categoryId: interpretation.categoryId,
@@ -2207,11 +2180,11 @@ function startDraft(rawMessage, attachments, addressInfo = {}) {
     quantity: 1,
     accessDifficulty: 'easy',
     needsMaterials: false,
-    district: addressInfo.district || user?.district || '',
-    houseNumberPublic: addressInfo.houseNumberPublic || '',
-    fullAddress: '',
+    district: address || user?.district || '',
+    houseNumberPublic: '',
+    fullAddress: address || '',
     useMyLocation: true,
-    exactLocation: addressInfo.exactLocation || user?.location || null,
+    exactLocation: pendingExactLocation || user?.location || CENTER,
     desiredDate: '',
     timeWindow: '',
     urgency: 'normal',
@@ -2219,12 +2192,8 @@ function startDraft(rawMessage, attachments, addressInfo = {}) {
     paymentMethod: 'on_site',
     negotiationOffer: '',
   };
+  pendingExactLocation = null;
   go('compose');
-}
-
-function draftNext(step) {
-  state.draft.step = step;
-  render();
 }
 
 function computeEstimateForDraft() {
@@ -2459,7 +2428,7 @@ function renderTopbar() {
         </div>
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="icon-button" data-action="worker-entry" aria-label="Я исполнитель" title="Я исполнитель — показать заказы рядом">🔧</button>
+        <button class="icon-button" data-action="toggle-specialist-mode" aria-label="Войти как специалист" title="Войти как специалист" style="${state.specialistMode ? 'background:var(--gray-800);color:var(--gray-0);' : ''}">🔧</button>
         <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
           ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
         </button>
@@ -2478,6 +2447,7 @@ function renderTopbarNoUser() {
           <span class="brand-sub">человек рядом поможет</span>
         </div>
       </div>
+      <button class="icon-button" data-action="toggle-specialist-mode" aria-label="Войти как специалист" title="Войти как специалист" style="${state.specialistMode ? 'background:var(--gray-800);color:var(--gray-0);' : ''}">🔧</button>
     </header>
   `;
 }
@@ -2505,39 +2475,59 @@ function renderBottomNav() {
 function renderHome() {
   const examples = ['Заменить розетку', 'Течёт кран', 'Повесить полку', 'Собрать шкаф', 'Нужна уборка'];
   const user = currentUser();
+  const needPhone = !user || state.specialistMode;
   return `
     <div class="screen">
       <div class="home-hero">
         <div class="logo-slot" style="margin:0 auto 10px;">ЛОГО</div>
         <h1>Что нужно сделать?</h1>
-        <p>Опишите проблему, укажите адрес и приложите фото — рядом найдётся человек, который поможет.</p>
+        <p>Опишите проблему, адрес, телефон и удобное время одним сообщением — рядом найдётся человек, который поможет.</p>
       </div>
+      ${
+        state.specialistMode
+          ? `
+      <div class="chip-row" id="specialist-toolbar">
+        <button data-action="specialist-focus-phone">Ввести номер телефона</button>
+        <button data-action="specialist-focus-address">Ввести адрес</button>
+        <button data-action="go-profile">Указать навыки/специализацию</button>
+        <button data-action="go-orders">Заказы</button>
+      </div>
+      `
+          : ''
+      }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Например: искрит розетка на кухне, хочу заменить"></textarea>
+        ${
+          needPhone
+            ? `
         <input
           type="text"
-          id="composer-district"
+          id="composer-phone"
           class="composer-textarea"
-          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
-          placeholder="Район / улица (например: Центр — Арбат)"
+          style="min-height:auto;font-size:14px;"
+          value="${escapeHtml(user?.phone || '+7 ')}"
+        />
+        <div class="order-warning" id="composer-phone-error" style="display:none;"></div>
+        `
+            : ''
+        }
+        <input
+          type="text"
+          id="composer-address"
+          class="composer-textarea"
+          style="min-height:auto;${needPhone ? 'border-top:1px solid var(--gray-100);padding-top:10px;' : ''}font-size:14px;"
+          placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44"
           value="${escapeHtml(user?.district || '')}"
         />
-        <input
-          type="text"
-          id="composer-house"
-          class="composer-textarea"
-          style="min-height:auto;font-size:13px;color:var(--gray-600);"
-          placeholder="Дом — необязательно, виден мастерам-кандидатам (например: 12)"
-        />
+        <textarea id="composer-input" class="composer-textarea" style="border-top:1px solid var(--gray-100);padding-top:10px;" placeholder="Опишите проблему или задачу&#10;Дата и время, когда нужно сделать (необязательно)"></textarea>
         <button type="button" class="tool-button" id="composer-geo" style="width:auto;padding:6px 10px;font-size:12px;gap:6px;margin-top:6px;">
           📍 Определить моё местоположение
         </button>
         <div id="composer-attachments" class="attachment-preview"></div>
         <div class="composer-actions">
           <div class="composer-tools">
-            <label class="tool-button" title="Прикрепить фото">
-              📎
-              <input id="composer-file" type="file" accept="image/*" multiple style="display:none" />
+            <label class="tool-button" title="Прикрепить фото или видео">
+              +
+              <input id="composer-file" type="file" accept="image/*,video/*" multiple style="display:none" />
             </label>
             <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">🎙</button>
           </div>
@@ -2629,106 +2619,36 @@ function renderCompose() {
   const d = state.draft;
   let body = '';
 
-  if (d.step === 'pickCategory' || d.step === 'confirmCategory') {
-    body = `
-      <div class="msg assistant">Похоже, вот что вы описали: «${escapeHtml(d.rawMessage)}»${d.riskWarning ? `<small>⚠ ${escapeHtml(d.riskWarning)}</small>` : ''}</div>
-      <div class="field-card">
-        <label>К какой категории это относится?</label>
-        <div class="chip-row">
-          ${CATEGORIES.map(
-            (c) => `<button data-action="pick-category" data-value="${c.id}" class="${d.categoryId === c.id ? 'selected' : ''}">${escapeHtml(c.title)}</button>`
-          ).join('')}
-        </div>
-        <button class="primary-button" data-action="draft-continue" data-value="scope" ${d.categoryId ? '' : 'disabled'}>Продолжить →</button>
-      </div>
-    `;
-  } else if (d.step === 'scope') {
-    body = `
-      <div class="msg assistant">Уточним объём работы, чтобы оценка была точнее.</div>
-      <div class="field-card">
-        <label>Количество единиц</label>
-        <input type="number" min="1" id="field-quantity" value="${d.quantity}" />
-        <label>Доступ к месту работы</label>
-        <div class="chip-row">
-          <button data-action="pick-access" data-value="easy" class="${d.accessDifficulty === 'easy' ? 'selected' : ''}">Свободный</button>
-          <button data-action="pick-access" data-value="hard" class="${d.accessDifficulty === 'hard' ? 'selected' : ''}">Затруднённый</button>
-        </div>
-        <label><input type="checkbox" id="field-materials" ${d.needsMaterials ? 'checked' : ''} style="width:auto;margin-right:6px;" />Нужны материалы мастера</label>
-        <button class="primary-button" data-action="draft-continue" data-value="timing">Продолжить →</button>
-      </div>
-    `;
-  } else if (d.step === 'timing') {
-    body = `
-      <div class="msg assistant">Когда удобно принять мастера?</div>
-      <div class="field-card">
-        <label>Дата</label>
-        <input type="date" id="field-date" value="${d.desiredDate}" />
-        <label>Временной интервал</label>
-        <input type="text" id="field-window" value="${escapeHtml(d.timeWindow)}" placeholder="Например: 18:00–20:00" />
-        <label>Срочность</label>
-        <div class="chip-row">
-          <button data-action="pick-urgency" data-value="low" class="${d.urgency === 'low' ? 'selected' : ''}">Не срочно</button>
-          <button data-action="pick-urgency" data-value="normal" class="${d.urgency === 'normal' ? 'selected' : ''}">Обычно</button>
-          <button data-action="pick-urgency" data-value="urgent" class="${d.urgency === 'urgent' ? 'selected' : ''}">Срочно</button>
-        </div>
-        <button class="primary-button" data-action="draft-continue" data-value="budget">Продолжить →</button>
-      </div>
-    `;
-  } else if (d.step === 'budget') {
-    body = `
-      <div class="msg assistant">Есть ли у вас ориентир по бюджету? Можно пропустить.</div>
-      <div class="field-card">
-        <label>Бюджет, ₽ (необязательно)</label>
-        <input type="number" id="field-budget" value="${d.budget}" placeholder="Не знаю" />
-        <button class="primary-button" data-action="draft-continue" data-value="estimate">Показать оценку →</button>
-      </div>
-    `;
-  } else if (d.step === 'estimate') {
+  if (d.step === 'quickReview') {
     computeEstimateForDraft();
-    body = d.isPrecedent
-      ? `
-      <div class="msg assistant">Похожей позиции нет в базе цен — точную оценку показать не можем. Предложите свою цену, мастер предложит свою, и мы договоримся.</div>
-      <div class="field-card">
-        <label>Ваше предложение по цене, ₽</label>
-        <input type="number" id="field-negotiation" value="${d.negotiationOffer}" />
-        <button class="primary-button" data-action="draft-continue" data-value="payment">Продолжить →</button>
-      </div>
-      `
-      : `
-      <div class="msg assistant">Обычно такая задача стоит примерно <b>${d.estimate.min}–${d.estimate.max} ₽</b>.<small>${d.estimate.factors.join(', ') || 'Базовая оценка без надбавок'}</small></div>
-      <div class="field-card">
-        <button class="primary-button" data-action="draft-continue" data-value="payment">Всё верно, продолжить →</button>
-      </div>
-      `;
-  } else if (d.step === 'login') {
-    body = renderAuthPanel();
-  } else if (d.step === 'payment') {
+    const hasPhoto = (d.attachments || []).length > 0;
     body = `
-      <div class="msg assistant">Как удобнее оплатить работу?</div>
       <div class="field-card">
-        <div class="chip-row">
-          <button data-action="pick-payment" data-value="on_site" class="${d.paymentMethod === 'on_site' ? 'selected' : ''}">Мастеру на месте</button>
-          <button data-action="pick-payment" data-value="online_stub" class="${d.paymentMethod === 'online_stub' ? 'selected' : ''}">Предоплата онлайн (демо)</button>
-        </div>
-        <button class="primary-button" data-action="draft-continue" data-value="review">Продолжить →</button>
-      </div>
-    `;
-  } else if (d.step === 'review') {
-    body = `
-      <div class="msg assistant">Проверьте карточку заказа перед публикацией.</div>
-      <div class="field-card">
-        <p><b>${escapeHtml(d.rawMessage)}</b></p>
-        <p class="order-meta"><span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || '')}</span><span>${escapeHtml(d.district)}${d.houseNumberPublic ? ', д. ' + escapeHtml(d.houseNumberPublic) : ''}</span><span>${escapeHtml(d.desiredDate)} ${escapeHtml(d.timeWindow)}</span></p>
-        <label>Квартира / подъезд / комментарий для мастера (видит только назначенный исполнитель, не кандидаты)</label>
-        <input type="text" id="field-full-address" value="${escapeHtml(d.fullAddress)}" placeholder="Например: кв. 45, домофон 45К" />
+        <p class="order-meta">
+          <span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || 'Категория уточняется')}</span>
+          ${d.district ? `<span>${escapeHtml(d.district)}</span>` : ''}
+        </p>
         ${
           d.isPrecedent
-            ? `<p>Ваше предложение цены: ${escapeHtml(d.negotiationOffer)} ₽ (прецедент)</p>`
-            : `<p>Ориентир цены: ${d.estimate.min}–${d.estimate.max} ₽</p>`
+            ? `<p>Похожей позиции нет в каталоге — точную цену согласуете с мастером напрямую.</p>`
+            : `<p>Обычно такая задача стоит примерно <b>${d.estimate.min}–${d.estimate.max} ₽</b>.<small>${d.estimate.factors.join(', ') || 'Базовая оценка без надбавок'}</small></p>`
         }
-        <p>Оплата: ${d.paymentMethod === 'on_site' ? 'на месте' : 'предоплата онлайн (демо)'}</p>
         ${d.riskWarning ? `<div class="order-warning">${escapeHtml(d.riskWarning)}</div>` : ''}
-        <button class="primary-button" data-action="publish-draft">Опубликовать заказ</button>
+        <div id="quick-review-attachments" class="attachment-preview">
+          ${(d.attachments || []).map((a) => `<span class="attachment-chip">${a.type === 'video' ? '🎬' : '📷'} ${escapeHtml(a.name || a.url)}</span>`).join('')}
+        </div>
+        ${
+          !hasPhoto
+            ? `
+          <div class="order-warning">Фото пока нет — с фото мастера откликаются охотнее. Можно прикрепить или пропустить.</div>
+          <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;">
+            📎 Прикрепить фото
+            <input id="quick-review-file" type="file" accept="image/*,video/*" multiple style="display:none" />
+          </label>
+          `
+            : ''
+        }
+        <button class="primary-button" data-action="publish-draft">Отправить</button>
         <button class="secondary-button" data-action="go-home">Отменить</button>
       </div>
     `;
@@ -2736,7 +2656,7 @@ function renderCompose() {
 
   return `
     <div class="screen">
-      <div class="section-title">Собираем заказ</div>
+      <div class="section-title">Проверьте заявку</div>
       <div class="chat-thread">
         <div class="msg user">${escapeHtml(d.rawMessage)}</div>
         ${body}
@@ -2821,7 +2741,7 @@ function renderNotifications() {
   return `
     <div class="screen">
       <div class="section-title">Уведомления</div>
-      <p class="demo-tag">Демо-режим: в проде эти же события уходят в Telegram-бот @mastervraenebot</p>
+      <p class="demo-tag">Демо-режим: в проде эти же события будут приходить по SMS/пуш-уведомлениям</p>
       ${
         list.length
           ? list
@@ -2846,7 +2766,7 @@ function renderProfile() {
       <div class="section-title">Профиль</div>
       <div class="field-card">
         <p><b>${escapeHtml(user.displayName)}</b></p>
-        <p class="order-meta"><span>${escapeHtml(user.phone)}</span></p>
+        <p class="order-meta"><span>${escapeHtml(user.phone || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <p class="order-meta"><span>Район: ${escapeHtml(user.district)}</span></p>
         <button class="secondary-button" data-action="use-geo-profile">📍 Обновить геопозицию</button>
         <label style="margin-top:10px;">Радиус поиска заказов рядом (км)</label>
@@ -2881,7 +2801,7 @@ function renderProfile() {
           : `
       <div class="section-title">Демо-вход</div>
       <div class="field-card">
-        <p class="order-meta">Переключитесь на другого демо-пользователя, чтобы посмотреть сценарий с другой стороны (в проде — вход через Telegram).</p>
+        <p class="order-meta">Переключитесь на другого демо-пользователя, чтобы посмотреть сценарий с другой стороны (в проде — вход по номеру телефона).</p>
         <select id="field-demo-user">
           ${getUsers()
             .map((u) => `<option value="${u.id}" ${u.id === state.currentUserId ? 'selected' : ''}>${escapeHtml(u.displayName)}</option>`)
@@ -2931,48 +2851,22 @@ function renderNoUsers() {
     <div class="screen">
       <div class="empty-state">
         Пока нет ни одного пользователя.<br/>
-        Зарегистрируйтесь через Telegram-бота <b>@${escapeHtml(TELEGRAM_BOT_USERNAME)}</b>, чтобы начать.
+        Опишите задачу на главном экране, чтобы начать.
       </div>
     </div>
   `;
 }
 
-/** Панель входа: код через бота (основной способ) + телефон без проверки (резерв). */
-// Диплинк ведёт сразу на шаг бота "Ждём код" (см. BotHelp → Сообщение 7 → Диплинк),
-// минуя обычную регистрацию. Код нужно ввести в боте вручную — так надёжнее и без
-// гонки условий между несколькими одновременными входами.
-const TELEGRAM_LOGIN_DEEPLINK_PARAM = 'dl-1785799480488';
-function renderAuthPanel() {
-  const a = state.auth || {};
-  const deepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${TELEGRAM_LOGIN_DEEPLINK_PARAM}`;
+/** Экран «нужен номер телефона» — показывается перед заказами/профилем, если человек ещё не указал телефон. */
+function renderPhoneGate() {
   return `
-    <div class="msg assistant">Чтобы продолжить, подтвердите, что это вы.</div>
     <div class="field-card">
-      <p><b>Вход через бота</b></p>
-      <p class="order-meta">Нажмите кнопку — откроется Telegram и бот сразу спросит код. Отправьте код <b>${escapeHtml(a.code || '')}</b> обычным сообщением в чате с ботом.</p>
-      <a class="primary-button" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;" href="${deepLink}" target="_blank" rel="noopener">Открыть бота и ввести код</a>
-      <p class="order-meta" style="margin-top:8px;justify-content:center;">Код: <b>${escapeHtml(a.code || '')}</b> · ждём подтверждения…</p>
-      ${
-        a.notRegistered
-          ? `<div class="order-warning">Вы ещё не зарегистрированы в боте. Сначала напишите @${escapeHtml(TELEGRAM_BOT_USERNAME)} и укажите имя и телефон, потом нажмите кнопку выше ещё раз.</div>`
-          : ''
-      }
-      <button class="secondary-button" data-action="toggle-phone-fallback">
-        ${a.showPhoneFallback ? 'Скрыть' : 'Telegram недоступен? Войти по телефону'}
-      </button>
-      ${
-        a.showPhoneFallback
-          ? `
-        <div style="margin-top:10px;">
-          <label>Имя</label>
-          <input type="text" id="auth-name" placeholder="Как к вам обращаться" />
-          <label>Телефон</label>
-          <input type="text" id="auth-phone" placeholder="+7 900 000-00-00" />
-          <p class="order-meta">Без подтверждения через Telegram — используйте, только если бот сейчас недоступен.</p>
-          <button class="primary-button" data-action="submit-phone-fallback">Продолжить без Telegram</button>
-        </div>`
-          : ''
-      }
+      <p><b>Укажите номер телефона</b></p>
+      <p class="order-meta">Он привяжется к вашему аккаунту. Подтверждение по SMS добавим позже.</p>
+      <label>Телефон</label>
+      <input type="text" id="gate-phone" value="+7 " placeholder="+7 900 000 00 00" />
+      <div class="order-warning" id="gate-phone-error" style="display:none;"></div>
+      <button class="primary-button" id="gate-phone-send" disabled>Продолжить</button>
     </div>
   `;
 }
@@ -2987,15 +2881,11 @@ function render() {
 
   const screensRequiringUser = ['orders', 'profile', 'notifications', 'operator', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
-    if (!state.auth || !state.auth.code) {
-      startLoginFlow({ type: 'go', screen: state.screen });
-      return; // startLoginFlow сам вызовет render()
-    }
     app.innerHTML = `
-      ${renderTopbar()}
+      ${renderTopbarNoUser()}
       <div class="screen">
-        <div class="section-title">Нужен вход</div>
-        <div class="chat-thread">${renderAuthPanel()}</div>
+        <div class="section-title">Нужен номер телефона</div>
+        <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
     `;
@@ -3033,17 +2923,85 @@ function render() {
 let pendingAttachments = [];
 let pendingExactLocation = null;
 
+/**
+ * Загружает файл в Supabase Storage (бакет order-attachments, публичный
+ * на чтение) и возвращает его публичную ссылку. Без Supabase (локальная
+ * заглушка) просто возвращает имя файла — вложения не переживут перезагрузку.
+ * @param {File} file
+ */
+async function uploadAttachment(file) {
+  if (!isSupabaseConfigured()) return { url: file.name, path: null };
+  const { url, key } = getConfig();
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const res = await fetch(`${url}/storage/v1/object/order-attachments/${path}`, {
+    method: 'POST',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    throw new Error(`Не удалось загрузить файл: ${res.status} ${await res.text()}`);
+  }
+  return { url: `${url}/storage/v1/object/public/order-attachments/${path}`, path };
+}
+
+/** Загружает выбранные файлы, кладёт результат в targetArray (по ссылке) и обновляет chips в containerEl. */
+async function handleFileSelection(files, targetArrayHolder, containerEl, onDone) {
+  containerEl.innerHTML = files
+    .map((f) => `<span class="attachment-chip">⏳ ${escapeHtml(f.name)}</span>`)
+    .join('');
+  const uploaded = [];
+  for (const f of files) {
+    try {
+      const { url } = await uploadAttachment(f);
+      uploaded.push({
+        id: `att-${Date.now()}-${uploaded.length}`,
+        type: f.type.startsWith('video') ? 'video' : 'photo',
+        url,
+        name: f.name,
+        sizeBytes: f.size,
+      });
+    } catch (err) {
+      console.error('[attachments] upload failed', err);
+      showToast('Не удалось загрузить файл: ' + f.name);
+    }
+  }
+  targetArrayHolder.value = targetArrayHolder.value.concat(uploaded);
+  containerEl.innerHTML = targetArrayHolder.value
+    .map((a) => `<span class="attachment-chip">${a.type === 'video' ? '🎬' : '📷'} ${escapeHtml(a.name || a.url)}</span>`)
+    .join('');
+  if (onDone) onDone();
+}
+
+function updateComposerSendState() {
+  const composerInput = document.getElementById('composer-input');
+  const composerAddress = document.getElementById('composer-address');
+  const composerPhone = document.getElementById('composer-phone');
+  const composerSend = document.getElementById('composer-send');
+  if (!composerSend) return;
+  const textOk = Boolean(composerInput && composerInput.value.trim());
+  const addressOk = Boolean(composerAddress && composerAddress.value.trim());
+  const phoneOk = !composerPhone || composerPhone.dataset.valid === 'true';
+  composerSend.disabled = !(textOk && addressOk && phoneOk);
+}
+
 function wireEvents() {
   const composerInput = document.getElementById('composer-input');
   const composerSend = document.getElementById('composer-send');
   const composerFile = document.getElementById('composer-file');
   const composerAttachments = document.getElementById('composer-attachments');
   const composerGeo = document.getElementById('composer-geo');
+  const composerAddress = document.getElementById('composer-address');
+  const composerPhone = document.getElementById('composer-phone');
 
   if (composerGeo) {
     composerGeo.addEventListener('click', () => {
       if (!navigator.geolocation) {
-        showToast('Геолокация недоступна в этом браузере — просто укажите район текстом');
+        showToast('Геолокация недоступна в этом браузере — просто укажите адрес текстом');
         return;
       }
       composerGeo.disabled = true;
@@ -3055,42 +3013,99 @@ function wireEvents() {
         },
         () => {
           composerGeo.disabled = false;
-          showToast('Не удалось получить геопозицию — можно указать район текстом');
+          showToast('Не удалось получить геопозицию — можно указать адрес текстом');
         },
         { timeout: 8000 }
       );
     });
   }
 
-  if (composerInput) {
-    composerInput.addEventListener('input', () => {
-      composerSend.disabled = composerInput.value.trim().length === 0;
-    });
+  if (composerPhone) {
+    const errorEl = document.getElementById('composer-phone-error');
+    wirePhoneField(composerPhone, errorEl, updateComposerSendState);
   }
+  if (composerInput) composerInput.addEventListener('input', updateComposerSendState);
+  if (composerAddress) composerAddress.addEventListener('input', updateComposerSendState);
+  updateComposerSendState();
+
   if (composerFile) {
     composerFile.addEventListener('change', () => {
-      pendingAttachments = Array.from(composerFile.files).map((f, i) => ({
-        id: `att-${Date.now()}-${i}`,
-        type: 'photo',
-        url: f.name,
-        sizeBytes: f.size,
-      }));
-      composerAttachments.innerHTML = pendingAttachments
-        .map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.url)}</span>`)
-        .join('');
+      const files = Array.from(composerFile.files);
+      const holder = { value: pendingAttachments };
+      handleFileSelection(files, holder, composerAttachments, () => {
+        pendingAttachments = holder.value;
+      });
     });
   }
   if (composerSend) {
-    composerSend.addEventListener('click', () => {
+    composerSend.addEventListener('click', async () => {
       const text = composerInput.value.trim();
-      if (!text) return;
+      const address = composerAddress.value.trim();
+      if (!text || !address) return;
+      if (composerPhone && composerPhone.dataset.valid !== 'true') return;
+
+      composerSend.disabled = true;
       const atts = pendingAttachments;
       pendingAttachments = [];
-      const district = document.getElementById('composer-district').value.trim();
-      const houseNumberPublic = document.getElementById('composer-house').value.trim();
-      const exactLocation = pendingExactLocation;
-      pendingExactLocation = null;
-      startDraft(text, atts, { district, houseNumberPublic, exactLocation });
+
+      try {
+        if (composerPhone) {
+          const phone = composerPhone.value;
+          if (currentUser()) {
+            // режим специалиста: обновляем телефон уже вошедшего пользователя
+            const updated = { ...currentUser(), phone, phoneVerified: false };
+            saveUser(updated);
+          } else {
+            const user = await ensureUserByPhone(phone, {
+              location: pendingExactLocation || CENTER,
+              district: address,
+            });
+            state.currentUserId = user.id;
+            saveSession(user.id);
+          }
+        }
+        startQuickDraft(text, atts, address);
+      } catch (err) {
+        console.error('[composer] send failed', err);
+        showToast('Не получилось отправить заявку — попробуйте ещё раз');
+        composerSend.disabled = false;
+      }
+    });
+  }
+
+  const gatePhone = document.getElementById('gate-phone');
+  if (gatePhone) {
+    const gateError = document.getElementById('gate-phone-error');
+    const gateSend = document.getElementById('gate-phone-send');
+    wirePhoneField(gatePhone, gateError, () => {
+      gateSend.disabled = gatePhone.dataset.valid !== 'true';
+    });
+    gateSend.addEventListener('click', async () => {
+      if (gatePhone.dataset.valid !== 'true') return;
+      gateSend.disabled = true;
+      try {
+        const user = await ensureUserByPhone(gatePhone.value, {});
+        state.currentUserId = user.id;
+        saveSession(user.id);
+        render();
+      } catch (err) {
+        console.error('[phone-gate] failed', err);
+        showToast('Не получилось продолжить — попробуйте ещё раз');
+        gateSend.disabled = false;
+      }
+    });
+  }
+
+  const reviewFile = document.getElementById('quick-review-file');
+  const reviewAttachments = document.getElementById('quick-review-attachments');
+  if (reviewFile && reviewAttachments) {
+    reviewFile.addEventListener('change', () => {
+      const files = Array.from(reviewFile.files);
+      const holder = { value: state.draft.attachments || [] };
+      handleFileSelection(files, holder, reviewAttachments, () => {
+        state.draft.attachments = holder.value;
+        render();
+      });
     });
   }
 
@@ -3114,63 +3129,25 @@ function handleAction(action, value) {
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'quick-example': {
       document.getElementById('composer-input').value = value;
-      document.getElementById('composer-send').disabled = false;
+      updateComposerSendState();
       return;
     }
     case 'voice-stub':
       return showToast('Демо: голосовое сообщение имитируется текстовой расшифровкой');
 
-    case 'pick-category':
-      state.draft.categoryId = value;
+    case 'toggle-specialist-mode':
+      state.specialistMode = !state.specialistMode;
       return render();
-    case 'draft-continue': {
-      // считываем значения текущего шага перед переходом
-      if (state.draft.step === 'scope') {
-        state.draft.quantity = Number(document.getElementById('field-quantity').value || 1);
-        state.draft.needsMaterials = document.getElementById('field-materials').checked;
-      }
-      if (state.draft.step === 'timing') {
-        state.draft.desiredDate = document.getElementById('field-date').value;
-        state.draft.timeWindow = document.getElementById('field-window').value.trim();
-      }
-      if (state.draft.step === 'budget') {
-        state.draft.budget = document.getElementById('field-budget').value;
-      }
-      if (state.draft.step === 'estimate' && state.draft.isPrecedent) {
-        state.draft.negotiationOffer = document.getElementById('field-negotiation').value;
-      }
-      // Вход требуется только один раз — перед оплатой/публикацией, после
-      // того как человек уже увидел предварительную оценку цены.
-      if (value === 'payment' && !currentUser()) {
-        state.draft.step = 'login';
-        startLoginFlow({ type: 'draft', step: 'payment' });
-        return;
-      }
-      return draftNext(value);
+    case 'specialist-focus-phone': {
+      const el = document.getElementById('composer-phone');
+      if (el) el.focus();
+      return;
     }
-    case 'toggle-phone-fallback':
-      state.auth.showPhoneFallback = !state.auth.showPhoneFallback;
-      return render();
-    case 'submit-phone-fallback': {
-      const name = document.getElementById('auth-name').value.trim();
-      const phone = document.getElementById('auth-phone').value.trim();
-      if (!name || !phone) return showToast('Укажите имя и телефон');
-      const user = createPhoneOnlyUser(name, phone);
-      return completeLogin(user.id);
+    case 'specialist-focus-address': {
+      const el = document.getElementById('composer-address');
+      if (el) el.focus();
+      return;
     }
-    case 'worker-entry':
-      if (currentUser()) return go('orders');
-      state.screen = 'orders';
-      return startLoginFlow({ type: 'go', screen: 'orders' });
-    case 'pick-access':
-      state.draft.accessDifficulty = value;
-      return render();
-    case 'pick-urgency':
-      state.draft.urgency = value;
-      return render();
-    case 'pick-payment':
-      state.draft.paymentMethod = value;
-      return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
       if (fullAddressField) state.draft.fullAddress = fullAddressField.value.trim();
@@ -3236,13 +3213,13 @@ async function boot() {
   await initDb(buildInitialDb());
 
   if (isSupabaseConfigured()) {
-    // Пробуем восстановить сессию по сохранённому telegram_id/id, но НЕ
+    // Пробуем восстановить сессию по сохранённому id пользователя, но НЕ
     // требуем входа для просмотра главной страницы — заявку можно начать
-    // без авторизации, вход нужен только перед публикацией (см. renderCompose).
+    // без авторизации, номер телефона спросим прямо в форме отправки.
     const saved = loadSession();
     let user = null;
     if (saved) {
-      user = (await findUserByTelegramId(saved)) || getUsers().find((u) => u.id === saved) || null;
+      user = getUsers().find((u) => u.id === saved) || null;
     }
     if (user) {
       state.currentUserId = user.id;
