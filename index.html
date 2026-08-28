@@ -31,7 +31,7 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--gray-900);
+  background: var(--gray-0);
   color: var(--gray-800);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
   -webkit-tap-highlight-color: transparent;
@@ -286,24 +286,6 @@ body {
   color: var(--gray-500);
   font-size: 12px;
   padding: 0;
-}
-
-.quick-examples {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  margin-top: 14px;
-  padding-bottom: 2px;
-}
-
-.quick-examples button {
-  white-space: nowrap;
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-700);
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 12.5px;
 }
 
 .section-title {
@@ -2495,7 +2477,6 @@ function renderBottomNav() {
 }
 
 function renderHome() {
-  const examples = ['Заменить розетку', 'Течёт кран', 'Повесить полку', 'Собрать шкаф', 'Нужна уборка'];
   const user = currentUser();
   const needPhone = !user || state.specialistMode;
   return `
@@ -2518,6 +2499,15 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу&#10;Дата и время, когда нужно сделать (необязательно)"></textarea>
+        <input
+          type="text"
+          id="composer-address"
+          class="composer-textarea"
+          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
+          placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44"
+          value="${escapeHtml(user?.district || '')}"
+        />
         ${
           needPhone
             ? `
@@ -2525,22 +2515,13 @@ function renderHome() {
           type="text"
           id="composer-phone"
           class="composer-textarea"
-          style="min-height:auto;font-size:14px;"
+          style="min-height:auto;border-top:1px solid var(--gray-100);padding-top:10px;font-size:14px;"
           value="${escapeHtml(user?.phone || '+7 ')}"
         />
         <div class="order-warning" id="composer-phone-error" style="display:none;"></div>
         `
             : ''
         }
-        <input
-          type="text"
-          id="composer-address"
-          class="composer-textarea"
-          style="min-height:auto;${needPhone ? 'border-top:1px solid var(--gray-100);padding-top:10px;' : ''}font-size:14px;"
-          placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44"
-          value="${escapeHtml(user?.district || '')}"
-        />
-        <textarea id="composer-input" class="composer-textarea" style="border-top:1px solid var(--gray-100);padding-top:10px;" placeholder="Опишите проблему или задачу&#10;Дата и время, когда нужно сделать (необязательно)"></textarea>
         <button type="button" class="tool-button" id="composer-geo" style="width:auto;padding:6px 10px;font-size:12px;gap:6px;margin-top:6px;">
           📍 Определить моё местоположение
         </button>
@@ -2551,13 +2532,12 @@ function renderHome() {
               +
               <input id="composer-file" type="file" accept="image/*,video/*" multiple style="display:none" />
             </label>
-            <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">🎙</button>
           </div>
-          <button class="send-button" id="composer-send" disabled>➤</button>
+          <div class="composer-tools">
+            <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">🎙</button>
+            <button class="send-button" id="composer-send" disabled>➤</button>
+          </div>
         </div>
-      </div>
-      <div class="quick-examples">
-        ${examples.map((e) => `<button data-action="quick-example" data-value="${escapeHtml(e)}">${escapeHtml(e)}</button>`).join('')}
       </div>
     </div>
   `;
@@ -3149,11 +3129,6 @@ function handleAction(action, value) {
     case 'go-profile': return go('profile');
     case 'go-operator': return go('operator');
     case 'open-order': return go('orderDetail', { openOrderId: value });
-    case 'quick-example': {
-      document.getElementById('composer-input').value = value;
-      updateComposerSendState();
-      return;
-    }
     case 'voice-stub':
       return showToast('Демо: голосовое сообщение имитируется текстовой расшифровкой');
 
