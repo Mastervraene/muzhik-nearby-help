@@ -2325,6 +2325,19 @@ function formatPhoneRu(local10) {
 }
 
 /**
+ * Красивый вид номера для экрана («+7 916 533 95 88») из того, что лежит
+ * в базе — а там он хранится «голыми» цифрами (см. ensureUserByPhone).
+ * На случай уже отформатированных старых записей просто возвращает
+ * значение как есть, если разобрать до 10 цифр не удалось.
+ * @param {string} phone
+ */
+function displayPhone(phone) {
+  if (!phone) return '';
+  const local10 = parsePhoneToLocal10(phone);
+  return local10 ? formatPhoneRu(local10) : phone;
+}
+
+/**
  * Убирает ведущий признак кода страны («+7», «7» или «8» в самом начале строки),
  * чтобы сама «+7», уже стоящая в поле по умолчанию, не считалась введённой
  * пользователем цифрой. Остаток очищается от всех нецифровых символов.
@@ -2383,27 +2396,26 @@ function wirePhoneField(input, errorEl, onChange) {
  * @param {{location?: {lat:number,lng:number}, district?: string}} [extra]
  */
 async function ensureUserByPhone(phone, extra = {}) {
-  // Один и тот же номер мог осесть в базе в разных форматах: «+7 916 533
-  // 95 88» (текущий формат поля, см. wirePhoneField/formatPhoneRu) и
-  // старое «79165339588» без «+» и пробелов — так хранились самые первые
-  // записи, до того как в поле телефона появилось форматирование.
-  // Сравниваем и ищем по «голым» 10 цифрам номера, чтобы не плодить
-  // дубликат аккаунта тому же человеку и не терять привязанный Telegram
-  // и историю заказов, которые остались на старой записи.
+  // Канонический формат ХРАНЕНИЯ телефона в базе — 11 цифр с кодом
+  // страны, без «+» и пробелов («79165339588»), см. CANONICAL_PHONE_RE
+  // рядом. В интерфейсе номер всё равно вводится/показывается красиво
+  // («+7 916 533 95 88», см. formatPhoneRu) — это только про то, что
+  // лежит в столбце users.phone, чтобы один и тот же человек не заводил
+  // по случайности второй аккаунт из-за разного начертания номера.
   const local10 = stripCountryPrefixDigits(phone);
+  const canonicalPhone = '7' + local10;
   let user = cache.users.find((u) => stripCountryPrefixDigits(u.phone || '') === local10);
   if (user) return user;
 
   if (isSupabaseConfigured()) {
     try {
-      const legacyPhone = '7' + local10;
-      const query =
-        phone === legacyPhone
-          ? `phone=eq.${encodeURIComponent(phone)}&select=*`
-          : // Оба варианта формата разом; если вдруг найдутся записи в обоих
-            // (как исторический дубликат), отдаём предпочтение той, где уже
-            // привязан Telegram, а при прочих равных — более старой записи.
-            `or=(phone.eq.${encodeURIComponent(phone)},phone.eq.${encodeURIComponent(legacyPhone)})&order=telegram_id.nullslast,created_at.asc&limit=1&select=*`;
+      // На случай записей ещё в старом «человеческом» начертании (до
+      // этого исправления телефон в базу писался как в поле ввода) —
+      // ищем и по каноническому виду, и по нему. Если вдруг найдутся
+      // записи в обоих (исторический дубль), отдаём предпочтение той, где
+      // уже привязан Telegram, а при прочих равных — более старой.
+      const humanPhone = formatPhoneRu(local10);
+      const query = `or=(phone.eq.${encodeURIComponent(canonicalPhone)},phone.eq.${encodeURIComponent(humanPhone)})&order=telegram_id.nullslast,created_at.asc&limit=1&select=*`;
       const rows = await getRows('users', query);
       if (rows[0]) {
         const skillRows = await getRows('skills', `user_id=eq.${rows[0].id}`);
@@ -2426,7 +2438,7 @@ async function ensureUserByPhone(phone, extra = {}) {
     id: `local-${Date.now()}`,
     telegramId: '',
     displayName: 'Гость',
-    phone,
+    phone: canonicalPhone,
     phoneVerified: false,
     location: extra.location || CENTER,
     district: extra.district || '',
@@ -3528,7 +3540,7 @@ function renderProfile() {
       <div class="section-title">Профиль</div>
       <div class="field-card">
         <p><b>${escapeHtml(user.displayName)}</b></p>
-        <p class="order-meta"><span>${escapeHtml(user.phone || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
+        <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <p class="order-meta"><span>Район: ${escapeHtml(user.district)}</span></p>
         <button class="secondary-button" data-action="use-geo-profile">📍 Обновить геопозицию</button>
         <label style="margin-top:10px;">Радиус поиска заказов рядом (км)</label>
