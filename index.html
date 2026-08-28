@@ -6,6 +6,9 @@
 <title>Мужик — человек рядом поможет</title>
 <meta name="description" content="Опишите бытовую задачу — рядом найдётся человек, который поможет." />
 <link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
 <style>
 /* Только мобильная раскладка. Оттенки серого (цвет не используется намеренно). */
 
@@ -221,9 +224,10 @@ body {
 }
 
 .home-hero h1 {
-  font-size: 23px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  font-family: "Oswald", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   margin: 0;
   color: var(--gray-900);
 }
@@ -344,7 +348,6 @@ body {
   display: flex;
   align-items: center;
   gap: var(--composer-gap);
-  border-top: 1px solid var(--gray-100);
   padding-top: 10px;
   margin-top: 10px;
 }
@@ -353,6 +356,10 @@ body {
   display: flex;
   gap: var(--composer-gap);
   flex-shrink: 0;
+}
+
+.composer-actions > .composer-tools:last-child {
+  margin-left: auto;
 }
 
 .tool-button,
@@ -2838,7 +2845,7 @@ function renderTopbar() {
         <div class="logo-slot">ЛОГО</div>
         <div>
           <span class="brand-title">Мужик</span>
-          <span class="brand-sub">человек рядом поможет</span>
+          <span class="brand-sub">рядом поможет</span>
         </div>
       </div>
       <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
@@ -2853,7 +2860,7 @@ function renderTopbarNoUser() {
         <div class="logo-slot">ЛОГО</div>
         <div>
           <span class="brand-title">Мужик</span>
-          <span class="brand-sub">человек рядом поможет</span>
+          <span class="brand-sub">рядом поможет</span>
         </div>
       </div>
       <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
