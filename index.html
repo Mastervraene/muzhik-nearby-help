@@ -127,6 +127,13 @@ body {
   display: block;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .icon-button {
   border: none;
   background: var(--gray-100);
@@ -700,7 +707,7 @@ body {
   z-index: 50;
 }
 
-/* ---------- Онбординг (первый визит) ---------- */
+/* ---------- Окно «Как это работает» (при старте без входа + кнопка «?» в шапке) ---------- */
 
 .onboarding-overlay {
   position: fixed;
@@ -716,10 +723,13 @@ body {
 .onboarding-card {
   width: 100%;
   max-width: var(--max-width);
+  max-height: 88vh;
   background: var(--gray-0);
   border-radius: 28px 28px 0 0;
   box-shadow: 0 -8px 40px rgba(15, 23, 42, 0.18);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: onboarding-rise 0.25s ease-out;
 }
 
@@ -730,7 +740,8 @@ body {
 
 .onboarding-art {
   position: relative;
-  height: 200px;
+  height: 120px;
+  flex-shrink: 0;
   background: linear-gradient(160deg, #dbeafe 0%, #eff6ff 55%, #ffffff 100%);
 }
 
@@ -751,7 +762,9 @@ body {
 }
 
 .onboarding-body {
-  padding: 22px 22px 24px;
+  padding: 20px 22px 24px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .onboarding-body h2 {
@@ -759,14 +772,18 @@ body {
   font-weight: 800;
   letter-spacing: -0.01em;
   color: var(--gray-900);
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 .onboarding-body p {
   font-size: 14px;
   line-height: 1.5;
   color: var(--gray-600);
-  margin: 0 0 20px;
+  margin: 0 0 14px;
+}
+
+.onboarding-body p b {
+  color: var(--gray-900);
 }
 
 .onboarding-cta {
@@ -2252,7 +2269,7 @@ const state = {
   booting: true,
   bootError: null,
   specialistMode: false, // показать доп. кнопки специалиста над формой заявки
-  showOnboarding: false, // карточка-инструкция при первом визите
+  showOnboarding: false, // окно «Как это работает»: авто при старте без входа, либо вручную кнопкой «?»
 };
 
 function currentUser() {
@@ -3116,7 +3133,10 @@ function renderTopbar() {
           <span class="brand-sub">рядом поможет</span>
         </div>
       </div>
-      <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+      <div class="topbar-actions">
+        <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
+        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+      </div>
     </header>
   `;
 }
@@ -3131,7 +3151,10 @@ function renderTopbarNoUser() {
           <span class="brand-sub">рядом поможет</span>
         </div>
       </div>
-      <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+      <div class="topbar-actions">
+        <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
+        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+      </div>
     </header>
   `;
 }
@@ -3188,7 +3211,7 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу" rows="1"></textarea>
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото, укажите адрес и удобное время." rows="1"></textarea>
         <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
           composerExpandedField === 'address'
@@ -3734,11 +3757,9 @@ function formatComposerDateLabel(dateStr, timeFrom, timeTo) {
   return time ? `${label}, ${time}` : label;
 }
 
-// v2 — версия ключа увеличена, чтобы у всех (в т.ч. у тех, кто уже
-// отметил онбординг v1 при более ранних тестах редизайна) окно снова
-// показалось один раз на новом экране.
-const ONBOARDING_SEEN_KEY = 'muzhik_onboarding_seen_v2';
-
+// Окно «Как это работает»: всплывает само при старте сайта, пока человек
+// не авторизован (см. boot()), и его же в любой момент можно открыть
+// заново кнопкой «?» в шапке (см. data-action="show-help").
 function renderOnboardingOverlay() {
   return `
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
@@ -3755,9 +3776,12 @@ function renderOnboardingOverlay() {
           </svg>
         </div>
         <div class="onboarding-body">
-          <h2>Локация — самое важное</h2>
-          <p>Опишите задачу одним сообщением — рядом найдётся человек, который поможет. Чем точнее адрес, тем быстрее откликнется мастер поблизости.</p>
-          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Начать</button>
+          <h2>Как это работает</h2>
+          <p><b>Нужна помощь по дому?</b> Опишите задачу одним сообщением на главном экране, приложите фото — с фото мастера откликаются охотнее, укажите адрес и удобное время. Сервис покажет примерную цену и отправит заявку мастерам поблизости.</p>
+          <p>Как только заявку возьмут в работу, статус заказа будет обновляться: мастер выехал → начал работу → закончил. После завершения подтвердите работу и поставьте оценку мастеру.</p>
+          <p>Чтобы отправить заявку и получать уведомления по заказу, понадобится номер телефона. Дополнительно можно привязать Telegram — бот пришлёт код для входа и будет присылать уведомления о статусе заказа прямо в чат.</p>
+          <p><b>Хотите брать заказы как мастер?</b> В профиле включите режим специалиста и укажите свои навыки и радиус работы — рядом начнут появляться подходящие заявки, которые можно принять.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
     </div>
@@ -3828,12 +3852,16 @@ function updateComposerSendState() {
 }
 
 const COMPOSER_TEXTAREA_MAX_HEIGHT = 160;
+// Подсказка-плейсхолдер теперь в две строки — пока поле пустое, держим
+// высоту на две строки, чтобы обе были видны целиком.
+const COMPOSER_TEXTAREA_PLACEHOLDER_HEIGHT = 48;
 
 /** Тонкое поле ввода в одну строку по умолчанию, растёт по мере набора текста. */
 function autosizeComposerTextarea(textarea) {
   if (!textarea) return;
   textarea.style.height = 'auto';
-  textarea.style.height = Math.min(textarea.scrollHeight, COMPOSER_TEXTAREA_MAX_HEIGHT) + 'px';
+  const minHeight = textarea.value ? 0 : COMPOSER_TEXTAREA_PLACEHOLDER_HEIGHT;
+  textarea.style.height = Math.max(minHeight, Math.min(textarea.scrollHeight, COMPOSER_TEXTAREA_MAX_HEIGHT)) + 'px';
 }
 
 /** Заголовок «Что нужно сделать?» уходит, как только человек начал печатать. */
@@ -4022,11 +4050,9 @@ async function handleAction(action, value) {
       return render();
     case 'dismiss-onboarding':
       state.showOnboarding = false;
-      try {
-        localStorage.setItem(ONBOARDING_SEEN_KEY, '1');
-      } catch {
-        // localStorage недоступен — просто не запоминаем, покажем снова в следующий раз
-      }
+      return render();
+    case 'show-help':
+      state.showOnboarding = true;
       return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
@@ -4142,11 +4168,10 @@ async function boot() {
   }
   state.screen = 'home';
 
-  try {
-    state.showOnboarding = !localStorage.getItem(ONBOARDING_SEEN_KEY);
-  } catch {
-    state.showOnboarding = false; // localStorage недоступен — не блокируем интерфейс
-  }
+  // Окно «Как это работает» — само всплывает при старте, пока человек не
+  // авторизован (телефон/Telegram не привязаны). После входа не мешает;
+  // в любой момент его можно открыть заново кнопкой «?» в шапке.
+  state.showOnboarding = !currentUser();
 
   state.booting = false;
   console.info(assistantDemoNotice());
