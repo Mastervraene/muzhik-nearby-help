@@ -233,25 +233,25 @@ body {
 
 .composer-chip-row {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-  padding-top: 10px;
-  border-top: 1px solid var(--gray-100);
+  gap: 6px;
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .composer-chip {
   border: none;
   background: var(--gray-100);
   color: var(--gray-600);
-  padding: 8px 14px;
+  padding: 8px 12px;
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  max-width: 100%;
+  gap: 5px;
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -310,7 +310,7 @@ body {
 .composer-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   border-top: 1px solid var(--gray-100);
   padding-top: 10px;
   margin-top: 10px;
@@ -319,6 +319,7 @@ body {
 .composer-tools {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .tool-button {
@@ -2325,8 +2326,9 @@ function logout() {
   state.currentUserId = null;
   state.screen = 'home';
   composerAddressValue = '';
-  composerPhoneValue = '';
-  composerPhoneValid = false;
+  composerDesiredDate = '';
+  composerTimeFrom = '';
+  composerTimeTo = '';
   composerExpandedField = null;
   render();
 }
@@ -2481,7 +2483,7 @@ function renderTelegramLinkCard(purposeText) {
  * разумные значения по умолчанию, которые при желании можно будет
  * уточнить в диалоге с мастером.
  */
-function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTime) {
+function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTimeFrom, desiredTimeTo) {
   const interpretation = interpretCustomerMessage(rawMessage);
   const user = currentUser();
   state.draft = {
@@ -2498,8 +2500,11 @@ function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredT
     fullAddress: address || '',
     useMyLocation: true,
     exactLocation: user?.location || CENTER,
-    desiredDate: desiredDate ? formatComposerDateLabel(desiredDate, '') : '',
-    timeWindow: desiredTime || '',
+    // Храним «сырую» ISO-дату (yyyy-mm-dd), а не отформатированную метку —
+    // именно она пойдёт в реальную колонку orders.desired_date (тип date).
+    // Человекочитаемое форматирование делается только на отображении.
+    desiredDate: desiredDate || '',
+    timeWindow: desiredTimeFrom && desiredTimeTo ? `${desiredTimeFrom}–${desiredTimeTo}` : '',
     urgency: 'normal',
     budget: '',
     paymentMethod: 'on_site',
@@ -2746,6 +2751,7 @@ function renderTopbar() {
         <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
           ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
         </button>
+        ${currentUser() ? `<button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>` : ''}
       </div>
     </header>
   `;
@@ -2788,16 +2794,11 @@ function renderBottomNav() {
 
 function renderHome() {
   const user = currentUser();
-  const needPhone = !user || state.specialistMode;
   if (!composerAddressValue.trim() && user?.district) composerAddressValue = user.district;
-  if (needPhone && !composerPhoneValue.trim() && user?.phone) {
-    composerPhoneValue = user.phone;
-    composerPhoneValid = Boolean(parsePhoneToLocal10(user.phone));
-  }
 
   const addressLabel = composerAddressValue.trim() ? `📍 ${composerAddressValue.trim()}` : '📍 Адрес';
-  const dateLabel = `📅 ${formatComposerDateLabel(composerDesiredDate, composerDesiredTime)}`;
-  const phoneLabel = composerPhoneValue.trim() ? `📞 ${composerPhoneValue.trim()}` : '📞 Телефон';
+  const dateLabel = `📅 ${formatComposerDateLabel(composerDesiredDate, composerTimeFrom, composerTimeTo)}`;
+  const dateBounds = composerDateBounds();
 
   return `
     <div class="screen">
@@ -2810,7 +2811,6 @@ function renderHome() {
         state.specialistMode
           ? `
       <div class="chip-row" id="specialist-toolbar">
-        <button data-action="specialist-focus-phone">Ввести номер телефона</button>
         <button data-action="specialist-focus-address">Ввести адрес</button>
         <button data-action="go-profile">Указать навыки/специализацию</button>
         <button data-action="go-orders">Заказы</button>
@@ -2820,15 +2820,6 @@ function renderHome() {
       }
       <div class="composer-card">
         <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу"></textarea>
-        <div class="composer-chip-row">
-          <button type="button" class="composer-chip ${composerAddressValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="address">${escapeHtml(addressLabel)}</button>
-          <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
-          ${
-            needPhone
-              ? `<button type="button" class="composer-chip ${composerPhoneValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="phone">${escapeHtml(phoneLabel)}</button>`
-              : ''
-          }
-        </div>
         ${
           composerExpandedField === 'address'
             ? `
@@ -2843,21 +2834,17 @@ function renderHome() {
           composerExpandedField === 'date'
             ? `
         <div class="composer-field-inline">
+          <input type="date" id="composer-date" min="${dateBounds.min}" max="${dateBounds.max}" value="${escapeHtml(composerDesiredDate)}" />
           <div class="composer-field-row">
-            <input type="date" id="composer-date" value="${escapeHtml(composerDesiredDate)}" />
-            <input type="time" id="composer-time" value="${escapeHtml(composerDesiredTime)}" />
+            <div style="flex:1;min-width:0;">
+              <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">С</label>
+              <input type="time" id="composer-time-from" value="${escapeHtml(composerTimeFrom)}" />
+            </div>
+            <div style="flex:1;min-width:0;">
+              <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">До</label>
+              <input type="time" id="composer-time-to" value="${escapeHtml(composerTimeTo)}" />
+            </div>
           </div>
-          <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
-        </div>
-        `
-            : ''
-        }
-        ${
-          composerExpandedField === 'phone' && needPhone
-            ? `
-        <div class="composer-field-inline">
-          <input type="text" id="composer-phone" value="${escapeHtml(composerPhoneValue || '+7 ')}" />
-          <div class="order-warning" id="composer-phone-error" style="display:none;"></div>
           <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
         </div>
         `
@@ -2870,6 +2857,10 @@ function renderHome() {
               +
               <input id="composer-file" type="file" accept="image/*,video/*" multiple style="display:none" />
             </label>
+          </div>
+          <div class="composer-chip-row">
+            <button type="button" class="composer-chip ${composerAddressValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="address">${escapeHtml(addressLabel)}</button>
+            <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
           </div>
           <div class="composer-tools">
             <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">🎙</button>
@@ -2988,7 +2979,19 @@ function renderCompose() {
           `
             : ''
         }
-        <button class="primary-button" data-action="publish-draft">Отправить</button>
+        ${
+          !currentUser()
+            ? `
+          <div class="field-card" style="padding:0;box-shadow:none;">
+            <label>Телефон</label>
+            <input type="text" id="compose-phone" value="+7 " placeholder="+7 900 000 00 00" />
+            <div class="order-warning" id="compose-phone-error" style="display:none;"></div>
+            <p class="order-meta"><span>Он привяжется к вашему аккаунту, чтобы мастер мог с вами связаться.</span></p>
+          </div>
+          `
+            : ''
+        }
+        <button class="primary-button" id="compose-publish-send" data-action="publish-draft">Отправить</button>
         <button class="secondary-button" data-action="go-home">Отменить</button>
       </div>
     `;
@@ -3060,7 +3063,11 @@ function renderOrderDetail() {
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
             : ''
         }
-        <p class="order-meta"><span>${escapeHtml(order.desiredDate)} ${escapeHtml(order.timeWindow)}</span></p>
+        ${
+          order.desiredDate || order.timeWindow
+            ? `<p class="order-meta"><span>${escapeHtml(formatOrderDateLabel(order.desiredDate))} ${escapeHtml(order.timeWindow)}</span></p>`
+            : ''
+        }
         ${order.isPrecedent ? `<p>Прецедент — предложение клиента: ${order.negotiation.customerOffer ?? '—'} ₽</p>` : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`}
         <p class="order-meta"><span>Оплата: ${order.payment.method === 'on_site' ? 'на месте' : 'предоплата (демо)'}, статус — ${order.payment.status}</span></p>
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
@@ -3276,21 +3283,45 @@ function render() {
 let pendingAttachments = [];
 
 // ---------------------------------------------------------------------
-// Composer: поля адрес/дата/телефон свёрнуты в чипы (раскрываются по
-// клику). Значения живут вне state, т.к. это черновой ввод конкретной
-// формы, а не данные заказа/пользователя.
+// Composer: поля адрес/дата свёрнуты в чипы (раскрываются по клику,
+// живут в одном ряду с +/микрофоном/отправкой). Телефон сюда не входит —
+// он запрашивается позже, на экране подтверждения заказа (см. renderCompose).
+// Значения живут вне state, т.к. это черновой ввод конкретной формы, а
+// не данные заказа/пользователя.
 // ---------------------------------------------------------------------
-let composerExpandedField = null; // 'address' | 'date' | 'phone' | null
+let composerExpandedField = null; // 'address' | 'date' | null
 let composerAddressValue = '';
-let composerPhoneValue = '';
-let composerPhoneValid = false;
 let composerDesiredDate = ''; // yyyy-mm-dd из <input type="date">
-let composerDesiredTime = ''; // HH:MM из <input type="time">
+let composerTimeFrom = ''; // HH:MM из <input type="time">
+let composerTimeTo = ''; // HH:MM из <input type="time">
 
 const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
-/** @param {string} dateStr — yyyy-mm-dd, @param {string} timeStr — HH:MM */
-function formatComposerDateLabel(dateStr, timeStr) {
+/**
+ * Разрешённое окно для выбора даты заказа: от сегодня и не дальше чем на
+ * месяц вперёд — то же ограничение продублировано в CHECK-constraint
+ * orders_desired_date_range на таблице orders (защита от подмены даты в
+ * обход интерфейса — client-side min/max тут только для UX).
+ */
+function composerDateBounds() {
+  const pad = (n) => String(n).padStart(2, '0');
+  const toIso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const now = new Date();
+  const max = new Date(now);
+  max.setMonth(max.getMonth() + 1);
+  return { min: toIso(now), max: toIso(max) };
+}
+
+/** Человекочитаемая дата для отображения в карточке/деталях заказа (без «Сегодня/Завтра» — там нужна именно дата). @param {string} dateStr — yyyy-mm-dd */
+function formatOrderDateLabel(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getDate()} ${RU_MONTHS_SHORT[d.getMonth()]}`;
+}
+
+/** @param {string} dateStr — yyyy-mm-dd, @param {string} timeFrom — HH:MM, @param {string} timeTo — HH:MM */
+function formatComposerDateLabel(dateStr, timeFrom, timeTo) {
   if (!dateStr) return 'Когда удобно';
   const d = new Date(dateStr + 'T00:00:00');
   if (Number.isNaN(d.getTime())) return 'Когда удобно';
@@ -3301,7 +3332,8 @@ function formatComposerDateLabel(dateStr, timeStr) {
   if (d.toDateString() === today.toDateString()) label = 'Сегодня';
   else if (d.toDateString() === tomorrow.toDateString()) label = 'Завтра';
   else label = `${d.getDate()} ${RU_MONTHS_SHORT[d.getMonth()]}`;
-  return timeStr ? `${label}, ${timeStr}` : label;
+  const time = timeFrom && timeTo ? `${timeFrom}–${timeTo}` : timeFrom || '';
+  return time ? `${label}, ${time}` : label;
 }
 
 const ONBOARDING_SEEN_KEY = 'muzhik_onboarding_seen_v1';
@@ -3389,11 +3421,9 @@ function updateComposerSendState() {
   const composerInput = document.getElementById('composer-input');
   const composerSend = document.getElementById('composer-send');
   if (!composerSend) return;
-  const needPhone = !currentUser() || state.specialistMode;
   const textOk = Boolean(composerInput && composerInput.value.trim());
   const addressOk = Boolean(composerAddressValue.trim());
-  const phoneOk = !needPhone || composerPhoneValid;
-  composerSend.disabled = !(textOk && addressOk && phoneOk);
+  composerSend.disabled = !(textOk && addressOk);
 }
 
 function wireEvents() {
@@ -3402,18 +3432,10 @@ function wireEvents() {
   const composerFile = document.getElementById('composer-file');
   const composerAttachments = document.getElementById('composer-attachments');
   const composerAddress = document.getElementById('composer-address');
-  const composerPhone = document.getElementById('composer-phone');
   const composerDate = document.getElementById('composer-date');
-  const composerTime = document.getElementById('composer-time');
+  const composerTimeFromInput = document.getElementById('composer-time-from');
+  const composerTimeToInput = document.getElementById('composer-time-to');
 
-  if (composerPhone) {
-    const errorEl = document.getElementById('composer-phone-error');
-    wirePhoneField(composerPhone, errorEl, () => {
-      composerPhoneValue = composerPhone.value;
-      composerPhoneValid = composerPhone.dataset.valid === 'true';
-      updateComposerSendState();
-    });
-  }
   if (composerAddress) {
     composerAddress.addEventListener('input', () => {
       composerAddressValue = composerAddress.value;
@@ -3422,12 +3444,27 @@ function wireEvents() {
   }
   if (composerDate) {
     composerDate.addEventListener('change', () => {
-      composerDesiredDate = composerDate.value;
+      const bounds = composerDateBounds();
+      let v = composerDate.value;
+      // Дублируем min/max-проверку в JS — атрибуты min/max можно обойти
+      // (например, через devtools), финальная защита всё равно на сервере
+      // (см. CHECK-constraint orders_desired_date_range в Supabase).
+      if (v && (v < bounds.min || v > bounds.max)) {
+        v = '';
+        composerDate.value = '';
+        showToast('Дата должна быть от сегодня и не позднее чем через месяц');
+      }
+      composerDesiredDate = v;
     });
   }
-  if (composerTime) {
-    composerTime.addEventListener('change', () => {
-      composerDesiredTime = composerTime.value;
+  if (composerTimeFromInput) {
+    composerTimeFromInput.addEventListener('change', () => {
+      composerTimeFrom = composerTimeFromInput.value;
+    });
+  }
+  if (composerTimeToInput) {
+    composerTimeToInput.addEventListener('change', () => {
+      composerTimeTo = composerTimeToInput.value;
     });
   }
   if (composerInput) composerInput.addEventListener('input', updateComposerSendState);
@@ -3443,40 +3480,17 @@ function wireEvents() {
     });
   }
   if (composerSend) {
-    composerSend.addEventListener('click', async () => {
+    composerSend.addEventListener('click', () => {
       const text = composerInput.value.trim();
       const address = composerAddressValue.trim();
-      const needPhone = !currentUser() || state.specialistMode;
       if (!text || !address) return;
-      if (needPhone && !composerPhoneValid) return;
 
-      composerSend.disabled = true;
       const atts = pendingAttachments;
       pendingAttachments = [];
-
-      try {
-        if (needPhone) {
-          const phone = composerPhoneValue;
-          if (currentUser()) {
-            // режим специалиста: обновляем телефон уже вошедшего пользователя
-            const updated = { ...currentUser(), phone, phoneVerified: false };
-            saveUser(updated);
-          } else {
-            const user = await ensureUserByPhone(phone, {
-              location: CENTER,
-              district: address,
-            });
-            state.currentUserId = user.id;
-            saveSession(user.id);
-          }
-        }
-        startQuickDraft(text, atts, address, composerDesiredDate, composerDesiredTime);
-        composerExpandedField = null;
-      } catch (err) {
-        console.error('[composer] send failed', err);
-        showToast('Не получилось отправить заявку — попробуйте ещё раз');
-        composerSend.disabled = false;
-      }
+      // Телефон (для новых пользователей) запрашивается позже, на экране
+      // подтверждения заявки — см. renderCompose()/case 'publish-draft'.
+      startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo);
+      composerExpandedField = null;
     });
   }
 
@@ -3503,6 +3517,12 @@ function wireEvents() {
     });
   }
 
+  const composePhone = document.getElementById('compose-phone');
+  if (composePhone) {
+    const composePhoneError = document.getElementById('compose-phone-error');
+    wirePhoneField(composePhone, composePhoneError, () => {});
+  }
+
   const reviewFile = document.getElementById('quick-review-file');
   const reviewAttachments = document.getElementById('quick-review-attachments');
   if (reviewFile && reviewAttachments) {
@@ -3526,7 +3546,7 @@ function wireEvents() {
   });
 }
 
-function handleAction(action, value) {
+async function handleAction(action, value) {
   switch (action) {
     case 'go-home': return go('home');
     case 'go-orders': return go('orders');
@@ -3552,11 +3572,6 @@ function handleAction(action, value) {
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
       return render();
-    case 'specialist-focus-phone':
-      composerExpandedField = 'phone';
-      render();
-      document.getElementById('composer-phone')?.focus();
-      return;
     case 'specialist-focus-address':
       composerExpandedField = 'address';
       render();
@@ -3565,7 +3580,7 @@ function handleAction(action, value) {
     case 'toggle-composer-field': {
       composerExpandedField = composerExpandedField === value ? null : value;
       render();
-      const idByField = { address: 'composer-address', date: 'composer-date', phone: 'composer-phone' };
+      const idByField = { address: 'composer-address', date: 'composer-date' };
       if (composerExpandedField && idByField[composerExpandedField]) {
         document.getElementById(idByField[composerExpandedField])?.focus();
       }
@@ -3585,6 +3600,36 @@ function handleAction(action, value) {
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
       if (fullAddressField) state.draft.fullAddress = fullAddressField.value.trim();
+
+      // Телефон запрашивается тут, на экране подтверждения заявки, а не в
+      // composer'е — учётка (для новых пользователей) создаётся прямо перед
+      // публикацией заказа.
+      if (!currentUser()) {
+        const composePhone = document.getElementById('compose-phone');
+        if (!composePhone || composePhone.dataset.valid !== 'true') {
+          const err = document.getElementById('compose-phone-error');
+          if (err) {
+            err.textContent = 'Укажите номер телефона, чтобы отправить заявку';
+            err.style.display = 'block';
+          }
+          return;
+        }
+        const sendBtn = document.getElementById('compose-publish-send');
+        if (sendBtn) sendBtn.disabled = true;
+        try {
+          const user = await ensureUserByPhone(composePhone.value, {
+            location: CENTER,
+            district: state.draft.district,
+          });
+          state.currentUserId = user.id;
+          saveSession(user.id);
+        } catch (err) {
+          console.error('[compose] phone step failed', err);
+          showToast('Не получилось продолжить — попробуйте ещё раз');
+          if (sendBtn) sendBtn.disabled = false;
+          return;
+        }
+      }
       return publishDraft();
     }
 
