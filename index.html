@@ -1299,7 +1299,7 @@ function reportError(context, err) {
 function dbUserToUser(row, skillsByUser) {
   return {
     id: row.id,
-    telegramId: row.telegram_id,
+    telegramId: row.telegram_id || '',
     displayName: row.display_name || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
@@ -1317,7 +1317,10 @@ function dbUserToUser(row, skillsByUser) {
 
 function userToDbUser(user) {
   return {
-    telegram_id: user.telegramId,
+    // Пустая строка нарушает unique-ограничение users_telegram_id_key при
+    // втором и последующих пользователях без Telegram — отправляем null,
+    // Postgres допускает множество NULL в уникальном индексе.
+    telegram_id: user.telegramId || null,
     display_name: user.displayName,
     phone: user.phone,
     phone_verified: Boolean(user.phoneVerified),
