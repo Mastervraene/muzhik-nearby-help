@@ -217,6 +217,7 @@ body {
 .home-screen {
   display: flex;
   flex-direction: column;
+  padding-bottom: 6px;
 }
 
 .home-hero-wrap {
@@ -257,9 +258,9 @@ body {
 }
 
 .legal-footer {
-  margin: 10px 4px 4px;
-  font-size: 11px;
-  line-height: 1.4;
+  margin: 6px 4px 0;
+  font-size: 9px;
+  line-height: 1.3;
   color: var(--gray-500);
   text-align: center;
 }
@@ -3990,6 +3991,16 @@ function wireEvents() {
       autosizeComposerTextarea(composerInput);
       updateHomeHeroVisibility(composerInput);
       scheduleComposerAssistantCheck(composerInput.value);
+    });
+    // Заголовок «Что нужно сделать?» прячется сразу по клику в поле, а не
+    // только когда появился текст; если поле снова опустело и потеряло
+    // фокус — заголовок возвращается.
+    composerInput.addEventListener('focus', () => {
+      const hero = document.getElementById('home-hero');
+      if (hero) hero.classList.add('is-hidden');
+    });
+    composerInput.addEventListener('blur', () => {
+      updateHomeHeroVisibility(composerInput);
     });
   }
   updateComposerSendState();
