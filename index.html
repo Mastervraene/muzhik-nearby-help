@@ -2159,6 +2159,144 @@ function logout() {
 }
 
 // ---------------------------------------------------------------------
+// Привязка Telegram для уведомлений (не авторизация — она уже произошла
+// по номеру телефона выше). Путь человека: нажимает "Открыть бота и
+// получить код" → открывается бот в Telegram → бот сам генерирует
+// 4-значный код и пишет его в чат ("введите этот код на сайте «Мужик
+// рядом» для авторизации через Telegram") → человек вводит код на сайте
+// и жмёт "Подтвердить".
+// Бот должен сам вставлять строку в public.login_codes (code, telegram_id)
+// при выдаче кода — сайт эту строку только читает по code, введённому
+// человеком, ничего не создаёт заранее.
+// Если telegram_id уже привязан к другому пользователю, UPDATE упадёт на
+// unique-ограничении users_telegram_id_key — reportError покажет ошибку.
+//
+// Лимиты на повторный запрос кода (не раньше чем через 1 мин, третий и
+// далее — не раньше чем через 2 мин; максимум 5 запросов в час и 10 в
+// сутки) — ЭТО ТОЛЬКО клиентская подсказка в интерфейсе (localStorage,
+// per-device), не настоящая защита: обойти легко, очистив localStorage
+// или открыв бота напрямую в Telegram в обход сайта. Настоящий лимит
+// должен стоять в самом боте (BotHelp) — сайт технически не может
+// запретить боту отправить сообщение.
+// ---------------------------------------------------------------------
+
+/**
+ * @param {string} code
+ * @returns {Promise<{telegram_id: string|null}|null>}
+ */
+async function getLoginCodeStatus(code) {
+  if (!isSupabaseConfigured()) return null;
+  const rows = await getRows('login_codes', `code=eq.${encodeURIComponent(code)}&select=telegram_id`);
+  return rows[0] || null;
+}
+
+const TELEGRAM_LINK_ATTEMPTS_KEY = 'muzhik_tg_link_attempts_v1';
+
+function getTelegramLinkAttempts() {
+  try {
+    const raw = localStorage.getItem(TELEGRAM_LINK_ATTEMPTS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const now = Date.now();
+    return Array.isArray(arr) ? arr.filter((t) => typeof t === 'number' && now - t < 24 * 60 * 60 * 1000) : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordTelegramLinkAttempt() {
+  const attempts = getTelegramLinkAttempts();
+  attempts.push(Date.now());
+  try {
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPTS_KEY, JSON.stringify(attempts));
+  } catch {
+    // localStorage недоступен (приватный режим и т.п.) — просто не считаем лимит
+  }
+}
+
+/**
+ * @returns {{canRequest: boolean, waitSeconds: number, overHour: boolean, overDay: boolean}}
+ */
+function getTelegramLinkLimitState() {
+  const now = Date.now();
+  const attempts = getTelegramLinkAttempts();
+  const hourCount = attempts.filter((t) => now - t < 60 * 60 * 1000).length;
+  const dayCount = attempts.length;
+  const last = attempts[attempts.length - 1];
+  // 1-й запрос — сразу; 2-й — не раньше чем через 1 мин после 1-го;
+  // 3-й и далее — не раньше чем через 2 мин после предыдущего.
+  const cooldownMs = attempts.length === 0 ? 0 : attempts.length === 1 ? 60_000 : 120_000;
+  const waitMs = last ? Math.max(0, last + cooldownMs - now) : 0;
+  const overHour = hourCount >= 5;
+  const overDay = dayCount >= 10;
+  return { canRequest: waitMs <= 0 && !overHour && !overDay, waitSeconds: Math.ceil(waitMs / 1000), overHour, overDay };
+}
+
+/** @param {string} rawCode — код, который человек ввёл на сайте (получил от бота) */
+async function submitTelegramLinkCode(rawCode) {
+  const code = String(rawCode || '').trim();
+  if (!/^\d{3,8}$/.test(code)) {
+    showToast('Введите код из чата с ботом (только цифры)');
+    return;
+  }
+  const user = currentUser();
+  if (!user) return;
+
+  let row;
+  try {
+    row = await getLoginCodeStatus(code);
+  } catch (err) {
+    reportError('проверка кода Telegram', err);
+    return;
+  }
+  if (!row || !row.telegram_id) {
+    showToast('Код не найден — проверьте, что скопировали его из бота правильно');
+    return;
+  }
+
+  try {
+    const updated = await updateRow('users', user.id, { telegram_id: row.telegram_id });
+    const idx = cache.users.findIndex((u) => u.id === user.id);
+    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: updated.telegram_id || row.telegram_id };
+    showToast('Telegram подключён — будем присылать уведомления');
+    render();
+  } catch (err) {
+    reportError('привязка Telegram к аккаунту', err);
+  }
+}
+
+/**
+ * Карточка привязки Telegram: статус "подключён" либо форма ввода кода,
+ * который прислал бот.
+ * @param {string} purposeText — например, "получать уведомления о заказе"
+ */
+function renderTelegramLinkCard(purposeText) {
+  const user = currentUser();
+  if (!user) return '';
+  if (user.telegramId) {
+    return `<p class="order-meta"><span>✓ Telegram подключён — уведомления приходят туда</span></p>`;
+  }
+  const limit = getTelegramLinkLimitState();
+  let hint = '';
+  if (limit.overDay) {
+    hint = 'Дневной лимит запросов кода исчерпан — попробуйте завтра.';
+  } else if (limit.overHour) {
+    hint = 'Часовой лимит запросов кода исчерпан — попробуйте позже.';
+  } else if (limit.waitSeconds > 0) {
+    hint = `Повторный код можно запросить через ${limit.waitSeconds} сек.`;
+  }
+  return `
+    <div class="field-card">
+      <p class="order-meta">Нажмите кнопку — откроется бот и пришлёт код в чат. Введите этот код здесь, чтобы подключить Telegram и ${escapeHtml(purposeText)}.</p>
+      <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
+      ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
+      <label style="margin-top:10px;">Код из бота</label>
+      <input type="text" id="telegram-link-code" inputmode="numeric" placeholder="0000" />
+      <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------
 // Composer / диалог создания заказа
 // ---------------------------------------------------------------------
 
@@ -2733,6 +2871,11 @@ function renderOrderDetail() {
         </div>
         <div style="margin-top:12px;">${actions}</div>
       </div>
+      ${
+        isCustomer
+          ? `<div style="margin-top:12px;">${renderTelegramLinkCard('получать уведомления о статусе этого заказа')}</div>`
+          : ''
+      }
       <button class="secondary-button" data-action="go-orders">← К списку заказов</button>
     </div>
   `;
@@ -2774,6 +2917,12 @@ function renderProfile() {
         <label style="margin-top:10px;">Радиус поиска заказов рядом (км)</label>
         <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
         <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
+      </div>
+
+      <div class="section-title">Уведомления в Telegram</div>
+      <div class="field-card">
+        <p class="order-meta">Бесплатно и без SMS: статус ваших заказов, а если укажете навыки ниже — пуши о новых подходящих заказах рядом.</p>
+        ${renderTelegramLinkCard('получать уведомления о заказах')}
       </div>
 
       <div class="section-title">Мои навыки</div>
@@ -3131,6 +3280,18 @@ function handleAction(action, value) {
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'voice-stub':
       return showToast('Демо: голосовое сообщение имитируется текстовой расшифровкой');
+
+    case 'request-telegram-code': {
+      const limit = getTelegramLinkLimitState();
+      if (!limit.canRequest) return render();
+      recordTelegramLinkAttempt();
+      window.open(`https://t.me/${TELEGRAM_BOT_USERNAME}`, '_blank', 'noopener');
+      return render();
+    }
+    case 'submit-telegram-code': {
+      const el = document.getElementById('telegram-link-code');
+      return submitTelegramLinkCode(el ? el.value : '');
+    }
 
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
