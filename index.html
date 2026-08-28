@@ -183,6 +183,10 @@ body {
 
 .screen {
   flex: 1;
+  /* min-height:0 — иначе флекс-элемент не сжимается до отведённого места
+     и «выталкивает» контент (включая composer) за пределы экрана вместо
+     появления внутренней прокрутки. */
+  min-height: 0;
   padding: 16px;
   padding-bottom: 24px;
   overflow-y: auto;
@@ -193,15 +197,14 @@ body {
 .home-screen {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
 }
 
 .home-hero-wrap {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 64px;
 }
 
 .home-hero {
