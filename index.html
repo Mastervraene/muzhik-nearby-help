@@ -784,11 +784,11 @@ body {
       // сайта в кабинете Yandex Cloud, поэтому безопасен на клиенте (в отличие
       // от ключа YandexGPT/SpeechKit). Пусто — автоопределение адреса просто
       // возьмёт сырые координаты без красивого текста.
-      YANDEX_GEOCODER_API_KEY: '',
+      YANDEX_GEOCODER_API_KEY: '4be0a4fc-08bd-4859-9145-ac737b71c49f',
       // Базовый URL Supabase Edge Function с расшифровкой голоса (/transcribe)
       // и уточняющими вопросами по тексту заявки (/interpret). Пусто —
       // ассистент выключен, сайт работает как раньше (ручной ввод).
-      ASSISTANT_FUNCTION_URL: '',
+      ASSISTANT_FUNCTION_URL: 'https://youyvbqdxuigvjciklfk.supabase.co/functions/v1',
     };
   </script>
   <script>
@@ -2970,7 +2970,14 @@ async function sendVoiceForTranscription(blob) {
   try {
     const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/transcribe`, {
       method: 'POST',
-      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      headers: {
+        'Content-Type': blob.type || 'audio/webm',
+        // Supabase Edge Functions по умолчанию проверяют JWT — публичный
+        // anon-ключ сайта (он и так открыт в window.__ENV__) этой проверке
+        // удовлетворяет и не даёт дёргать функцию мимо сайта напрямую.
+        Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+        apikey: env.SUPABASE_ANON_KEY,
+      },
       body: blob,
     });
     if (!res.ok) throw new Error(`transcribe ${res.status}`);
@@ -3017,7 +3024,11 @@ async function runComposerAssistantCheck(text) {
   try {
     const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/interpret`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+        apikey: env.SUPABASE_ANON_KEY,
+      },
       body: JSON.stringify({ text }),
     });
     if (!res.ok) throw new Error(`interpret ${res.status}`);
