@@ -183,9 +183,31 @@ body {
 
 /* ---------- Home / composer (главный экран как в чате) ---------- */
 
+.home-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.home-hero-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+}
+
 .home-hero {
   text-align: center;
-  padding: 10px 8px 20px;
+  padding: 10px 8px;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  opacity: 1;
+}
+
+.home-hero.is-hidden {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
 }
 
 .home-hero h1 {
@@ -204,15 +226,20 @@ body {
 }
 
 .composer-textarea {
+  display: block;
   width: 100%;
-  min-height: 84px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 160px;
   border: none;
   resize: none;
   font-size: 15px;
+  line-height: 24px;
   font-family: inherit;
   color: var(--gray-900);
   outline: none;
   background: transparent;
+  overflow-y: auto;
 }
 
 .composer-textarea::placeholder {
@@ -316,32 +343,34 @@ body {
   flex-shrink: 0;
 }
 
-.tool-button {
+.tool-button,
+.send-button {
   border: none;
-  background: var(--gray-100);
-  width: clamp(30px, 9vw, 38px);
-  height: clamp(30px, 9vw, 38px);
-  border-radius: 12px;
+  width: clamp(32px, 9vw, 40px);
+  height: clamp(32px, 9vw, 40px);
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: clamp(13px, 4vw, 16px);
-  color: var(--gray-600);
   flex-shrink: 0;
+  padding: 0;
+}
+
+.tool-button {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.tool-button svg,
+.send-button svg {
+  width: 46%;
+  height: 46%;
+  display: block;
 }
 
 .send-button {
-  border: none;
   background: var(--accent);
   color: var(--gray-0);
-  width: clamp(32px, 9.5vw, 40px);
-  height: clamp(32px, 9.5vw, 40px);
-  border-radius: 50%;
-  font-size: clamp(13px, 4vw, 16px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
 }
 
 .send-button:disabled {
@@ -2752,6 +2781,16 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Иконки для нижнего ряда composer'а — svg вместо эмодзи/текстовых глифов,
+// чтобы «+», микрофон и стрелка отправки были нарисованы ровно по центру
+// кнопки и одинаково по стилю (currentColor = цвет текста кнопки из CSS).
+const ICON_PLUS =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const ICON_MIC =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg>';
+const ICON_ARROW_UP =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+
 function renderTopbar() {
   const notifications = getNotificationsFor(state.currentUserId);
   return `
@@ -2768,7 +2807,7 @@ function renderTopbar() {
         <button class="icon-button" data-action="go-notifications" aria-label="Уведомления">
           ↗${notifications.length ? `<span class="badge">${notifications.length}</span>` : ''}
         </button>
-        ${currentUser() ? `<button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>` : ''}
+        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
       </div>
     </header>
   `;
@@ -2790,11 +2829,16 @@ function renderTopbarNoUser() {
 }
 
 function renderBottomNav() {
-  const tabs = [
-    ['home', '✍︎', 'Заявка'],
-    ['orders', '▤', 'Заказы'],
-    ['profile', '◍', 'Профиль'],
-  ];
+  // Заказы/профиль появляются в нижней навигации только после входа в
+  // аккаунт (через иконку профиля в шапке) — до входа заявку можно
+  // отправить и без них.
+  const tabs = currentUser()
+    ? [
+        ['home', '✍︎', 'Заявка'],
+        ['orders', '▤', 'Заказы'],
+        ['profile', '◍', 'Профиль'],
+      ]
+    : [['home', '✍︎', 'Заявка']];
   return `
     <nav class="bottom-nav">
       ${tabs
@@ -2818,9 +2862,11 @@ function renderHome() {
   const dateBounds = composerDateBounds();
 
   return `
-    <div class="screen">
-      <div class="home-hero">
-        <h1>Что нужно сделать?</h1>
+    <div class="screen home-screen">
+      <div class="home-hero-wrap">
+        <div class="home-hero" id="home-hero">
+          <h1>Что нужно сделать?</h1>
+        </div>
       </div>
       ${
         state.specialistMode
@@ -2834,7 +2880,7 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу"></textarea>
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу" rows="1"></textarea>
         ${
           composerExpandedField === 'address'
             ? `
@@ -2869,7 +2915,7 @@ function renderHome() {
         <div class="composer-actions">
           <div class="composer-tools">
             <label class="tool-button" title="Прикрепить фото или видео">
-              +
+              ${ICON_PLUS}
               <input id="composer-file" type="file" accept="image/*,video/*" multiple style="display:none" />
             </label>
           </div>
@@ -2878,8 +2924,8 @@ function renderHome() {
             <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
           </div>
           <div class="composer-tools">
-            <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">🎙</button>
-            <button class="send-button" id="composer-send" disabled>➤</button>
+            <button class="tool-button" data-action="voice-stub" title="Голосовое (демо)">${ICON_MIC}</button>
+            <button class="send-button" id="composer-send" disabled>${ICON_ARROW_UP}</button>
           </div>
         </div>
       </div>
@@ -3351,7 +3397,10 @@ function formatComposerDateLabel(dateStr, timeFrom, timeTo) {
   return time ? `${label}, ${time}` : label;
 }
 
-const ONBOARDING_SEEN_KEY = 'muzhik_onboarding_seen_v1';
+// v2 — версия ключа увеличена, чтобы у всех (в т.ч. у тех, кто уже
+// отметил онбординг v1 при более ранних тестах редизайна) окно снова
+// показалось один раз на новом экране.
+const ONBOARDING_SEEN_KEY = 'muzhik_onboarding_seen_v2';
 
 function renderOnboardingOverlay() {
   return `
@@ -3441,6 +3490,22 @@ function updateComposerSendState() {
   composerSend.disabled = !(textOk && addressOk);
 }
 
+const COMPOSER_TEXTAREA_MAX_HEIGHT = 160;
+
+/** Тонкое поле ввода в одну строку по умолчанию, растёт по мере набора текста. */
+function autosizeComposerTextarea(textarea) {
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, COMPOSER_TEXTAREA_MAX_HEIGHT) + 'px';
+}
+
+/** Заголовок «Что нужно сделать?» уходит, как только человек начал печатать. */
+function updateHomeHeroVisibility(textarea) {
+  const hero = document.getElementById('home-hero');
+  if (!hero) return;
+  hero.classList.toggle('is-hidden', Boolean(textarea && textarea.value.trim()));
+}
+
 function wireEvents() {
   const composerInput = document.getElementById('composer-input');
   const composerSend = document.getElementById('composer-send');
@@ -3482,7 +3547,14 @@ function wireEvents() {
       composerTimeTo = composerTimeToInput.value;
     });
   }
-  if (composerInput) composerInput.addEventListener('input', updateComposerSendState);
+  if (composerInput) {
+    autosizeComposerTextarea(composerInput);
+    composerInput.addEventListener('input', () => {
+      updateComposerSendState();
+      autosizeComposerTextarea(composerInput);
+      updateHomeHeroVisibility(composerInput);
+    });
+  }
   updateComposerSendState();
 
   if (composerFile) {
