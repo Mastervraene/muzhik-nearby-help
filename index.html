@@ -2049,6 +2049,23 @@ function formatPhoneRu(local10) {
 }
 
 /**
+ * Убирает ведущий признак кода страны («+7», «7» или «8» в самом начале строки),
+ * чтобы сама «+7», уже стоящая в поле по умолчанию, не считалась введённой
+ * пользователем цифрой. Остаток очищается от всех нецифровых символов.
+ * @param {string} raw
+ * @returns {string}
+ */
+function stripCountryPrefixDigits(raw) {
+  let s = String(raw || '');
+  if (s.startsWith('+7')) {
+    s = s.slice(2);
+  } else if (s.startsWith('7') || s.startsWith('8')) {
+    s = s.slice(1);
+  }
+  return s.replace(/\D/g, '');
+}
+
+/**
  * Живое форматирование поля телефона по мере ввода/вставки.
  * @param {HTMLInputElement} input
  * @param {HTMLElement} errorEl
@@ -2057,7 +2074,7 @@ function formatPhoneRu(local10) {
 function wirePhoneField(input, errorEl, onChange) {
   const recalc = () => {
     const raw = input.value;
-    let d = raw.replace(/\D/g, '');
+    let d = stripCountryPrefixDigits(raw);
     if (d.length > 10 && (d[0] === '7' || d[0] === '8')) {
       d = d.slice(1);
     }
