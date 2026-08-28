@@ -2383,12 +2383,28 @@ function wirePhoneField(input, errorEl, onChange) {
  * @param {{location?: {lat:number,lng:number}, district?: string}} [extra]
  */
 async function ensureUserByPhone(phone, extra = {}) {
-  let user = cache.users.find((u) => u.phone === phone);
+  // Один и тот же номер мог осесть в базе в разных форматах: «+7 916 533
+  // 95 88» (текущий формат поля, см. wirePhoneField/formatPhoneRu) и
+  // старое «79165339588» без «+» и пробелов — так хранились самые первые
+  // записи, до того как в поле телефона появилось форматирование.
+  // Сравниваем и ищем по «голым» 10 цифрам номера, чтобы не плодить
+  // дубликат аккаунта тому же человеку и не терять привязанный Telegram
+  // и историю заказов, которые остались на старой записи.
+  const local10 = stripCountryPrefixDigits(phone);
+  let user = cache.users.find((u) => stripCountryPrefixDigits(u.phone || '') === local10);
   if (user) return user;
 
   if (isSupabaseConfigured()) {
     try {
-      const rows = await getRows('users', `phone=eq.${encodeURIComponent(phone)}&select=*`);
+      const legacyPhone = '7' + local10;
+      const query =
+        phone === legacyPhone
+          ? `phone=eq.${encodeURIComponent(phone)}&select=*`
+          : // Оба варианта формата разом; если вдруг найдутся записи в обоих
+            // (как исторический дубликат), отдаём предпочтение той, где уже
+            // привязан Telegram, а при прочих равных — более старой записи.
+            `or=(phone.eq.${encodeURIComponent(phone)},phone.eq.${encodeURIComponent(legacyPhone)})&order=telegram_id.nullslast,created_at.asc&limit=1&select=*`;
+      const rows = await getRows('users', query);
       if (rows[0]) {
         const skillRows = await getRows('skills', `user_id=eq.${rows[0].id}`);
         const skillsByUser = {};
