@@ -741,6 +741,18 @@ body {
   display: flex;
   flex-direction: column;
   animation: onboarding-rise 0.25s ease-out;
+  /* Своя обработка вертикального жеста (свайп вверх/вниз закрывает
+     карточку) — не отдаём его браузерному скроллу/bounce страницы. */
+  touch-action: none;
+}
+
+.onboarding-drag-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--gray-200);
+  margin: 10px auto 0;
+  flex-shrink: 0;
 }
 
 @keyframes onboarding-rise {
@@ -775,6 +787,9 @@ body {
   padding: 20px 22px 24px;
   overflow-y: auto;
   min-height: 0;
+  /* Внутри текста жест должен скроллить содержимое, а не закрывать
+     карточку — свайп-закрытие ловится только с «шапки» карточки. */
+  touch-action: pan-y;
 }
 
 .onboarding-body h2 {
@@ -3806,6 +3821,7 @@ function renderOnboardingOverlay() {
   return `
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
         <div class="onboarding-art">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
           <svg viewBox="0 0 400 200" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Карта с точкой">
@@ -3834,6 +3850,7 @@ function renderHelpOverlay() {
   return `
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
         <div class="onboarding-art">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
           <svg viewBox="0 0 400 200" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Карта с точкой">
@@ -4081,6 +4098,55 @@ function wireEvents() {
       handleAction(action, value);
     });
   });
+
+  wireOnboardingSwipe();
+}
+
+/**
+ * Свайп по карточке онбординга/справки закрывает её — как вниз (обычный
+ * жест для шторки), так и вверх, по просьбе — оба направления считаются
+ * закрытием. Жест ловится с «шапки» карточки (ручка + иллюстрация), чтобы
+ * не мешать прокрутке текста в теле карточки на длинном окне «Как это
+ * работает».
+ */
+function wireOnboardingSwipe() {
+  const card = document.querySelector('.onboarding-card');
+  if (!card) return;
+  const body = card.querySelector('.onboarding-body');
+  const DISMISS_THRESHOLD = 70;
+  let startY = null;
+  let dragging = false;
+
+  const bodyIsScrollable = () => Boolean(body && body.scrollHeight > body.clientHeight + 1);
+
+  const onPointerDown = (e) => {
+    if (bodyIsScrollable() && body.contains(e.target)) return;
+    startY = e.clientY;
+    dragging = true;
+    card.style.transition = 'none';
+    card.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!dragging || startY === null) return;
+    card.style.transform = `translateY(${e.clientY - startY}px)`;
+  };
+  const onPointerEnd = (e) => {
+    if (!dragging || startY === null) return;
+    const delta = e.clientY - startY;
+    dragging = false;
+    startY = null;
+    card.style.transition = 'transform 0.2s ease';
+    if (Math.abs(delta) > DISMISS_THRESHOLD) {
+      handleAction('dismiss-onboarding');
+    } else {
+      card.style.transform = 'translateY(0)';
+    }
+  };
+
+  card.addEventListener('pointerdown', onPointerDown);
+  card.addEventListener('pointermove', onPointerMove);
+  card.addEventListener('pointerup', onPointerEnd);
+  card.addEventListener('pointercancel', onPointerEnd);
 }
 
 async function handleAction(action, value) {
