@@ -714,6 +714,63 @@ body {
   padding: 40px 10px;
 }
 
+.boot-error-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.boot-error-card {
+  max-width: 340px;
+  text-align: center;
+  background: var(--gray-0);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 28px 22px;
+}
+
+.boot-error-code {
+  font-family: "Oswald", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-weight: 700;
+  font-size: 52px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  margin: 0 0 12px;
+}
+
+.boot-error-title {
+  font-family: "Oswald", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--gray-900);
+  margin: 0 0 6px;
+}
+
+.boot-error-sub {
+  font-family: "Oswald", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--gray-900);
+  margin: 0 0 16px;
+}
+
+.boot-error-desc {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--gray-500);
+  margin: 0 0 18px;
+}
+
+.boot-error-card .primary-button {
+  width: auto;
+  padding: 12px 24px;
+  border-radius: 999px;
+}
+
 .demo-tag {
   font-size: 10px;
   color: var(--gray-400);
@@ -1642,8 +1699,21 @@ function setSyncErrorHandler(fn) {
   onSyncError = fn;
 }
 
+// Флаг «не удалось загрузить данные при самом первом старте приложения» —
+// отдельно от обычных фоновых сбоев синхронизации (те остаются тихим
+// тостом). Если стартовая загрузка не удалась, UI покажет полноэкранный
+// экран «долгое ожидание» вместо пустого/сломанного главного экрана.
+let bootLoadFailed = false;
+function hadBootLoadFailure() {
+  return bootLoadFailed;
+}
+
 function reportError(context, err) {
   console.error(`[dataStore] ${context}:`, err);
+  if (context === 'загрузка данных при старте') {
+    bootLoadFailed = true;
+    return;
+  }
   onSyncError(`Не удалось синхронизировать данные (${context}). Изменение сохранено только локально.`);
 }
 
@@ -3732,6 +3802,26 @@ function renderBooting() {
   return `<div class="screen"><div class="empty-state">Загрузка…</div></div>`;
 }
 
+/**
+ * Показывается вместо главного экрана, если самая первая загрузка данных
+ * (Supabase) не удалась — например, сервер долго не отвечал. Кнопка
+ * перезагружает страницу целиком, это самый надёжный способ повторить
+ * попытку из полностью неизвестного состояния.
+ */
+function renderBootError() {
+  return `
+    <div class="screen boot-error-screen">
+      <div class="boot-error-card">
+        <p class="boot-error-code">504</p>
+        <h1 class="boot-error-title">Долгое ожидание ответа,</h1>
+        <p class="boot-error-sub">но не такое долгое, как обычно бывает у мужиков 🙂</p>
+        <p class="boot-error-desc">Сервер немного задумался и не успел ответить вовремя. Мы, в отличие от некоторых, не пропадаем — попробуйте обновить страницу.</p>
+        <button class="primary-button" type="button" onclick="location.reload()">Обновить страницу</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderNoUsers() {
   return `
     <div class="screen">
@@ -3784,6 +3874,11 @@ function render() {
 
   if (state.screen === 'boot' || state.booting) {
     app.innerHTML = renderBooting();
+    return;
+  }
+
+  if (state.screen === 'bootError') {
+    app.innerHTML = renderBootError();
     return;
   }
 
@@ -4371,6 +4466,12 @@ async function boot() {
   setSyncErrorHandler(showToast);
   render(); // показать экран загрузки сразу
   await initDb(buildInitialDb());
+
+  if (isSupabaseConfigured() && hadBootLoadFailure()) {
+    state.booting = false;
+    state.screen = 'bootError';
+    return render();
+  }
 
   if (isSupabaseConfigured()) {
     // Пробуем восстановить сессию по сохранённому id пользователя, но НЕ
