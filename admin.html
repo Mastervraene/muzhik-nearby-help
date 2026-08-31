@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Админка — Мужик</title>
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" type="image/png" href="https://мастерврайоне.рф/logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+* { box-sizing: border-box; }
+:root {
+  --gray-0: #ffffff;
+  --gray-50: #f7f7f7;
+  --gray-100: #eeeeee;
+  --gray-200: #dddddd;
+  --gray-300: #c4c4c4;
+  --gray-400: #9c9c9c;
+  --gray-500: #767676;
+  --gray-600: #545454;
+  --gray-700: #383838;
+  --gray-800: #232323;
+  --gray-900: #121212;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --green: #16a34a;
+  --red: #dc2626;
+  --radius: 20px;
+  --radius-sm: 14px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 2px 6px rgba(15, 23, 42, 0.05), 0 14px 32px rgba(15, 23, 42, 0.08);
+}
+html, body { margin: 0; padding: 0; background: var(--gray-50); color: var(--gray-800);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+h1, h2, .heading {
+  font-family: "Oswald", -apple-system, sans-serif; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--gray-900); margin: 0;
+}
+button { font-family: inherit; cursor: pointer; border: none; }
+input, select, textarea { font-family: inherit; font-size: 14px; }
+
+/* ---------- Экран входа ---------- */
+#login-screen {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.login-card {
+  width: 100%; max-width: 360px; background: var(--gray-0); border-radius: var(--radius);
+  box-shadow: var(--shadow-md); padding: 32px 26px;
+}
+.login-card h1 { font-size: 22px; margin-bottom: 4px; }
+.login-card p.sub { color: var(--gray-500); font-size: 13.5px; margin: 0 0 20px; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 12.5px; color: var(--gray-600); margin-bottom: 5px; }
+.field input {
+  width: 100%; padding: 11px 13px; border: 1px solid var(--gray-200); border-radius: 12px;
+  font-size: 15px; outline: none; background: var(--gray-0);
+}
+.field input:focus { border-color: var(--accent); }
+.btn-primary {
+  width: 100%; background: var(--accent); color: #fff; font-weight: 700; font-size: 15px;
+  padding: 13px; border-radius: 999px; margin-top: 6px;
+}
+.btn-primary:hover { background: var(--accent-strong); }
+.btn-primary:disabled { background: var(--gray-300); cursor: default; }
+.login-error {
+  background: #fef2f2; color: var(--red); font-size: 13px; padding: 10px 12px;
+  border-radius: 10px; margin-bottom: 14px; display: none;
+}
+
+/* ---------- Приложение ---------- */
+#admin-app { display: none; min-height: 100vh; }
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; background: var(--gray-0); border-bottom: 1px solid var(--gray-100);
+  position: sticky; top: 0; z-index: 20;
+}
+.topbar h1 { font-size: 17px; }
+.topbar .logout { background: none; color: var(--gray-500); font-size: 13px; text-decoration: underline; }
+.tabs { display: flex; gap: 6px; padding: 10px 18px 0; background: var(--gray-0); border-bottom: 1px solid var(--gray-100); overflow-x: auto; }
+.tab-btn {
+  background: none; padding: 10px 14px; font-size: 14px; font-weight: 600; color: var(--gray-500);
+  border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { display: none; padding: 16px; max-width: 900px; margin: 0 auto; }
+.tab-panel.active { display: block; }
+
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+.toolbar select, .toolbar input[type="text"] {
+  padding: 9px 11px; border: 1px solid var(--gray-200); border-radius: 10px; font-size: 13.5px; background: var(--gray-0);
+}
+.count-hint { color: var(--gray-500); font-size: 13px; margin-left: auto; }
+
+.card {
+  background: var(--gray-0); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm);
+  padding: 14px 16px; margin-bottom: 10px;
+}
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; cursor: pointer; }
+.card-title { font-weight: 700; font-size: 15px; color: var(--gray-900); margin: 0 0 4px; }
+.card-meta { font-size: 12.5px; color: var(--gray-500); display: flex; gap: 10px; flex-wrap: wrap; }
+.pill {
+  display: inline-block; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-strong); white-space: nowrap;
+}
+.pill.muted { background: var(--gray-100); color: var(--gray-600); }
+.pill.warn { background: #fef2f2; color: var(--red); }
+.pill.ok { background: #f0fdf4; color: var(--green); }
+.chevron { color: var(--gray-400); font-size: 13px; margin-top: 2px; }
+
+.card-body { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gray-100); }
+.card-body.open { display: block; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
+.field-sm label { display: block; font-size: 11.5px; color: var(--gray-500); margin-bottom: 4px; }
+.field-sm input, .field-sm select, .field-sm textarea {
+  width: 100%; padding: 9px 10px; border: 1px solid var(--gray-200); border-radius: 10px; font-size: 13.5px; background: var(--gray-0);
+}
+.field-sm textarea { resize: vertical; min-height: 54px; }
+.field-sm { margin-bottom: 10px; }
+.warnings-list { font-size: 12.5px; color: var(--red); margin: 4px 0 10px; }
+.timeline-list { font-size: 12px; color: var(--gray-500); margin: 4px 0 10px; }
+.timeline-list div { margin-bottom: 2px; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.btn-sm {
+  padding: 9px 16px; border-radius: 999px; font-size: 13px; font-weight: 700;
+}
+.btn-sm.primary { background: var(--accent); color: #fff; }
+.btn-sm.primary:hover { background: var(--accent-strong); }
+.btn-sm.danger { background: #fef2f2; color: var(--red); }
+.btn-sm.ghost { background: var(--gray-100); color: var(--gray-700); }
+.save-hint { font-size: 12px; color: var(--green); margin-left: 6px; display: none; }
+
+.empty-state { text-align: center; color: var(--gray-500); padding: 40px 20px; font-size: 14px; }
+
+/* ---------- Карта ---------- */
+#map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
+.map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
+.map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot.master { background: #16a34a; }
+.dot.order { background: #2563eb; }
+.map-note {
+  background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; padding: 10px 12px;
+  border-radius: 10px; margin-bottom: 12px;
+}
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-card">
+    <h1>Админка «Мужик»</h1>
+    <p class="sub">Доступ только для администратора сервиса.</p>
+    <div class="login-error" id="login-error"></div>
+    <div class="field">
+      <label>Телефон</label>
+      <input type="text" id="login-phone" placeholder="+7 900 000 00 00" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Пароль</label>
+      <input type="password" id="login-password" autocomplete="current-password" />
+    </div>
+    <button class="btn-primary" id="login-submit">Войти</button>
+  </div>
+</div>
+
+<div id="admin-app">
+  <div class="topbar">
+    <h1 class="heading">Мужик — админка</h1>
+    <button class="logout" id="logout-btn">Выйти</button>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="orders">Заказы</button>
+    <button class="tab-btn" data-tab="masters">Мастера</button>
+    <button class="tab-btn" data-tab="map">Карта</button>
+  </div>
+
+  <div class="tab-panel active" id="panel-orders">
+    <div class="toolbar">
+      <select id="orders-status-filter">
+        <option value="">Все статусы</option>
+      </select>
+      <span class="count-hint" id="orders-count"></span>
+    </div>
+    <div id="orders-list"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-masters">
+    <div class="toolbar">
+      <select id="masters-filter">
+        <option value="all">Все пользователи</option>
+        <option value="workers" selected>Только мастера</option>
+        <option value="blocked">Заблокированные</option>
+      </select>
+      <span class="count-hint" id="masters-count"></span>
+    </div>
+    <div id="masters-list"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-map">
+    <div class="map-legend">
+      <span><i class="dot master"></i> Мастера</span>
+      <span><i class="dot order"></i> Заказы</span>
+    </div>
+    <div id="map-note-slot"></div>
+    <div id="map-container"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// =======================================================================
+// НАСТРОЙКИ ДОСТУПА
+// -----------------------------------------------------------------------
+// Логин администратора — телефон + пароль. Пароль хранится тут не в
+// открытом виде, а как SHA-256-хэш (см. sha256Hex ниже), чтобы он не был
+// виден невооружённым глазом при просмотре исходного кода страницы.
+//
+// ВАЖНО, честно: это ТОЛЬКО фильтр «случайного посетителя» на уровне
+// интерфейса этой страницы. Настоящие данные (заказы, телефоны,
+// геолокация) в проекте сейчас читаются и пишутся напрямую через
+// публичный anon-ключ Supabase с ОТКРЫТЫМИ RLS-политиками (это видно в
+// index.html — там прямо написано, что это сознательный компромисс для
+// MVP). Значит, кто угодно, кто знает адрес Supabase-проекта и anon-ключ
+// (а они и так открыты в исходном коде сайта), может обратиться к базе
+// напрямую — минуя эту страницу и её пароль вообще. Логин на /admin.html
+// прячет админку от случайных людей и поисковиков, но не защищает сами
+// данные. Перед стартом стоит сузить RLS-политики в Supabase (админ-доступ
+// — через отдельный service_role/Edge Function), не полагаясь только на
+// пароль здесь.
+// =======================================================================
+const ADMIN_PHONE_DIGITS = '79165339588';
+const ADMIN_PASSWORD_SHA256 = '9cd9878f1bdfd0a6fdb93c2505a37e9299d3a4436bd0c291fbd98bb8e1dd6467';
+const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1';
+
+// Тот же проект Supabase, что и в основном приложении (см. index.html →
+// window.__ENV__). Ключ публичный (anon) — так и задумано, см. пояснение выше.
+const SUPABASE_URL = 'https://youyvbqdxuigvjciklfk.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
+
+// Ключ JS API Яндекс.Карт — ОТДЕЛЬНЫЙ от YANDEX_GEOCODER_API_KEY в
+// index.html (это разные продукты в одном кабинете разработчика Яндекса,
+// developer.tech.yandex.ru — геокодер и JavaScript API подключаются и
+// тарифицируются отдельно). Пока пусто — вкладка «Карта» покажет
+// подсказку, как его получить, вместо самой карты.
+const YANDEX_MAPS_JS_API_KEY = '';
+
+const CENTER = { lat: 55.751244, lng: 37.618423 }; // Москва — тот же дефолт, что и в основном приложении
+
+const CATEGORY_TITLES = {
+  electrics: 'Электрика',
+  plumbing: 'Сантехника',
+  assembly: 'Сборка и крепёж',
+  minor_repair: 'Мелкий ремонт',
+  household_help: 'Уборка и бытовая помощь',
+  moving_help: 'Вынос и перемещение вещей',
+};
+
+const STATUS_LABELS = {
+  draft: 'Черновик',
+  collecting_details: 'Уточняем детали',
+  estimate_ready: 'Оценка готова',
+  searching: 'Ищем мастера',
+  assigned: 'Мастер назначен',
+  en_route: 'Мастер в пути',
+  in_progress: 'В работе',
+  completed: 'Выполнено, ждём подтверждения',
+  confirmed: 'Подтверждено',
+  rated: 'Завершено и оценено',
+  cancelled: 'Отменено',
+  issue_reported: 'Есть проблема',
+};
+const STATUS_KEYS = Object.keys(STATUS_LABELS);
+
+// -----------------------------------------------------------------------
+// Утилиты
+// -----------------------------------------------------------------------
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function normalizePhoneDigits(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
+  if (digits.length === 10) digits = '7' + digits;
+  return digits;
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleString('ru-RU'); } catch { return iso; }
+}
+
+// -----------------------------------------------------------------------
+// Supabase REST (тот же PostgREST-подход, что в index.html: без SDK,
+// обычный fetch с anon-ключом в заголовках)
+// -----------------------------------------------------------------------
+function sbHeaders(extra) {
+  return Object.assign({
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+  }, extra || {});
+}
+
+async function getRows(table, query) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query || 'select=*'}`, { headers: sbHeaders() });
+  if (!res.ok) throw new Error(`GET ${table} failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function updateRow(table, id, patch) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: sbHeaders({ Prefer: 'return=representation' }),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : data;
+}
+
+// -----------------------------------------------------------------------
+// Маппинг строк БД (те же поля, что и в index.html: dbOrderToOrder/dbUserToUser)
+// -----------------------------------------------------------------------
+function dbOrderToOrder(row) {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    assignedWorkerId: row.assigned_worker_id,
+    title: row.title,
+    categoryId: row.category_id,
+    description: row.description || '',
+    exactLocation: { lat: row.exact_lat, lng: row.exact_lng },
+    district: row.district || '',
+    fullAddress: row.full_address || '',
+    desiredDate: row.desired_date || '',
+    timeWindow: row.time_window || '',
+    urgency: row.urgency || 'normal',
+    customerBudget: row.customer_budget,
+    estimate: row.estimate || { min: 0, max: 0, factors: [] },
+    status: row.status,
+    timeline: row.timeline || [],
+    warnings: row.warnings || [],
+    searchRadiusKm: Number(row.search_radius_km ?? 3),
+    createdAt: row.created_at,
+  };
+}
+
+function dbUserToUser(row) {
+  return {
+    id: row.id,
+    displayName: row.display_name || '',
+    phone: row.phone || '',
+    location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
+    district: row.district || '',
+    searchRadiusKm: Number(row.search_radius_km ?? 3),
+    availableAsWorker: Boolean(row.available_as_worker),
+    rating: Number(row.rating ?? 0),
+    ratingCount: Number(row.rating_count ?? 0),
+    blocked: Boolean(row.blocked),
+    createdAt: row.created_at,
+  };
+}
+
+// -----------------------------------------------------------------------
+// Состояние
+// -----------------------------------------------------------------------
+let allOrders = [];
+let allUsers = [];
+let ordersStatusFilter = '';
+let mastersFilter = 'workers';
+let openOrderId = null;
+let mapLoaded = false;
+
+function userName(id) {
+  const u = allUsers.find((x) => x.id === id);
+  return u ? u.displayName || u.phone || id : '—';
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Заказы»
+// -----------------------------------------------------------------------
+function renderOrdersToolbar() {
+  const sel = document.getElementById('orders-status-filter');
+  if (sel.options.length <= 1) {
+    STATUS_KEYS.forEach((key) => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = STATUS_LABELS[key];
+      sel.appendChild(opt);
+    });
+  }
+  sel.value = ordersStatusFilter;
+}
+
+function renderOrders() {
+  renderOrdersToolbar();
+  const list = ordersStatusFilter ? allOrders.filter((o) => o.status === ordersStatusFilter) : allOrders;
+  const sorted = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  document.getElementById('orders-count').textContent = `${sorted.length} заказ(ов)`;
+  const container = document.getElementById('orders-list');
+
+  if (!sorted.length) {
+    container.innerHTML = '<div class="empty-state">Заказов не найдено</div>';
+    return;
+  }
+
+  container.innerHTML = sorted.map((o) => orderCardHtml(o)).join('');
+
+  sorted.forEach((o) => {
+    document.getElementById(`order-head-${o.id}`).addEventListener('click', () => {
+      openOrderId = openOrderId === o.id ? null : o.id;
+      renderOrders();
+    });
+    if (openOrderId === o.id) {
+      wireOrderForm(o);
+    }
+  });
+}
+
+function orderCardHtml(o) {
+  const open = openOrderId === o.id;
+  const workerName = o.assignedWorkerId ? userName(o.assignedWorkerId) : 'не назначен';
+  return `
+    <div class="card">
+      <div class="card-head" id="order-head-${o.id}">
+        <div>
+          <p class="card-title">${escapeHtml(o.title || 'Без названия')}</p>
+          <div class="card-meta">
+            <span class="pill">${escapeHtml(STATUS_LABELS[o.status] || o.status)}</span>
+            <span>${escapeHtml(CATEGORY_TITLES[o.categoryId] || o.categoryId || '')}</span>
+            <span>Мастер: ${escapeHtml(workerName)}</span>
+            <span>${fmtDate(o.createdAt)}</span>
+          </div>
+        </div>
+        <span class="chevron">${open ? '▲' : '▼'}</span>
+      </div>
+      ${open ? orderFormHtml(o) : ''}
+    </div>
+  `;
+}
+
+function orderFormHtml(o) {
+  const statusOptions = STATUS_KEYS.map(
+    (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[k])}</option>`
+  ).join('');
+  const workerOptions = ['<option value="">— не назначен —</option>']
+    .concat(
+      allUsers
+        .filter((u) => u.availableAsWorker)
+        .map((u) => `<option value="${u.id}" ${u.id === o.assignedWorkerId ? 'selected' : ''}>${escapeHtml(u.displayName || u.phone)}</option>`)
+    )
+    .join('');
+
+  return `
+    <div class="card-body open" id="order-body-${o.id}">
+      ${o.warnings && o.warnings.length ? `<div class="warnings-list">${o.warnings.map((w) => `⚠ ${escapeHtml(w)}`).join('<br/>')}</div>` : ''}
+      <div class="grid-2">
+        <div class="field-sm">
+          <label>Название</label>
+          <input type="text" id="f-title-${o.id}" value="${escapeHtml(o.title || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Категория</label>
+          <select id="f-category-${o.id}">
+            ${Object.entries(CATEGORY_TITLES).map(([k, v]) => `<option value="${k}" ${k === o.categoryId ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-sm">
+          <label>Статус</label>
+          <select id="f-status-${o.id}">${statusOptions}</select>
+        </div>
+        <div class="field-sm">
+          <label>Назначенный мастер</label>
+          <select id="f-worker-${o.id}">${workerOptions}</select>
+        </div>
+        <div class="field-sm">
+          <label>Адрес</label>
+          <input type="text" id="f-address-${o.id}" value="${escapeHtml(o.fullAddress || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Район</label>
+          <input type="text" id="f-district-${o.id}" value="${escapeHtml(o.district || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Желаемая дата</label>
+          <input type="text" id="f-date-${o.id}" value="${escapeHtml(o.desiredDate || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Временное окно</label>
+          <input type="text" id="f-window-${o.id}" value="${escapeHtml(o.timeWindow || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Оценка, от (₽)</label>
+          <input type="number" id="f-est-min-${o.id}" value="${o.estimate?.min ?? 0}" />
+        </div>
+        <div class="field-sm">
+          <label>Оценка, до (₽)</label>
+          <input type="number" id="f-est-max-${o.id}" value="${o.estimate?.max ?? 0}" />
+        </div>
+        <div class="field-sm">
+          <label>Радиус поиска (км)</label>
+          <input type="number" id="f-radius-${o.id}" value="${o.searchRadiusKm ?? 3}" />
+        </div>
+      </div>
+      <div class="field-sm">
+        <label>Описание</label>
+        <textarea id="f-desc-${o.id}">${escapeHtml(o.description || '')}</textarea>
+      </div>
+      ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
+      <div class="row-actions">
+        <button class="btn-sm primary" id="save-order-${o.id}">Сохранить</button>
+        <span class="save-hint" id="save-hint-${o.id}">Сохранено ✓</span>
+      </div>
+    </div>
+  `;
+}
+
+function wireOrderForm(o) {
+  document.getElementById(`save-order-${o.id}`).addEventListener('click', async () => {
+    const newStatus = document.getElementById(`f-status-${o.id}`).value;
+    const statusChanged = newStatus !== o.status;
+    const patch = {
+      title: document.getElementById(`f-title-${o.id}`).value.trim(),
+      category_id: document.getElementById(`f-category-${o.id}`).value,
+      status: newStatus,
+      assigned_worker_id: document.getElementById(`f-worker-${o.id}`).value || null,
+      full_address: document.getElementById(`f-address-${o.id}`).value.trim() || null,
+      district: document.getElementById(`f-district-${o.id}`).value.trim(),
+      desired_date: document.getElementById(`f-date-${o.id}`).value.trim() || null,
+      time_window: document.getElementById(`f-window-${o.id}`).value.trim(),
+      description: document.getElementById(`f-desc-${o.id}`).value.trim(),
+      search_radius_km: Number(document.getElementById(`f-radius-${o.id}`).value || 3),
+      estimate: {
+        min: Number(document.getElementById(`f-est-min-${o.id}`).value || 0),
+        max: Number(document.getElementById(`f-est-max-${o.id}`).value || 0),
+        factors: o.estimate?.factors || [],
+      },
+    };
+    if (statusChanged) {
+      patch.timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
+    }
+    const btn = document.getElementById(`save-order-${o.id}`);
+    btn.disabled = true;
+    btn.textContent = 'Сохраняю…';
+    try {
+      await updateRow('orders', o.id, patch);
+      await loadData({ keepOpen: true });
+      const hint = document.getElementById(`save-hint-${o.id}`);
+      if (hint) {
+        hint.style.display = 'inline';
+        setTimeout(() => { hint.style.display = 'none'; }, 2500);
+      }
+    } catch (err) {
+      alert('Не удалось сохранить: ' + err.message);
+    } finally {
+      const freshBtn = document.getElementById(`save-order-${o.id}`);
+      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
+    }
+  });
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Мастера»
+// -----------------------------------------------------------------------
+function renderMasters() {
+  let list = allUsers;
+  if (mastersFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
+  else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
+
+  document.getElementById('masters-count').textContent = `${list.length} чел.`;
+  const container = document.getElementById('masters-list');
+  if (!list.length) {
+    container.innerHTML = '<div class="empty-state">Никого не найдено</div>';
+    return;
+  }
+  container.innerHTML = list.map((u) => `
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''}</p>
+          <div class="card-meta">
+            <span>${escapeHtml(u.phone || '—')}</span>
+            ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>` : '<span class="pill muted">клиент</span>'}
+            <span>${u.location.lat ? `${u.location.lat.toFixed(4)}, ${u.location.lng.toFixed(4)}` : 'без геоточки'}</span>
+          </div>
+        </div>
+        <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" data-toggle-block="${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
+      </div>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('[data-toggle-block]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-toggle-block');
+      const u = allUsers.find((x) => x.id === id);
+      btn.disabled = true;
+      try {
+        await updateRow('users', id, { blocked: !u.blocked });
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось сохранить: ' + err.message);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Карта» (Яндекс.Карты JS API)
+// -----------------------------------------------------------------------
+function renderMapNote() {
+  const slot = document.getElementById('map-note-slot');
+  if (!YANDEX_MAPS_JS_API_KEY) {
+    slot.innerHTML = `<div class="map-note">Карта не подключена: нет ключа YANDEX_MAPS_JS_API_KEY. Получите отдельный ключ JavaScript API в кабинете разработчика Яндекса (там же, где ключ геокодера) и впишите его в admin.html.</div>`;
+    document.getElementById('map-container').innerHTML = '';
+    return false;
+  }
+  slot.innerHTML = '';
+  return true;
+}
+
+function loadYmapsScript() {
+  return new Promise((resolve, reject) => {
+    if (window.ymaps) return resolve();
+    const script = document.createElement('script');
+    script.src = `https://api-maps.yandex.ru/2.1/?apikey=${encodeURIComponent(YANDEX_MAPS_JS_API_KEY)}&lang=ru_RU`;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Не удалось загрузить Яндекс.Карты'));
+    document.head.appendChild(script);
+  });
+}
+
+async function renderMap() {
+  if (!renderMapNote()) return;
+  if (mapLoaded) { fillMapPoints(); return; }
+  try {
+    await loadYmapsScript();
+    window.ymaps.ready(() => {
+      window.__adminMap = new window.ymaps.Map('map-container', {
+        center: [CENTER.lat, CENTER.lng],
+        zoom: 10,
+        controls: ['zoomControl', 'fullscreenControl'],
+      });
+      mapLoaded = true;
+      fillMapPoints();
+    });
+  } catch (err) {
+    document.getElementById('map-note-slot').innerHTML = `<div class="map-note">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function fillMapPoints() {
+  const map = window.__adminMap;
+  if (!map) return;
+  map.geoObjects.removeAll();
+  const bounds = [];
+
+  allUsers
+    .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
+    .forEach((u) => {
+      const coords = [u.location.lat, u.location.lng];
+      bounds.push(coords);
+      const pm = new window.ymaps.Placemark(coords, {
+        balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
+        balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км`,
+      }, { preset: 'islands#greenDotIcon' });
+      map.geoObjects.add(pm);
+    });
+
+  allOrders
+    .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
+    .forEach((o) => {
+      const coords = [o.exactLocation.lat, o.exactLocation.lng];
+      bounds.push(coords);
+      const pm = new window.ymaps.Placemark(coords, {
+        balloonContentHeader: escapeHtml(o.title || 'Заказ'),
+        balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
+      }, { preset: 'islands#blueDotIcon' });
+      map.geoObjects.add(pm);
+    });
+
+  if (bounds.length) {
+    map.setBounds(bounds, { checkZoomRange: true, zoomMargin: 40 });
+  }
+}
+
+// -----------------------------------------------------------------------
+// Загрузка данных и общий рендер
+// -----------------------------------------------------------------------
+async function loadData(opts) {
+  const [userRows, orderRows] = await Promise.all([getRows('users'), getRows('orders')]);
+  allUsers = userRows.map(dbUserToUser);
+  allOrders = orderRows.map(dbOrderToOrder);
+  renderOrders();
+  renderMasters();
+  if (!opts || !opts.keepOpen) {
+    // ничего дополнительно
+  }
+}
+
+function activateTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
+  if (tab === 'map') renderMap();
+}
+
+// -----------------------------------------------------------------------
+// Вход / выход
+// -----------------------------------------------------------------------
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('admin-app').style.display = 'block';
+  document.getElementById('orders-status-filter').addEventListener('change', (e) => {
+    ordersStatusFilter = e.target.value;
+    renderOrders();
+  });
+  document.getElementById('masters-filter').addEventListener('change', (e) => {
+    mastersFilter = e.target.value;
+    renderMasters();
+  });
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  });
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    location.reload();
+  });
+  loadData().catch((err) => {
+    document.getElementById('orders-list').innerHTML = `<div class="empty-state">Не удалось загрузить данные: ${escapeHtml(err.message)}</div>`;
+  });
+}
+
+async function handleLogin() {
+  const phone = normalizePhoneDigits(document.getElementById('login-phone').value);
+  const password = document.getElementById('login-password').value;
+  const hash = await sha256Hex(password);
+  const errBox = document.getElementById('login-error');
+  if (phone === ADMIN_PHONE_DIGITS && hash === ADMIN_PASSWORD_SHA256) {
+    sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
+    errBox.style.display = 'none';
+    showApp();
+  } else {
+    errBox.textContent = 'Неверный телефон или пароль';
+    errBox.style.display = 'block';
+  }
+}
+
+document.getElementById('login-submit').addEventListener('click', handleLogin);
+document.getElementById('login-password').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleLogin();
+});
+
+if (sessionStorage.getItem(ADMIN_SESSION_KEY) === '1') {
+  showApp();
+}
+</script>
+</body>
+</html>

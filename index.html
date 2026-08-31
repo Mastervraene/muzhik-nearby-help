@@ -2968,7 +2968,27 @@ async function publishDraft() {
   );
 
   // уведомляем подходящих мастеров рядом (событие "новый заказ")
-  const candidates = findCandidateWorkers(getUsers(), order);
+  let candidates = findCandidateWorkers(getUsers(), order);
+
+  // В обычном радиусе (по умолчанию 3 км) не нашлось ни одного мастера —
+  // не оставляем клиента без единого отклика. Расширяем радиус поиска
+  // заказа и по-доброму предупреждаем баннером (см. renderRadiusNoticeOverlay).
+  let radiusExpanded = false;
+  if (candidates.length === 0) {
+    const expandedRadiusKm = Math.min(Math.round((order.searchRadiusKm || 3) * 3), 25);
+    order = {
+      ...order,
+      searchRadiusKm: expandedRadiusKm,
+      warnings: [
+        ...order.warnings,
+        `В вашем районе пока нет свободных мастеров — радиус поиска автоматически расширен до ${expandedRadiusKm} км.`,
+      ],
+    };
+    order = await saveOrder(order);
+    candidates = findCandidateWorkers(getUsers(), order);
+    radiusExpanded = true;
+  }
+
   candidates.forEach((c) => {
     pushNotification(
       createNotification(c.user.id, 'worker', order.id, 'new_matching_order', {
@@ -2982,6 +3002,10 @@ async function publishDraft() {
   state.draft = null;
   go('orderDetail', { openOrderId: order.id });
   showToast('Заказ опубликован и виден мастерам рядом');
+  if (radiusExpanded) {
+    state.infoOverlay = 'radius';
+    render();
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -3769,31 +3793,6 @@ function renderProfile() {
       <button class="secondary-button" data-action="reset-demo">Сбросить демо-данные</button>
       `
       }
-      <button class="secondary-button" data-action="go-operator">Панель оператора (демо)</button>
-    </div>
-  `;
-}
-
-function renderOperator() {
-  const orders = getOrders();
-  const services = getServices();
-  return `
-    <div class="screen">
-      <div class="section-title">Оператор — заказы</div>
-      ${orders.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')}
-
-      <div class="section-title">Каталог услуг</div>
-      ${services
-        .map(
-          (s) => `
-        <div class="order-card">
-          <p class="order-title">${escapeHtml(s.title)} <span class="status-pill ${s.active ? '' : 'muted'}">${s.active ? 'активна' : 'выключена'}</span></p>
-          <p class="order-meta"><span>${escapeHtml(CATEGORY_TITLES[s.categoryId])}</span><span>${s.basePriceMin}–${s.basePriceMax} ₽</span>${s.origin === 'precedent' ? '<span>из прецедента</span>' : ''}</p>
-          <button class="secondary-button" data-action="toggle-service" data-value="${s.id}">${s.active ? 'Выключить' : 'Включить'}</button>
-        </div>`
-        )
-        .join('')}
-      <button class="secondary-button" data-action="go-profile">← В профиль</button>
     </div>
   `;
 }
@@ -3882,7 +3881,7 @@ function render() {
     return;
   }
 
-  const screensRequiringUser = ['orders', 'profile', 'notifications', 'operator', 'orderDetail'];
+  const screensRequiringUser = ['orders', 'profile', 'notifications', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
     app.innerHTML = `
       ${renderTopbarNoUser()}
@@ -3891,7 +3890,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -3912,14 +3911,13 @@ function render() {
   else if (state.screen === 'orderDetail') content = renderOrderDetail();
   else if (state.screen === 'notifications') content = renderNotifications();
   else if (state.screen === 'profile') content = renderProfile();
-  else if (state.screen === 'operator') content = renderOperator();
 
   app.innerHTML = `
     ${renderTopbar()}
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
   `;
 
   wireEvents();
@@ -4041,6 +4039,26 @@ function renderHelpOverlay() {
           <p>Чтобы отправить заявку и получать уведомления по заказу, понадобится номер телефона. Дополнительно можно привязать Telegram — бот пришлёт код для входа и будет присылать уведомления о статусе заказа прямо в чат.</p>
           <p><b>Хотите брать заказы как мастер?</b> В профиле включите режим специалиста и укажите свои навыки и радиус работы — рядом начнут появляться подходящие заявки, которые можно принять.</p>
           <p>Подробнее о видах работ и ценах — в <a href="/articles/" target="_blank" rel="noopener">статьях о наших услугах</a>.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Показывается сразу после публикации заказа, если рядом (в обычном
+// радиусе поиска) не нашлось ни одного мастера — чтобы клиент не решил,
+// что заказ «потерялся». Радиус поиска в этот момент уже расширен (см.
+// handleAction → 'publish-draft'), баннер просто сообщает об этом.
+function renderRadiusNoticeOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Ищем чуть дальше</h2>
+          <p>Похоже, в вашем районе сильная нехватка настоящих мужчин. Мы расширили радиус поиска и обязательно кого-нибудь найдём.</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
@@ -4328,7 +4346,6 @@ async function handleAction(action, value) {
     case 'go-orders': return go('orders');
     case 'go-notifications': return go('notifications');
     case 'go-profile': return go('profile');
-    case 'go-operator': return go('operator');
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'voice-toggle':
       return toggleVoiceRecording();
