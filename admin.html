@@ -156,8 +156,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <p class="sub">Доступ только для администратора сервиса.</p>
     <div class="login-error" id="login-error"></div>
     <div class="field">
-      <label>Телефон</label>
-      <input type="text" id="login-phone" placeholder="+7 900 000 00 00" autocomplete="username" />
+      <label>Логин</label>
+      <input type="text" id="login-phone" placeholder="79165339588" autocomplete="username" />
     </div>
     <div class="field">
       <label>Пароль</label>
@@ -234,7 +234,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 // пароль здесь.
 // =======================================================================
 const ADMIN_PHONE_DIGITS = '79165339588';
-const ADMIN_PASSWORD_SHA256 = '9cd9878f1bdfd0a6fdb93c2505a37e9299d3a4436bd0c291fbd98bb8e1dd6467';
+// Хэш пароля literal-строки ",f,jxrf123" (именно тех символов, которые
+// нужно набрать) — см. пояснение в чате про раскладку клавиатуры.
+const ADMIN_PASSWORD_SHA256 = 'e644ebb1efd0a3dbfe533f3f22b5bda1d5f25333e0b3337dc1fa87a4fce6f4b0';
 const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1';
 
 // Тот же проект Supabase, что и в основном приложении (см. index.html →
