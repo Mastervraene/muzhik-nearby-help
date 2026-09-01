@@ -3669,7 +3669,7 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото, укажите адрес и удобное время." rows="1"></textarea>
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото, укажите адрес и удобное время." rows="1">${escapeHtml(composerDescriptionValue)}</textarea>
         <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
           composerExpandedField === 'address'
@@ -3702,7 +3702,7 @@ function renderHome() {
         `
             : ''
         }
-        <div id="composer-attachments" class="attachment-preview"></div>
+        <div id="composer-attachments" class="attachment-preview">${pendingAttachments.map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}</div>
         <div class="composer-actions">
           <div class="composer-tools">
             <label class="tool-button" title="Прикрепить фото (до 5 штук)">
@@ -3849,7 +3849,7 @@ function renderCompose() {
             ? `
           <div class="field-card" style="padding:0;box-shadow:none;">
             <label>Имя</label>
-            <input type="text" id="compose-name" placeholder="ваше имя" value="${escapeHtml((currentUser() && currentUser().displayName) || '')}" />
+            <input type="text" id="compose-name" placeholder="ваше имя" value="${escapeHtml(composeNameFieldValue || (currentUser() && currentUser().displayName) || '')}" />
             <div class="order-warning" id="compose-name-error" style="display:none;"></div>
           </div>
           `
@@ -3860,7 +3860,7 @@ function renderCompose() {
             ? `
           <div class="field-card" style="padding:0;box-shadow:none;">
             <label>Телефон</label>
-            <input type="text" id="compose-phone" value="+7 " placeholder="+7 900 000 00 00" />
+            <input type="text" id="compose-phone" value="${escapeHtml(composePhoneFieldValue || '+7 ')}" placeholder="+7 900 000 00 00" />
             <div class="order-warning" id="compose-phone-error" style="display:none;"></div>
             <p class="order-meta"><span>Он привяжется к вашему аккаунту, чтобы мастер мог с вами связаться.</span></p>
           </div>
@@ -4196,7 +4196,19 @@ let pendingAttachments = [];
 // не данные заказа/пользователя.
 // ---------------------------------------------------------------------
 let composerExpandedField = null; // 'address' | 'date' | null
+// Текст заявки, набранный в composer-input. Как и composerAddressValue
+// ниже, живёт вне state и восстанавливается в шаблон при каждом render() —
+// иначе полный перерендер (клик по чипу «Адрес»/«Дата», всплывающий toast,
+// достижение лимита фото и т.п.) стирал бы уже набранный текст, потому что
+// textarea в разметке не привязана к состоянию.
+let composerDescriptionValue = '';
 let composerAddressValue = '';
+// То же самое для полей «Имя»/«Телефон» на экране подтверждения заявки
+// (renderCompose → quickReview): без этого повторный render() посреди
+// набора текста (например, из-за showToast() при попытке приложить больше
+// 5 фото на этом же экране) стирал бы то, что человек уже успел ввести.
+let composeNameFieldValue = '';
+let composePhoneFieldValue = '';
 let composerDesiredDate = ''; // yyyy-mm-dd из <input type="date">
 let composerTimeFrom = ''; // HH:MM из <input type="time">
 let composerTimeTo = ''; // HH:MM из <input type="time">
@@ -4550,7 +4562,9 @@ function wireEvents() {
   }
   if (composerInput) {
     autosizeComposerTextarea(composerInput);
+    updateHomeHeroVisibility(composerInput);
     composerInput.addEventListener('input', () => {
+      composerDescriptionValue = composerInput.value;
       updateComposerSendState();
       autosizeComposerTextarea(composerInput);
       updateHomeHeroVisibility(composerInput);
@@ -4586,6 +4600,7 @@ function wireEvents() {
 
       const atts = pendingAttachments;
       pendingAttachments = [];
+      composerDescriptionValue = '';
       // Телефон (для новых пользователей) запрашивается позже, на экране
       // подтверждения заявки — см. renderCompose()/case 'publish-draft'.
       startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo, composerExactLocation);
@@ -4618,10 +4633,19 @@ function wireEvents() {
     });
   }
 
+  const composeName = document.getElementById('compose-name');
+  if (composeName) {
+    composeName.addEventListener('input', () => {
+      composeNameFieldValue = composeName.value;
+    });
+  }
+
   const composePhone = document.getElementById('compose-phone');
   if (composePhone) {
     const composePhoneError = document.getElementById('compose-phone-error');
-    wirePhoneField(composePhone, composePhoneError, () => {});
+    wirePhoneField(composePhone, composePhoneError, () => {
+      composePhoneFieldValue = composePhone.value;
+    });
   }
 
   const reviewFile = document.getElementById('quick-review-file');
@@ -4815,6 +4839,8 @@ async function handleAction(action, value) {
         }
       }
 
+      composeNameFieldValue = '';
+      composePhoneFieldValue = '';
       return publishDraft();
     }
 
