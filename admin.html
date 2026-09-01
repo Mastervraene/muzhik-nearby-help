@@ -146,6 +146,27 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; padding: 10px 12px;
   border-radius: 10px; margin-bottom: 12px;
 }
+
+/* ---------- Статистика ---------- */
+.stats-note {
+  background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; padding: 10px 12px;
+  border-radius: 10px; margin-bottom: 14px;
+}
+.stats-table-wrap {
+  overflow-x: auto; background: var(--gray-0); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm);
+}
+.stats-table { border-collapse: collapse; font-size: 13px; white-space: nowrap; width: 100%; }
+.stats-table th, .stats-table td { padding: 9px 14px; border-bottom: 1px solid var(--gray-100); text-align: right; }
+.stats-table thead th { color: var(--gray-500); font-weight: 700; font-size: 12px; }
+.stats-table th:first-child, .stats-table td:first-child {
+  text-align: left; position: sticky; left: 0; background: var(--gray-0); font-weight: 600; color: var(--gray-700);
+  box-shadow: 1px 0 0 var(--gray-100);
+}
+.stats-table tbody tr:last-child td { border-bottom: none; }
+.stats-section-row td {
+  background: var(--gray-50); font-weight: 700; color: var(--gray-500); font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: 0.02em; padding-top: 12px; padding-bottom: 6px;
+}
 </style>
 </head>
 <body>
@@ -176,6 +197,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn active" data-tab="orders">Заказы</button>
     <button class="tab-btn" data-tab="masters">Мастера</button>
     <button class="tab-btn" data-tab="map">Карта</button>
+    <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
   <div class="tab-panel active" id="panel-orders">
@@ -207,6 +229,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
     <div id="map-note-slot"></div>
     <div id="map-container"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-stats">
+    <div class="stats-note">Собирается автоматически каждую ночь в 00:00 по Москве (фоновая функция compute-daily-stats). Данные за сегодня появятся только после ближайшего ночного расчёта.</div>
+    <div class="stats-table-wrap" id="stats-table-wrap"></div>
   </div>
 </div>
 
@@ -376,11 +403,84 @@ function dbUserToUser(row) {
   };
 }
 
+function dbDailyStatToStat(row) {
+  return {
+    statDate: row.stat_date,
+    usersRegistered: Number(row.users_registered ?? 0),
+    workersRegistered: Number(row.workers_registered ?? 0),
+    ordersCreated: Number(row.orders_created ?? 0),
+    ordersCancelled: Number(row.orders_cancelled ?? 0),
+    cancelledOrdersValue: Number(row.cancelled_orders_value ?? 0),
+    ordersCompleted: Number(row.orders_completed ?? 0),
+    completedOrdersValue: Number(row.completed_orders_value ?? 0),
+    avgWorkerRating: row.avg_worker_rating === null || row.avg_worker_rating === undefined ? null : Number(row.avg_worker_rating),
+    avgCustomerRating: row.avg_customer_rating === null || row.avg_customer_rating === undefined ? null : Number(row.avg_customer_rating),
+    issueReports: Number(row.issue_reports ?? 0),
+    avgTimeToAssignMinutes: row.avg_time_to_assign_minutes === null || row.avg_time_to_assign_minutes === undefined ? null : Number(row.avg_time_to_assign_minutes),
+    activeWorkers: Number(row.active_workers ?? 0),
+    computedAt: row.computed_at || null,
+  };
+}
+
+// Строки таблицы статистики: ключ поля из dbDailyStatToStat, подпись и
+// способ форматирования значения. group используется только для
+// визуального разделения «основных» метрик (те, что просил пользователь)
+// и рекомендованных дополнительных.
+const STATS_ROWS = [
+  { group: 'Основные метрики' },
+  { key: 'usersRegistered', label: 'Зарегистрировано пользователей' },
+  { key: 'workersRegistered', label: 'Зарегистрировано исполнителей' },
+  { key: 'ordersCreated', label: 'Создано заказов' },
+  { key: 'ordersCancelled', label: 'Заявок отклонено (отменено)' },
+  { key: 'cancelledOrdersValue', label: 'Стоимость отменённых заказов, ₽', fmt: 'money' },
+  { key: 'ordersCompleted', label: 'Заказов выполнено' },
+  { key: 'completedOrdersValue', label: 'Стоимость выполненных заказов, ₽', fmt: 'money' },
+  { key: 'avgWorkerRating', label: 'Средний рейтинг исполнителей', fmt: 'rating' },
+  { key: 'avgCustomerRating', label: 'Средний рейтинг заказчиков', fmt: 'rating' },
+  { group: 'Дополнительные метрики' },
+  { key: 'issueReports', label: 'Заявленных проблем' },
+  { key: 'avgTimeToAssignMinutes', label: 'Среднее время до назначения мастера, мин', fmt: 'rating' },
+  { key: 'activeWorkers', label: 'Активных мастеров за день' },
+];
+
+function fmtStatValue(row, col) {
+  const v = row[col.key];
+  if (v === null || v === undefined) return '—';
+  if (col.fmt === 'money') return Math.round(v).toLocaleString('ru-RU');
+  if (col.fmt === 'rating') return v.toFixed(1);
+  return String(v);
+}
+
+function fmtStatDateLabel(iso) {
+  try {
+    const d = new Date(iso + 'T00:00:00Z');
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  } catch { return iso; }
+}
+
+function renderStats() {
+  const wrap = document.getElementById('stats-table-wrap');
+  if (!allStats.length) {
+    wrap.innerHTML = '<div class="empty-state">Пока нет данных — статистика появится после первого ночного расчёта.</div>';
+    return;
+  }
+  const sorted = [...allStats].sort((a, b) => (a.statDate < b.statDate ? 1 : -1));
+  const header = `<tr><th>Метрика</th>${sorted.map((s) => `<th>${escapeHtml(fmtStatDateLabel(s.statDate))}</th>`).join('')}</tr>`;
+  const body = STATS_ROWS.map((r) => {
+    if (r.group) {
+      return `<tr class="stats-section-row"><td colspan="${sorted.length + 1}">${escapeHtml(r.group)}</td></tr>`;
+    }
+    return `<tr><td>${escapeHtml(r.label)}</td>${sorted.map((s) => `<td>${fmtStatValue(s, r)}</td>`).join('')}</tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="stats-table"><thead>${header}</thead><tbody>${body}</tbody></table>`;
+}
+
 // -----------------------------------------------------------------------
 // Состояние
 // -----------------------------------------------------------------------
 let allOrders = [];
 let allUsers = [];
+let allStats = [];
 let ordersStatusFilter = '';
 let mastersFilter = 'workers';
 let openOrderId = null;
@@ -703,11 +803,17 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows] = await Promise.all([getRows('users'), getRows('orders')]);
+  const [userRows, orderRows, statRows] = await Promise.all([
+    getRows('users'),
+    getRows('orders'),
+    getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
+  ]);
   allUsers = userRows.map(dbUserToUser);
   allOrders = orderRows.map(dbOrderToOrder);
+  allStats = statRows.map(dbDailyStatToStat);
   renderOrders();
   renderMasters();
+  renderStats();
   if (!opts || !opts.keepOpen) {
     // ничего дополнительно
   }

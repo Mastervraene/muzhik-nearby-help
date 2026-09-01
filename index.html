@@ -1810,6 +1810,11 @@ function dbOrderToOrder(row) {
     isPrecedent: Boolean(row.is_precedent),
     negotiation: row.negotiation || { customerOffer: null, workerOffer: null },
     createdAt: row.created_at,
+    // Конкретная оценка по этому заказу (не путать с кумулятивным рейтингом
+    // пользователя) — нужна для дневной статистики (см. daily_stats).
+    workerRating: row.worker_rating ?? null,
+    customerRating: row.customer_rating ?? null,
+    customerRatedAt: row.customer_rated_at || null,
   };
 }
 
@@ -1841,6 +1846,9 @@ function orderToDbOrder(order) {
     warnings: order.warnings,
     is_precedent: order.isPrecedent,
     negotiation: order.negotiation,
+    worker_rating: order.workerRating ?? null,
+    customer_rating: order.customerRating ?? null,
+    customer_rated_at: order.customerRatedAt || null,
   };
 }
 
@@ -3071,6 +3079,10 @@ function confirmCompletion(orderId) {
 function rateOrder(orderId, rating) {
   let order = getOrders().find((o) => o.id === orderId);
   order = transition(order, 'rated');
+  // Сохраняем именно оценку по этому заказу (не только кумулятивный
+  // рейтинг мастера) — нужно для дневной статистики (метрика «средний
+  // рейтинг исполнителей за день»).
+  order.workerRating = rating;
   saveOrder(order);
   if (order.assignedWorkerId) {
     const worker = getUsers().find((u) => u.id === order.assignedWorkerId);
@@ -3081,6 +3093,25 @@ function rateOrder(orderId, rating) {
     }
   }
   showToast('Спасибо за оценку!');
+  render();
+}
+
+function rateCustomer(orderId, rating) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.customerRating) return;
+  // Оценка заказчика мастером не является частью машины состояний заказа
+  // (order.status ей не затрагивается) — это отдельная, необязательная
+  // оценка, которая нужна для дневной статистики (метрика «средний
+  // рейтинг заказчиков за день»).
+  order = { ...order, customerRating: rating, customerRatedAt: new Date().toISOString() };
+  saveOrder(order);
+  const customer = getUsers().find((u) => u.id === order.customerId);
+  if (customer) {
+    const newCount = (customer.customerRatingCount || 0) + 1;
+    const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
+    saveUser({ ...customer, customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
+  }
+  showToast('Спасибо за оценку заказчика!');
   render();
 }
 
@@ -3651,6 +3682,16 @@ function renderOrderDetail() {
     if (canTransition(order.status, 'in_progress')) actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">Начал работу</button>`;
     if (canTransition(order.status, 'completed')) actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
+    // Оценка заказчика мастером доступна с момента, когда работа отмечена
+    // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
+    if (['completed', 'confirmed', 'rated'].includes(order.status) && !order.customerRating) {
+      actions += `
+        <p class="order-meta">Оцените заказчика:</p>
+        <div class="chip-row">
+          ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-customer" data-value="${order.id}:${n}">${n}★</button>`).join('')}
+        </div>
+      `;
+    }
   } else if (isCustomer) {
     if (order.status === 'completed') {
       actions = `
@@ -4439,6 +4480,10 @@ async function handleAction(action, value) {
     case 'rate-order': {
       const [orderId, n] = value.split(':');
       return rateOrder(orderId, Number(n));
+    }
+    case 'rate-customer': {
+      const [orderId, n] = value.split(':');
+      return rateCustomer(orderId, Number(n));
     }
 
     case 'use-geo-profile':
