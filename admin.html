@@ -138,6 +138,26 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .btn-sm.ghost { background: var(--gray-100); color: var(--gray-700); }
 .save-hint { font-size: 12px; color: var(--green); margin-left: 6px; display: none; }
 
+/* ---------- Плотная форма (карточка мастера — много полей, узкий экран) ---------- */
+/* Всегда 2 колонки, даже на телефоне — .grid-2 на узком экране схлопывается
+   в одну колонку и растягивает карточку; тут поля короткие, двух колонок
+   достаточно и на маленьком экране. */
+.grid-2-tight { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.field-sm.dense { margin-bottom: 6px; }
+.field-sm.dense label { font-size: 10.5px; margin-bottom: 2px; }
+.field-sm.dense input, .field-sm.dense select {
+  padding: 6px 8px; font-size: 12.5px; border-radius: 8px;
+}
+.field-sm.dense input:disabled { color: var(--gray-500); background: var(--gray-50); }
+.form-section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em;
+  color: var(--gray-400); margin: 12px 0 5px;
+}
+.form-section-label:first-child { margin-top: 0; }
+.skills-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
+.skills-list .pill { font-size: 11px; padding: 2px 8px; }
+.skills-empty { font-size: 12px; color: var(--gray-500); }
+
 .empty-state { text-align: center; color: var(--gray-500); padding: 40px 20px; font-size: 14px; }
 
 /* ---------- Карта ---------- */
@@ -397,16 +417,29 @@ function dbOrderToOrder(row) {
 function dbUserToUser(row) {
   return {
     id: row.id,
+    telegramId: row.telegram_id || '',
     displayName: row.display_name || '',
     phone: row.phone || '',
+    phoneVerified: Boolean(row.phone_verified),
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
     availableAsWorker: Boolean(row.available_as_worker),
     rating: Number(row.rating ?? 0),
     ratingCount: Number(row.rating_count ?? 0),
+    customerRating: Number(row.customer_rating ?? 0),
+    customerRatingCount: Number(row.customer_rating_count ?? 0),
     blocked: Boolean(row.blocked),
     createdAt: row.created_at,
+  };
+}
+
+function dbSkillToSkill(row) {
+  return {
+    userId: row.user_id,
+    categoryId: row.category_id,
+    note: row.note || '',
+    verification: row.verification || 'unverified',
   };
 }
 
@@ -488,6 +521,7 @@ function renderStats() {
 let allOrders = [];
 let allUsers = [];
 let allStats = [];
+let allSkills = [];
 let ordersStatusFilter = '';
 let ordersSearchQuery = '';
 let mastersFilter = 'workers';
@@ -499,6 +533,10 @@ let mapLoaded = false;
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
   return u ? u.displayName || u.phone || id : '—';
+}
+
+function skillsForUser(userId) {
+  return allSkills.filter((s) => s.userId === userId);
 }
 
 // Поиск «по любому полю» — просто склеиваем всё, что может быть интересно
@@ -771,45 +809,90 @@ function masterCardHtml(u) {
 }
 
 function masterFormHtml(u) {
+  const skills = skillsForUser(u.id);
   return `
     <div class="card-body open" id="master-body-${u.id}">
-      <div class="grid-2">
-        <div class="field-sm">
+      <p class="form-section-label">Профиль</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
           <label>Имя</label>
           <input type="text" id="mf-name-${u.id}" value="${escapeHtml(u.displayName || '')}" />
         </div>
-        <div class="field-sm">
+        <div class="field-sm dense">
           <label>Телефон</label>
           <input type="text" id="mf-phone-${u.id}" value="${escapeHtml(u.phone || '')}" />
         </div>
-        <div class="field-sm">
+        <div class="field-sm dense">
+          <label>Telegram ID</label>
+          <input type="text" id="mf-telegram-${u.id}" value="${escapeHtml(u.telegramId || '')}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Телефон подтверждён</label>
+          <select id="mf-phoneverified-${u.id}">
+            <option value="1" ${u.phoneVerified ? 'selected' : ''}>Да</option>
+            <option value="0" ${!u.phoneVerified ? 'selected' : ''}>Нет</option>
+          </select>
+        </div>
+        <div class="field-sm dense">
           <label>Район</label>
           <input type="text" id="mf-district-${u.id}" value="${escapeHtml(u.district || '')}" />
         </div>
-        <div class="field-sm">
-          <label>Радиус поиска (км)</label>
-          <input type="number" id="mf-radius-${u.id}" value="${u.searchRadiusKm ?? 3}" />
-        </div>
-        <div class="field-sm">
-          <label>Широта (lat)</label>
-          <input type="number" step="0.000001" id="mf-lat-${u.id}" value="${u.location.lat ?? ''}" />
-        </div>
-        <div class="field-sm">
-          <label>Долгота (lng)</label>
-          <input type="number" step="0.000001" id="mf-lng-${u.id}" value="${u.location.lng ?? ''}" />
-        </div>
-        <div class="field-sm">
+        <div class="field-sm dense">
           <label>Работает как мастер</label>
           <select id="mf-worker-${u.id}">
             <option value="1" ${u.availableAsWorker ? 'selected' : ''}>Да</option>
             <option value="0" ${!u.availableAsWorker ? 'selected' : ''}>Нет</option>
           </select>
         </div>
-        <div class="field-sm">
-          <label>Рейтинг / отзывов</label>
-          <input type="text" disabled value="★ ${u.rating.toFixed(1)} (${u.ratingCount})" style="opacity:.6;" />
+      </div>
+
+      <p class="form-section-label">Гео и радиус</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>Радиус поиска (км)</label>
+          <input type="number" id="mf-radius-${u.id}" value="${u.searchRadiusKm ?? 3}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Широта (lat)</label>
+          <input type="number" step="0.000001" id="mf-lat-${u.id}" value="${u.location.lat ?? ''}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Долгота (lng)</label>
+          <input type="number" step="0.000001" id="mf-lng-${u.id}" value="${u.location.lng ?? ''}" />
         </div>
       </div>
+
+      <p class="form-section-label">Рейтинги</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>Как мастер</label>
+          <input type="text" disabled value="★ ${u.rating.toFixed(1)} (${u.ratingCount})" />
+        </div>
+        <div class="field-sm dense">
+          <label>Как заказчик</label>
+          <input type="text" disabled value="★ ${(u.customerRating ?? 0).toFixed(1)} (${u.customerRatingCount ?? 0})" />
+        </div>
+      </div>
+
+      <p class="form-section-label">Служебное</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>ID пользователя</label>
+          <input type="text" disabled value="${escapeHtml(u.id)}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Дата регистрации</label>
+          <input type="text" disabled value="${escapeHtml(fmtDate(u.createdAt))}" />
+        </div>
+      </div>
+
+      <p class="form-section-label">Навыки</p>
+      <div class="skills-list">
+        ${skills.length
+          ? skills.map((s) => `<span class="pill">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}${s.verification ? ' ✓' : ''}</span>`).join('')
+          : '<span class="skills-empty">Навыки не указаны</span>'}
+      </div>
+
       <div class="row-actions">
         <button class="btn-sm primary" id="save-master-${u.id}">Сохранить</button>
         <span class="save-hint" id="save-master-hint-${u.id}">Сохранено ✓</span>
@@ -821,9 +904,12 @@ function masterFormHtml(u) {
 function wireMasterForm(u) {
   document.getElementById(`save-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
+    const telegramRaw = document.getElementById(`mf-telegram-${u.id}`).value.trim();
     const patch = {
       display_name: document.getElementById(`mf-name-${u.id}`).value.trim(),
       phone: document.getElementById(`mf-phone-${u.id}`).value.trim(),
+      telegram_id: telegramRaw || null, // пустая строка нарушает users_telegram_id_key (уникальность)
+      phone_verified: document.getElementById(`mf-phoneverified-${u.id}`).value === '1',
       district: document.getElementById(`mf-district-${u.id}`).value.trim(),
       search_radius_km: Number(document.getElementById(`mf-radius-${u.id}`).value || 3),
       lat: Number(document.getElementById(`mf-lat-${u.id}`).value || 0),
@@ -933,14 +1019,16 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows, statRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
+    getRows('skills').catch(() => []),
   ]);
   allUsers = userRows.map(dbUserToUser);
   allOrders = orderRows.map(dbOrderToOrder);
   allStats = statRows.map(dbDailyStatToStat);
+  allSkills = skillRows.map(dbSkillToSkill);
   renderOrders();
   renderMasters();
   renderStats();
