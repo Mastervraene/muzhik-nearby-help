@@ -940,6 +940,16 @@ body {
   font-weight: 700;
 }
 
+.coverage-art {
+  height: 180px;
+}
+.coverage-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 </style>
 </head>
 <body>
@@ -1430,6 +1440,9 @@ async function updateRow(table, id, patch) {
  */
 
 const SESSION_KEY = 'muzhik_session_v1';
+// Флаг «баннер зоны покрытия уже показывали в этом браузере» — см.
+// renderCoverageBannerOverlay() и boot().
+const COVERAGE_BANNER_SHOWN_KEY = 'muzhik_coverage_banner_shown_v1';
 
 /** Сохранить id вошедшего пользователя, чтобы не спрашивать телефон заново при каждом визите. */
 function saveSession(id) {
@@ -1447,7 +1460,64 @@ function loadSession() {
 function clearSession() {
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_TOKEN_KEY);
   }
+}
+
+/**
+ * Сессионный токен — отдельно от id пользователя (см. SESSION_KEY выше).
+ * Токен выдаёт Edge Function issue-session-token и хранит в таблице
+ * user_sessions (недоступной анонимному ключу — RLS без единой политики,
+ * см. README/памятку по безопасности). Заказы, которые видит мастер рядом
+ * (available-orders), и приём заказа (accept-order) требуют этот токен —
+ * иначе просто зная/подставив чужой id пользователя в localStorage,
+ * поведение мастера этого пользователя не подделать через эти два запроса.
+ * Это не полноценная защита от входа по чужому телефону (SMS-подтверждения
+ * пока нет — см. README), а защита от подмены на уровне уже открытого в
+ * браузере запроса.
+ */
+const SESSION_TOKEN_KEY = 'muzhik_session_token_v1';
+
+function saveSessionToken(token) {
+  if (typeof localStorage !== 'undefined' && token) {
+    localStorage.setItem(SESSION_TOKEN_KEY, String(token));
+  }
+}
+
+/** @returns {string|null} */
+function loadSessionToken() {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(SESSION_TOKEN_KEY);
+}
+
+/**
+ * Запрашивает новый сессионный токен для уже определённого id пользователя
+ * (после ensureUserByPhone или при восстановлении сессии без токена —
+ * см. bootstrap). Сам вызов ничего не проверяет о владении телефоном
+ * (тем же ограничением обладает и ensureUserByPhone), но без результата
+ * этого вызова available-orders/accept-order не отдадут данные и не примут
+ * заказ от имени этого пользователя.
+ * @param {string} userId
+ */
+async function issueSessionToken(userId) {
+  if (!isSupabaseConfigured() || !userId) return null;
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/issue-session-token`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ userId }),
+    });
+    if (!res.ok) throw new Error(`issue-session-token failed: ${res.status}`);
+    const data = await res.json();
+    if (data && data.token) {
+      saveSessionToken(data.token);
+      return data.token;
+    }
+  } catch (err) {
+    console.error('[session-token] не удалось получить токен', err);
+  }
+  return null;
 }
 
 
@@ -1692,6 +1762,13 @@ const cache = {
   orders: [],
   services: [],
   notifications: [],
+  // Список заказов, подходящих текущему мастеру рядом — в отличие от
+  // остальных полей кэша, наполняется НЕ из initDb(), а отдельными
+  // запросами к Edge Function available-orders (см. refreshAvailableOrders):
+  // тут не общий слепок таблицы orders, а уже отфильтрованный сервером
+  // список без точных координат чужих заказов. См. ADR про available-orders
+  // и accept-order рядом с acceptOrder().
+  availableOrders: [],
 };
 
 let onSyncError = () => {};
@@ -2473,6 +2550,11 @@ function go(screen, extra = {}) {
   state.screen = screen;
   Object.assign(state, extra);
   render();
+  if (screen === 'orders') {
+    // Не блокируем сам переход на экран — список кандидатов дорисуется
+    // повторным render() внутри refreshAvailableOrders(), когда придёт ответ.
+    refreshAvailableOrders();
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -2806,6 +2888,7 @@ async function submitTelegramLinkCode(rawCode) {
     if (!wasLoggedIn) {
       state.currentUserId = user.id;
       saveSession(user.id);
+      await issueSessionToken(user.id);
     }
     showToast('Telegram подключён — будем присылать уведомления');
     render();
@@ -3020,24 +3103,140 @@ async function publishDraft() {
 // Действия по заказу
 // ---------------------------------------------------------------------
 
-function acceptOrder(orderId) {
-  let order = getOrders().find((o) => o.id === orderId);
-  order = { ...order, assignedWorkerId: state.currentUserId };
-  order = transition(order, 'assigned');
-  saveOrder(order);
+/**
+ * В режиме Supabase приём заказа идёт ЧЕРЕЗ Edge Function accept-order
+ * (сервисный ключ, атомарное условное обновление status='searching' →
+ * 'assigned') — а не прямым PATCH из браузера, как раньше. Так исключается
+ * гонка (двое мастеров жмут «Принять» одновременно — выигрывает только
+ * первый, кто реально попал в условие в базе) и подделка «я мастер X»
+ * без токена сессии этого X (см. issueSessionToken). В демо-режиме без
+ * Supabase поведение прежнее — прямая работа с локальным кэшем.
+ */
+async function acceptOrder(orderId) {
+  const order = getOrders().find((o) => o.id === orderId);
+  if (!order) return;
+
+  if (!isSupabaseConfigured()) {
+    let localOrder = { ...order, assignedWorkerId: state.currentUserId };
+    localOrder = transition(localOrder, 'assigned');
+    saveOrder(localOrder);
+    pushNotification(
+      createNotification(localOrder.customerId, 'customer', localOrder.id, 'worker_found', {
+        workerName: currentUser()?.displayName || 'Мастер',
+        timeWindow: localOrder.timeWindow,
+      })
+    );
+    pushNotification(
+      createNotification(state.currentUserId, 'worker', localOrder.id, 'order_assigned_to_you', {
+        orderTitle: localOrder.title,
+      })
+    );
+    showToast('Заказ принят, вы назначены исполнителем');
+    return render();
+  }
+
+  const token = loadSessionToken();
+  if (!token) {
+    showToast('Не получилось подтвердить вход — зайдите заново по номеру телефона');
+    return;
+  }
+
+  let data;
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/accept-order`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ orderId, workerId: state.currentUserId, sessionToken: token }),
+    });
+    data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok) {
+      const messages = {
+        already_taken: 'Заказ уже взял другой мастер',
+        too_far: 'Этот заказ уже вне вашего радиуса',
+        not_eligible: 'Этот заказ вам больше не подходит',
+        unauthorized: 'Сессия истекла — зайдите заново',
+      };
+      showToast(messages[data && data.error] || 'Не получилось принять заказ — попробуйте ещё раз');
+      cache.availableOrders = cache.availableOrders.filter((o) => o.id !== orderId);
+      refreshAvailableOrders();
+      return render();
+    }
+  } catch (err) {
+    reportError('приём заказа', err);
+    return;
+  }
+
+  const updated = dbOrderToOrder(data.order);
+  const idx = cache.orders.findIndex((o) => o.id === updated.id);
+  if (idx >= 0) cache.orders[idx] = updated;
+  else cache.orders.push(updated);
+  cache.availableOrders = cache.availableOrders.filter((o) => o.id !== updated.id);
+
   pushNotification(
-    createNotification(order.customerId, 'customer', order.id, 'worker_found', {
+    createNotification(updated.customerId, 'customer', updated.id, 'worker_found', {
       workerName: currentUser()?.displayName || 'Мастер',
-      timeWindow: order.timeWindow,
+      timeWindow: updated.timeWindow,
     })
   );
   pushNotification(
-    createNotification(state.currentUserId, 'worker', order.id, 'order_assigned_to_you', {
-      orderTitle: order.title,
+    createNotification(state.currentUserId, 'worker', updated.id, 'order_assigned_to_you', {
+      orderTitle: updated.title,
     })
   );
   showToast('Заказ принят, вы назначены исполнителем');
   render();
+}
+
+/**
+ * Обновляет cache.availableOrders через Edge Function available-orders —
+ * список заказов, подходящих текущему мастеру рядом, теперь считает и
+ * фильтрует сервер (сервисным ключом), а не браузер по уже скачанному
+ * cache.orders. Вызывается при входе на экран «Заказы» и после
+ * приёма/публикации заказа. Тихо ничего не делает вне режима Supabase,
+ * без токена сессии или если пользователь ещё не мастер.
+ */
+async function refreshAvailableOrders() {
+  const user = currentUser();
+  const token = loadSessionToken();
+  if (!isSupabaseConfigured() || !user || !user.availableAsWorker || !user.skills.length || !token) {
+    cache.availableOrders = [];
+    return;
+  }
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/available-orders`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ workerId: user.id, sessionToken: token }),
+    });
+    if (!res.ok) throw new Error(`available-orders failed: ${res.status}`);
+    const data = await res.json();
+    cache.availableOrders = (data.orders || []).map((o) => ({
+      id: o.id,
+      title: o.title,
+      categoryId: o.categoryId,
+      description: o.description || '',
+      desiredOutcome: o.desiredOutcome || '',
+      scope: o.scope || {},
+      hasVoiceTranscript: Boolean(o.hasVoiceTranscript),
+      exactLocation: null,
+      district: o.district || '',
+      houseNumberPublic: o.houseNumberPublic || '',
+      desiredDate: o.desiredDate || '',
+      timeWindow: o.timeWindow || '',
+      urgency: o.urgency || 'normal',
+      estimate: o.estimate || { min: 0, max: 0, factors: [] },
+      status: o.status,
+      warnings: o.warnings || [],
+      isPrecedent: Boolean(o.isPrecedent),
+      createdAt: o.createdAt,
+      distanceKm: o.distanceKm,
+    }));
+  } catch (err) {
+    console.error('[available-orders] не удалось обновить список', err);
+  }
+  if (state.screen === 'orders') render();
 }
 
 function advanceWorkerStatus(orderId, nextStatus) {
@@ -3506,9 +3705,9 @@ function renderHome() {
         <div id="composer-attachments" class="attachment-preview"></div>
         <div class="composer-actions">
           <div class="composer-tools">
-            <label class="tool-button" title="Прикрепить фото или видео">
+            <label class="tool-button" title="Прикрепить фото (до 5 штук)">
               ${ICON_PLUS}
-              <input id="composer-file" type="file" accept="image/*,video/*" multiple style="display:none" />
+              <input id="composer-file" type="file" accept="image/*" multiple style="display:none" />
             </label>
           </div>
           <div class="composer-chip-row">
@@ -3536,8 +3735,14 @@ function renderMyOrdersMini() {
 
 function orderCardHtml(order, { viewer }) {
   const catTitle = CATEGORY_TITLES[order.categoryId] || order.categoryId;
+  // Для карточек-кандидатов из available-orders точных координат заказа нет
+  // (сервер их намеренно не отдаёт, пока заказ не принят, — см. Edge
+  // Function available-orders) — расстояние уже посчитано там же и приходит
+  // готовым в order.distanceKm.
   const dist =
-    order.exactLocation && currentUser()
+    typeof order.distanceKm === 'number'
+      ? order.distanceKm.toFixed(1)
+      : order.exactLocation && currentUser()
       ? distanceKm(currentUser().location, order.exactLocation).toFixed(1)
       : null;
   return `
@@ -3567,15 +3772,21 @@ function renderOrders() {
   const user = currentUser();
   const myOrders = getOrders().filter((o) => o.customerId === state.currentUserId);
   const hasSkills = user.skills.length > 0;
-  const candidateOrders = hasSkills
-    ? getOrders().filter(
+  // В режиме Supabase список кандидатов считает и фильтрует сервер (Edge
+  // Function available-orders, см. refreshAvailableOrders) — здесь просто
+  // читаем уже готовый результат из кэша. В демо-режиме без Supabase
+  // Edge Function недоступна — считаем как раньше, прямо по cache.orders.
+  const candidateOrders = !hasSkills
+    ? []
+    : isSupabaseConfigured()
+    ? cache.availableOrders
+    : getOrders().filter(
         (o) =>
           o.status === 'searching' &&
           o.customerId !== state.currentUserId &&
           user.skills.some((s) => s.categoryId === o.categoryId) &&
           distanceKm(user.location, o.exactLocation) <= (o.searchRadiusKm || user.searchRadiusKm || 3)
-      )
-    : [];
+      );
   const assignedToMe = getOrders().filter(
     (o) => o.assignedWorkerId === state.currentUserId && !['rated', 'cancelled'].includes(o.status)
   );
@@ -3620,16 +3831,27 @@ function renderCompose() {
         }
         ${d.riskWarning ? `<div class="order-warning">${escapeHtml(d.riskWarning)}</div>` : ''}
         <div id="quick-review-attachments" class="attachment-preview">
-          ${(d.attachments || []).map((a) => `<span class="attachment-chip">${a.type === 'video' ? '🎬' : '📷'} ${escapeHtml(a.name || a.url)}</span>`).join('')}
+          ${(d.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
         </div>
         ${
           !hasPhoto
             ? `
           <div class="order-warning">Фото пока нет — с фото мастера откликаются охотнее. Можно прикрепить или пропустить.</div>
           <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;">
-            📎 Прикрепить фото
-            <input id="quick-review-file" type="file" accept="image/*,video/*" multiple style="display:none" />
+            📎 Прикрепить фото (до 5 штук)
+            <input id="quick-review-file" type="file" accept="image/*" multiple style="display:none" />
           </label>
+          `
+            : ''
+        }
+        ${
+          !currentUser() || !currentUser().displayName
+            ? `
+          <div class="field-card" style="padding:0;box-shadow:none;">
+            <label>Имя</label>
+            <input type="text" id="compose-name" placeholder="ваше имя" value="${escapeHtml((currentUser() && currentUser().displayName) || '')}" />
+            <div class="order-warning" id="compose-name-error" style="display:none;"></div>
+          </div>
           `
             : ''
         }
@@ -3931,7 +4153,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+      ${state.infoOverlay === 'coverage' ? renderCoverageBannerOverlay() : state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -3958,7 +4180,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+    ${state.infoOverlay === 'coverage' ? renderCoverageBannerOverlay() : state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
   `;
 
   wireEvents();
@@ -4107,6 +4329,30 @@ function renderRadiusNoticeOverlay() {
   `;
 }
 
+// Баннер-приветствие с картой зоны покрытия — показывается один раз при
+// первой загрузке сайта в этом браузере (см. COVERAGE_BANNER_SHOWN_KEY в
+// boot()), поверх обычного онбординга. Закрывается так же, как остальные
+// overlay-карточки (dismiss-onboarding), но отдельно помечает, что своё
+// дело баннер уже сделал и второй раз не появится.
+function renderCoverageBannerOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-art coverage-art">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
+          <img src="coverage-map.jpg" alt="Карта зоны покрытия мастеров «Мужик»" />
+        </div>
+        <div class="onboarding-body">
+          <h2>Мастера уже рядом с вами</h2>
+          <p>Мы находим специалиста в вашем районе — не нужно ждать мастера через полгорода. Опишите задачу, и заявку увидят те, кто работает поблизости.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 /**
  * Загружает файл в Supabase Storage (бакет order-attachments, публичный
  * на чтение) и возвращает его публичную ссылку. Без Supabase (локальная
@@ -4133,21 +4379,89 @@ async function uploadAttachment(file) {
   return { url: `${url}/storage/v1/object/public/order-attachments/${path}`, path };
 }
 
+// Видео к заказу больше не прикладываем — только фото (проще для мастера
+// посмотреть, дешевле для нас хранить), и не больше этого числа за раз.
+const MAX_ORDER_PHOTOS = 5;
+
+/**
+ * Сжимает фото на клиенте (canvas — встроенная возможность браузера, без
+ * серверной обработки и без плагинов) до примерно maxBytes в JPEG, чтобы
+ * (а) не забить хранилище — с телефона фото часто весит 5–15 МБ, и
+ * (б) фото открывалось быстро на любом устройстве и медленном интернете.
+ * Уменьшает сначала качество, а если этого мало — ещё и размер картинки.
+ * Если файл не картинка или не получилось декодировать — возвращает файл
+ * как есть, не блокируя отправку заявки из-за одного проблемного файла.
+ * @param {File} file
+ * @param {{maxBytes?: number, maxDim?: number}} [opts]
+ * @returns {Promise<File>}
+ */
+async function compressImageFile(file, opts = {}) {
+  const maxBytes = opts.maxBytes ?? 1_000_000;
+  let maxDim = opts.maxDim ?? 1920;
+  if (!file.type || !file.type.startsWith('image/') || file.type === 'image/gif' || file.type === 'image/svg+xml') {
+    return file;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (err) {
+    console.warn('[compress] не удалось декодировать изображение — отправляем как есть', err);
+    return file;
+  }
+
+  let blob = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    const quality = attempt < 3 ? 0.85 - attempt * 0.2 : 0.45;
+    blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (!blob || blob.size <= maxBytes || maxDim <= 480) break;
+    maxDim = Math.round(maxDim * 0.75);
+  }
+  if (bitmap.close) bitmap.close();
+  if (!blob) return file;
+
+  const newName = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+  return new File([blob], newName, { type: 'image/jpeg' });
+}
+
 /** Загружает выбранные файлы, кладёт результат в targetArray (по ссылке) и обновляет chips в containerEl. */
 async function handleFileSelection(files, targetArrayHolder, containerEl, onDone) {
-  containerEl.innerHTML = files
-    .map((f) => `<span class="attachment-chip">⏳ ${escapeHtml(f.name)}</span>`)
+  let incoming = Array.from(files).filter((f) => f.type && f.type.startsWith('image/'));
+  if (incoming.length < files.length) {
+    showToast('Принимаются только фото');
+  }
+  const room = Math.max(0, MAX_ORDER_PHOTOS - targetArrayHolder.value.length);
+  if (incoming.length > room) {
+    showToast(`Можно приложить не больше ${MAX_ORDER_PHOTOS} фото`);
+    incoming = incoming.slice(0, room);
+  }
+  if (!incoming.length) {
+    if (onDone) onDone();
+    return;
+  }
+
+  containerEl.innerHTML = targetArrayHolder.value
+    .map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`)
+    .concat(incoming.map((f) => `<span class="attachment-chip">⏳ ${escapeHtml(f.name)}</span>`))
     .join('');
+
   const uploaded = [];
-  for (const f of files) {
+  for (const f of incoming) {
     try {
-      const { url } = await uploadAttachment(f);
+      const compact = await compressImageFile(f);
+      const { url } = await uploadAttachment(compact);
       uploaded.push({
         id: `att-${Date.now()}-${uploaded.length}`,
-        type: f.type.startsWith('video') ? 'video' : 'photo',
+        type: 'photo',
         url,
-        name: f.name,
-        sizeBytes: f.size,
+        name: compact.name,
+        sizeBytes: compact.size,
       });
     } catch (err) {
       console.error('[attachments] upload failed', err);
@@ -4156,7 +4470,7 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
   }
   targetArrayHolder.value = targetArrayHolder.value.concat(uploaded);
   containerEl.innerHTML = targetArrayHolder.value
-    .map((a) => `<span class="attachment-chip">${a.type === 'video' ? '🎬' : '📷'} ${escapeHtml(a.name || a.url)}</span>`)
+    .map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`)
     .join('');
   if (onDone) onDone();
 }
@@ -4294,6 +4608,7 @@ function wireEvents() {
         const user = await ensureUserByPhone(gatePhone.value, {});
         state.currentUserId = user.id;
         saveSession(user.id);
+        await issueSessionToken(user.id);
         render();
       } catch (err) {
         console.error('[phone-gate] failed', err);
@@ -4425,15 +4740,42 @@ async function handleAction(action, value) {
     case 'collapse-composer-field':
       composerExpandedField = null;
       return render();
-    case 'dismiss-onboarding':
+    case 'dismiss-onboarding': {
+      const wasCoverageBanner = state.infoOverlay === 'coverage';
       state.infoOverlay = null;
+      if (wasCoverageBanner) {
+        try { localStorage.setItem(COVERAGE_BANNER_SHOWN_KEY, '1'); } catch {}
+        // После первого баннера-приветствия — обычная логика онбординга
+        // (короткая карточка для неавторизованных, как и при обычной
+        // загрузке без баннера).
+        state.infoOverlay = currentUser() ? null : 'short';
+      }
       return render();
+    }
     case 'show-help':
       state.infoOverlay = 'long';
       return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
       if (fullAddressField) state.draft.fullAddress = fullAddressField.value.trim();
+
+      // Имя запрашивается тут же, на экране подтверждения заявки — раньше
+      // при входе только по телефону оно никак не собиралось. Спрашиваем,
+      // только пока у пользователя ещё нет сохранённого имени.
+      const needsName = !currentUser() || !currentUser().displayName;
+      let composeNameValue = '';
+      if (needsName) {
+        const nameField = document.getElementById('compose-name');
+        composeNameValue = nameField ? nameField.value.trim() : '';
+        if (!composeNameValue) {
+          const nameErr = document.getElementById('compose-name-error');
+          if (nameErr) {
+            nameErr.textContent = 'Укажите ваше имя, чтобы отправить заявку';
+            nameErr.style.display = 'block';
+          }
+          return;
+        }
+      }
 
       // Телефон запрашивается тут, на экране подтверждения заявки, а не в
       // composer'е — учётка (для новых пользователей) создаётся прямо перед
@@ -4457,6 +4799,7 @@ async function handleAction(action, value) {
           });
           state.currentUserId = user.id;
           saveSession(user.id);
+          await issueSessionToken(user.id);
         } catch (err) {
           console.error('[compose] phone step failed', err);
           showToast('Не получилось продолжить — попробуйте ещё раз');
@@ -4464,6 +4807,14 @@ async function handleAction(action, value) {
           return;
         }
       }
+
+      if (needsName && composeNameValue) {
+        const nameUser = currentUser();
+        if (nameUser && nameUser.displayName !== composeNameValue) {
+          saveUser({ ...nameUser, displayName: composeNameValue });
+        }
+      }
+
       return publishDraft();
     }
 
@@ -4546,6 +4897,12 @@ async function boot() {
     }
     if (user) {
       state.currentUserId = user.id;
+      // У сессий, сохранённых до появления сессионного токена (см.
+      // issueSessionToken), токена ещё нет — подгружаем его один раз в
+      // фоне, не блокируя первый рендер главной страницы.
+      if (!loadSessionToken()) {
+        issueSessionToken(user.id);
+      }
     } else if (saved) {
       clearSession();
     }
@@ -4559,6 +4916,14 @@ async function boot() {
   // авторизован (телефон/Telegram не привязаны). Подробное объяснение
   // работы сайта в любой момент открывается кнопкой «?» в шапке.
   state.infoOverlay = currentUser() ? null : 'short';
+
+  // Баннер зоны покрытия — поверх обычного онбординга, но только один раз
+  // за всё время в этом браузере (см. COVERAGE_BANNER_SHOWN_KEY).
+  let coverageBannerShown = true;
+  try { coverageBannerShown = localStorage.getItem(COVERAGE_BANNER_SHOWN_KEY) === '1'; } catch {}
+  if (!coverageBannerShown) {
+    state.infoOverlay = 'coverage';
+  }
 
   state.booting = false;
   console.info(assistantDemoNotice());

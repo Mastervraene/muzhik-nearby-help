@@ -99,6 +99,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   padding: 14px 16px; margin-bottom: 10px;
 }
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; cursor: pointer; }
+.card-head-main { min-width: 0; flex: 1; }
 .card-title { font-weight: 700; font-size: 15px; color: var(--gray-900); margin: 0 0 4px; }
 .card-meta { font-size: 12.5px; color: var(--gray-500); display: flex; gap: 10px; flex-wrap: wrap; }
 .pill {
@@ -110,6 +111,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .pill.ok { background: #f0fdf4; color: var(--green); }
 .chevron { color: var(--gray-400); font-size: 13px; margin-top: 2px; }
 
+.card-line-desc {
+  font-size: 13px; color: var(--gray-600); margin: 3px 0 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .card-body { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gray-100); }
 .card-body.open { display: block; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -178,11 +183,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <div class="login-error" id="login-error"></div>
     <div class="field">
       <label>Логин</label>
-      <input type="text" id="login-phone" placeholder="79165339588" autocomplete="username" />
+      <input type="text" id="login-phone" placeholder="иди отсюдова" autocomplete="username" />
     </div>
     <div class="field">
       <label>Пароль</label>
-      <input type="password" id="login-password" autocomplete="current-password" />
+      <input type="password" id="login-password" placeholder="даженепытайся567" autocomplete="current-password" />
     </div>
     <button class="btn-primary" id="login-submit">Войти</button>
   </div>
@@ -205,6 +210,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <select id="orders-status-filter">
         <option value="">Все статусы</option>
       </select>
+      <input type="text" id="orders-search" placeholder="Поиск по любому полю…" />
       <span class="count-hint" id="orders-count"></span>
     </div>
     <div id="orders-list"></div>
@@ -217,6 +223,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="workers" selected>Только мастера</option>
         <option value="blocked">Заблокированные</option>
       </select>
+      <input type="text" id="masters-search" placeholder="Поиск по любому полю…" />
       <span class="count-hint" id="masters-count"></span>
     </div>
     <div id="masters-list"></div>
@@ -482,13 +489,35 @@ let allOrders = [];
 let allUsers = [];
 let allStats = [];
 let ordersStatusFilter = '';
+let ordersSearchQuery = '';
 let mastersFilter = 'workers';
+let mastersSearchQuery = '';
 let openOrderId = null;
+let openMasterId = null;
 let mapLoaded = false;
 
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
   return u ? u.displayName || u.phone || id : '—';
+}
+
+// Поиск «по любому полю» — просто склеиваем всё, что может быть интересно
+// найти, в одну строку в нижнем регистре и проверяем вхождение подстроки.
+function orderSearchHaystack(o) {
+  return [
+    o.title, o.description, o.district, o.fullAddress, o.desiredDate, o.timeWindow,
+    STATUS_LABELS[o.status] || o.status, CATEGORY_TITLES[o.categoryId] || o.categoryId,
+    userName(o.customerId), o.assignedWorkerId ? userName(o.assignedWorkerId) : '',
+    fmtDate(o.createdAt), o.id,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function userSearchHaystack(u) {
+  return [
+    u.displayName, u.phone, u.district, u.id,
+    u.availableAsWorker ? 'мастер исполнитель' : 'клиент',
+    u.blocked ? 'заблокирован' : '',
+  ].filter(Boolean).join(' ').toLowerCase();
 }
 
 // -----------------------------------------------------------------------
@@ -509,7 +538,9 @@ function renderOrdersToolbar() {
 
 function renderOrders() {
   renderOrdersToolbar();
-  const list = ordersStatusFilter ? allOrders.filter((o) => o.status === ordersStatusFilter) : allOrders;
+  let list = ordersStatusFilter ? allOrders.filter((o) => o.status === ordersStatusFilter) : allOrders;
+  const q = ordersSearchQuery.trim().toLowerCase();
+  if (q) list = list.filter((o) => orderSearchHaystack(o).includes(q));
   const sorted = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   document.getElementById('orders-count').textContent = `${sorted.length} заказ(ов)`;
   const container = document.getElementById('orders-list');
@@ -534,16 +565,16 @@ function renderOrders() {
 
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
-  const workerName = o.assignedWorkerId ? userName(o.assignedWorkerId) : 'не назначен';
+  const customerName = userName(o.customerId);
+  const nameDistrict = o.district ? `${customerName} · ${o.district}` : customerName;
   return `
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
-        <div>
-          <p class="card-title">${escapeHtml(o.title || 'Без названия')}</p>
+        <div class="card-head-main">
+          <p class="card-title">${escapeHtml(nameDistrict)}</p>
+          <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           <div class="card-meta">
             <span class="pill">${escapeHtml(STATUS_LABELS[o.status] || o.status)}</span>
-            <span>${escapeHtml(CATEGORY_TITLES[o.categoryId] || o.categoryId || '')}</span>
-            <span>Мастер: ${escapeHtml(workerName)}</span>
             <span>${fmtDate(o.createdAt)}</span>
           </div>
         </div>
@@ -681,6 +712,8 @@ function renderMasters() {
   let list = allUsers;
   if (mastersFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
   else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
+  const q = mastersSearchQuery.trim().toLowerCase();
+  if (q) list = list.filter((u) => userSearchHaystack(u).includes(q));
 
   document.getElementById('masters-count').textContent = `${list.length} чел.`;
   const container = document.getElementById('masters-list');
@@ -688,10 +721,40 @@ function renderMasters() {
     container.innerHTML = '<div class="empty-state">Никого не найдено</div>';
     return;
   }
-  container.innerHTML = list.map((u) => `
+  container.innerHTML = list.map((u) => masterCardHtml(u)).join('');
+
+  list.forEach((u) => {
+    document.getElementById(`master-head-${u.id}`).addEventListener('click', (e) => {
+      if (e.target.closest('[data-toggle-block]')) return;
+      openMasterId = openMasterId === u.id ? null : u.id;
+      renderMasters();
+    });
+    const blockBtn = container.querySelector(`[data-toggle-block="${u.id}"]`);
+    if (blockBtn) {
+      blockBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        blockBtn.disabled = true;
+        try {
+          await updateRow('users', u.id, { blocked: !u.blocked });
+          await loadData({ keepOpen: true });
+        } catch (err) {
+          alert('Не удалось сохранить: ' + err.message);
+          blockBtn.disabled = false;
+        }
+      });
+    }
+    if (openMasterId === u.id) {
+      wireMasterForm(u);
+    }
+  });
+}
+
+function masterCardHtml(u) {
+  const open = openMasterId === u.id;
+  return `
     <div class="card">
-      <div class="card-head">
-        <div>
+      <div class="card-head" id="master-head-${u.id}">
+        <div class="card-head-main">
           <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
@@ -700,23 +763,90 @@ function renderMasters() {
           </div>
         </div>
         <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" data-toggle-block="${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
+        <span class="chevron">${open ? '▲' : '▼'}</span>
+      </div>
+      ${open ? masterFormHtml(u) : ''}
+    </div>
+  `;
+}
+
+function masterFormHtml(u) {
+  return `
+    <div class="card-body open" id="master-body-${u.id}">
+      <div class="grid-2">
+        <div class="field-sm">
+          <label>Имя</label>
+          <input type="text" id="mf-name-${u.id}" value="${escapeHtml(u.displayName || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Телефон</label>
+          <input type="text" id="mf-phone-${u.id}" value="${escapeHtml(u.phone || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Район</label>
+          <input type="text" id="mf-district-${u.id}" value="${escapeHtml(u.district || '')}" />
+        </div>
+        <div class="field-sm">
+          <label>Радиус поиска (км)</label>
+          <input type="number" id="mf-radius-${u.id}" value="${u.searchRadiusKm ?? 3}" />
+        </div>
+        <div class="field-sm">
+          <label>Широта (lat)</label>
+          <input type="number" step="0.000001" id="mf-lat-${u.id}" value="${u.location.lat ?? ''}" />
+        </div>
+        <div class="field-sm">
+          <label>Долгота (lng)</label>
+          <input type="number" step="0.000001" id="mf-lng-${u.id}" value="${u.location.lng ?? ''}" />
+        </div>
+        <div class="field-sm">
+          <label>Работает как мастер</label>
+          <select id="mf-worker-${u.id}">
+            <option value="1" ${u.availableAsWorker ? 'selected' : ''}>Да</option>
+            <option value="0" ${!u.availableAsWorker ? 'selected' : ''}>Нет</option>
+          </select>
+        </div>
+        <div class="field-sm">
+          <label>Рейтинг / отзывов</label>
+          <input type="text" disabled value="★ ${u.rating.toFixed(1)} (${u.ratingCount})" style="opacity:.6;" />
+        </div>
+      </div>
+      <div class="row-actions">
+        <button class="btn-sm primary" id="save-master-${u.id}">Сохранить</button>
+        <span class="save-hint" id="save-master-hint-${u.id}">Сохранено ✓</span>
       </div>
     </div>
-  `).join('');
+  `;
+}
 
-  container.querySelectorAll('[data-toggle-block]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = btn.getAttribute('data-toggle-block');
-      const u = allUsers.find((x) => x.id === id);
-      btn.disabled = true;
-      try {
-        await updateRow('users', id, { blocked: !u.blocked });
-        await loadData({ keepOpen: true });
-      } catch (err) {
-        alert('Не удалось сохранить: ' + err.message);
-        btn.disabled = false;
+function wireMasterForm(u) {
+  document.getElementById(`save-master-${u.id}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const patch = {
+      display_name: document.getElementById(`mf-name-${u.id}`).value.trim(),
+      phone: document.getElementById(`mf-phone-${u.id}`).value.trim(),
+      district: document.getElementById(`mf-district-${u.id}`).value.trim(),
+      search_radius_km: Number(document.getElementById(`mf-radius-${u.id}`).value || 3),
+      lat: Number(document.getElementById(`mf-lat-${u.id}`).value || 0),
+      lng: Number(document.getElementById(`mf-lng-${u.id}`).value || 0),
+      available_as_worker: document.getElementById(`mf-worker-${u.id}`).value === '1',
+    };
+    const btn = document.getElementById(`save-master-${u.id}`);
+    btn.disabled = true;
+    btn.textContent = 'Сохраняю…';
+    try {
+      await updateRow('users', u.id, patch);
+      await loadData({ keepOpen: true });
+      const hint = document.getElementById(`save-master-hint-${u.id}`);
+      if (hint) {
+        hint.style.display = 'inline';
+        setTimeout(() => { hint.style.display = 'none'; }, 2500);
       }
-    });
+    } catch (err) {
+      alert('Не удалось сохранить: ' + err.message);
+    } finally {
+      const freshBtn = document.getElementById(`save-master-${u.id}`);
+      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
+    }
   });
 }
 
@@ -835,8 +965,16 @@ function showApp() {
     ordersStatusFilter = e.target.value;
     renderOrders();
   });
+  document.getElementById('orders-search').addEventListener('input', (e) => {
+    ordersSearchQuery = e.target.value;
+    renderOrders();
+  });
   document.getElementById('masters-filter').addEventListener('change', (e) => {
     mastersFilter = e.target.value;
+    renderMasters();
+  });
+  document.getElementById('masters-search').addEventListener('input', (e) => {
+    mastersSearchQuery = e.target.value;
     renderMasters();
   });
   document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -851,18 +989,101 @@ function showApp() {
   });
 }
 
+// -----------------------------------------------------------------------
+// Ограничение подбора пароля
+// -----------------------------------------------------------------------
+// ЧЕСТНО: это, как и весь логин на этой странице (см. пояснение в начале
+// файла), только клиентский барьер — хранится в localStorage этого же
+// браузера, так что открытие страницы в другом браузере или очистка
+// данных сайта сбрасывает счётчик. Это не защита от целенаправленной
+// атаки, а усложнение случайного/автоматического перебора прямо с этой
+// формы.
+//
+// Показываемое сообщение НАМЕРЕННО не совпадает с реальной паузой: после
+// одной случайной ошибки в тексте написано «через 60 минут», а реальная
+// блокировка формы — 60 секунд (чтобы не наказывать за опечатку). Расчёт
+// в том, что скрипт-переборщик, читающий текст ошибки, отступит на куда
+// более долгий срок, чем реально нужен человеку, который просто ошибся
+// пальцем. Отдельно от этого считаются лимиты 3 попытки/час и 6/сутки —
+// вот они настоящие: пока лимит не «остынет», форма заблокирована на
+// самом деле, а не только по тексту.
+const ADMIN_LOGIN_ATTEMPTS_KEY = 'muzhik_admin_login_attempts_v1';
+const LOGIN_MESSAGE = 'Неверный пароль. Следующая попытка через 60 минут.';
+const LOGIN_COOLDOWN_MS = 60 * 1000; // реальная пауза после одиночной ошибки — см. пояснение выше
+const LOGIN_HOUR_CAP = 3;
+const LOGIN_HOUR_MS = 60 * 60 * 1000;
+const LOGIN_DAY_CAP = 6;
+const LOGIN_DAY_MS = 24 * 60 * 60 * 1000;
+
+function getLoginAttempts() {
+  try {
+    const raw = localStorage.getItem(ADMIN_LOGIN_ATTEMPTS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const cutoff = Date.now() - LOGIN_DAY_MS;
+    return Array.isArray(arr) ? arr.filter((t) => typeof t === 'number' && t > cutoff) : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordLoginFailure() {
+  const attempts = getLoginAttempts();
+  attempts.push(Date.now());
+  try { localStorage.setItem(ADMIN_LOGIN_ATTEMPTS_KEY, JSON.stringify(attempts)); } catch {}
+  return attempts;
+}
+
+function clearLoginAttempts() {
+  try { localStorage.removeItem(ADMIN_LOGIN_ATTEMPTS_KEY); } catch {}
+}
+
+/** @returns {number} unix-время (мс), до которого форма реально заблокирована, или 0 */
+function loginBlockedUntil() {
+  const attempts = getLoginAttempts();
+  if (!attempts.length) return 0;
+  const now = Date.now();
+  let until = attempts[attempts.length - 1] + LOGIN_COOLDOWN_MS;
+  const withinHour = attempts.filter((t) => t > now - LOGIN_HOUR_MS);
+  if (withinHour.length >= LOGIN_HOUR_CAP) {
+    until = Math.max(until, withinHour[0] + LOGIN_HOUR_MS);
+  }
+  const withinDay = attempts.filter((t) => t > now - LOGIN_DAY_MS);
+  if (withinDay.length >= LOGIN_DAY_CAP) {
+    until = Math.max(until, withinDay[0] + LOGIN_DAY_MS);
+  }
+  return until > now ? until : 0;
+}
+
+let loginLockTimer = null;
+function applyLoginLockUi() {
+  const until = loginBlockedUntil();
+  const btn = document.getElementById('login-submit');
+  const errBox = document.getElementById('login-error');
+  if (loginLockTimer) { clearTimeout(loginLockTimer); loginLockTimer = null; }
+  if (until) {
+    btn.disabled = true;
+    errBox.textContent = LOGIN_MESSAGE;
+    errBox.style.display = 'block';
+    loginLockTimer = setTimeout(applyLoginLockUi, Math.min(until - Date.now(), 4000) + 50);
+  } else {
+    btn.disabled = false;
+  }
+}
+
 async function handleLogin() {
+  if (loginBlockedUntil()) { applyLoginLockUi(); return; }
   const phone = normalizePhoneDigits(document.getElementById('login-phone').value);
   const password = document.getElementById('login-password').value;
   const hash = await sha256Hex(password);
   const errBox = document.getElementById('login-error');
   if (phone === ADMIN_PHONE_DIGITS && hash === ADMIN_PASSWORD_SHA256) {
+    clearLoginAttempts();
     sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
     errBox.style.display = 'none';
     showApp();
   } else {
-    errBox.textContent = 'Неверный телефон или пароль';
-    errBox.style.display = 'block';
+    recordLoginFailure();
+    applyLoginLockUi();
   }
 }
 
@@ -870,6 +1091,7 @@ document.getElementById('login-submit').addEventListener('click', handleLogin);
 document.getElementById('login-password').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') handleLogin();
 });
+applyLoginLockUi();
 
 if (sessionStorage.getItem(ADMIN_SESSION_KEY) === '1') {
   showApp();
