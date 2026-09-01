@@ -940,10 +940,10 @@ body {
   font-weight: 700;
 }
 
-.coverage-art {
+.onboarding-art-photo {
   height: 180px;
 }
-.coverage-art img {
+.onboarding-art-photo img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1440,9 +1440,6 @@ async function updateRow(table, id, patch) {
  */
 
 const SESSION_KEY = 'muzhik_session_v1';
-// Флаг «баннер зоны покрытия уже показывали в этом браузере» — см.
-// renderCoverageBannerOverlay() и boot().
-const COVERAGE_BANNER_SHOWN_KEY = 'muzhik_coverage_banner_shown_v1';
 
 /** Сохранить id вошедшего пользователя, чтобы не спрашивать телефон заново при каждом визите. */
 function saveSession(id) {
@@ -4153,7 +4150,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'coverage' ? renderCoverageBannerOverlay() : state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -4180,7 +4177,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'coverage' ? renderCoverageBannerOverlay() : state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
   `;
 
   wireEvents();
@@ -4267,16 +4264,9 @@ function renderOnboardingOverlay() {
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-art">
+        <div class="onboarding-art onboarding-art-photo">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
-          <svg viewBox="0 0 400 200" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Карта с точкой">
-            <rect width="400" height="200" fill="none" />
-            <path d="M0 40 H400 M0 90 H400 M0 140 H400" stroke="#bfdbfe" stroke-width="2" />
-            <path d="M70 0 V200 M180 0 V200 M300 0 V200" stroke="#bfdbfe" stroke-width="2" />
-            <circle cx="200" cy="100" r="34" fill="#2563eb" opacity="0.15" />
-            <path d="M200 74c-14 0-25 11-25 25 0 18 25 41 25 41s25-23 25-41c0-14-11-25-25-25z" fill="#2563eb" />
-            <circle cx="200" cy="99" r="9" fill="#ffffff" />
-          </svg>
+          <img src="coverage-map.jpg" alt="Карта зоны покрытия мастеров «Мужик»" />
         </div>
         <div class="onboarding-body">
           <h2>Локация — самое важное</h2>
@@ -4334,30 +4324,6 @@ function renderRadiusNoticeOverlay() {
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Ищем чуть дальше</h2>
           <p>Похоже, в вашем районе сильная нехватка настоящих мужчин. Мы расширили радиус поиска и обязательно кого-нибудь найдём.</p>
-          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-// Баннер-приветствие с картой зоны покрытия — показывается один раз при
-// первой загрузке сайта в этом браузере (см. COVERAGE_BANNER_SHOWN_KEY в
-// boot()), поверх обычного онбординга. Закрывается так же, как остальные
-// overlay-карточки (dismiss-onboarding), но отдельно помечает, что своё
-// дело баннер уже сделал и второй раз не появится.
-function renderCoverageBannerOverlay() {
-  return `
-    <div class="onboarding-overlay" data-action="dismiss-onboarding">
-      <div class="onboarding-card" onclick="event.stopPropagation()">
-        <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-art coverage-art">
-          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть">✕</button>
-          <img src="coverage-map.jpg" alt="Карта зоны покрытия мастеров «Мужик»" />
-        </div>
-        <div class="onboarding-body">
-          <h2>Мастера уже рядом с вами</h2>
-          <p>Мы находим специалиста в вашем районе — не нужно ждать мастера через полгорода. Опишите задачу, и заявку увидят те, кто работает поблизости.</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
@@ -4764,18 +4730,9 @@ async function handleAction(action, value) {
     case 'collapse-composer-field':
       composerExpandedField = null;
       return render();
-    case 'dismiss-onboarding': {
-      const wasCoverageBanner = state.infoOverlay === 'coverage';
+    case 'dismiss-onboarding':
       state.infoOverlay = null;
-      if (wasCoverageBanner) {
-        try { localStorage.setItem(COVERAGE_BANNER_SHOWN_KEY, '1'); } catch {}
-        // После первого баннера-приветствия — обычная логика онбординга
-        // (короткая карточка для неавторизованных, как и при обычной
-        // загрузке без баннера).
-        state.infoOverlay = currentUser() ? null : 'short';
-      }
       return render();
-    }
     case 'show-help':
       state.infoOverlay = 'long';
       return render();
@@ -4940,16 +4897,10 @@ async function boot() {
 
   // Краткая карточка-подсказка сама всплывает при старте, пока человек не
   // авторизован (телефон/Telegram не привязаны). Подробное объяснение
-  // работы сайта в любой момент открывается кнопкой «?» в шапке.
+  // работы сайта в любой момент открывается кнопкой «?» в шапке. Картинка
+  // в этой карточке — реальная карта зоны покрытия мастеров (см.
+  // renderOnboardingOverlay).
   state.infoOverlay = currentUser() ? null : 'short';
-
-  // Баннер зоны покрытия — поверх обычного онбординга, но только один раз
-  // за всё время в этом браузере (см. COVERAGE_BANNER_SHOWN_KEY).
-  let coverageBannerShown = true;
-  try { coverageBannerShown = localStorage.getItem(COVERAGE_BANNER_SHOWN_KEY) === '1'; } catch {}
-  if (!coverageBannerShown) {
-    state.infoOverlay = 'coverage';
-  }
 
   state.booting = false;
   console.info(assistantDemoNotice());
