@@ -950,6 +950,51 @@ body {
   display: block;
 }
 
+/* ---------- Окно поддержки (кнопка «🛟» в шапке) ---------- */
+.support-link-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 16px;
+  margin-bottom: 10px;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.support-link-row--telegram {
+  background: var(--accent);
+  color: var(--gray-0);
+}
+.support-link-row--phone {
+  background: var(--gray-100);
+  color: var(--gray-900);
+}
+.support-link-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.support-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.support-link-label {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.support-link-row--phone .support-link-label {
+  color: var(--gray-600);
+  opacity: 1;
+}
+.support-link-value {
+  font-size: 16px;
+  font-weight: 700;
+}
+
 </style>
 </head>
 <body>
@@ -2498,6 +2543,13 @@ function buildInitialDb() {
 const TELEGRAM_BOT_USERNAME =
   (typeof window !== 'undefined' && window.__ENV__?.TELEGRAM_BOT_USERNAME) || 'mastervraenebot';
 
+// Поддержка пользователей — личный аккаунт в Telegram (не бот), номер
+// телефона той же SIM-карты. Кнопка «поддержка» в шапке (см. renderTopbar/
+// renderTopbarNoUser) открывает всплывающее окно с этими контактами.
+const SUPPORT_TELEGRAM_USERNAME = 'mastervraene';
+const SUPPORT_PHONE_DISPLAY = '+7 916 814 3487';
+const SUPPORT_PHONE_TEL = '+79168143487';
+
 const CATEGORY_TITLES = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.title]));
 const STATUS_LABELS = {
   draft: 'Черновик',
@@ -3590,6 +3642,7 @@ function renderTopbar() {
       </div>
       <div class="topbar-actions">
         <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
+        <button class="icon-button" data-action="show-support" aria-label="Поддержка" title="Поддержка">🛟</button>
         <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
       </div>
     </header>
@@ -3608,6 +3661,7 @@ function renderTopbarNoUser() {
       </div>
       <div class="topbar-actions">
         <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
+        <button class="icon-button" data-action="show-support" aria-label="Поддержка" title="Поддержка">🛟</button>
         <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
       </div>
     </header>
@@ -4150,7 +4204,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
     `;
     wireEvents();
     return;
@@ -4177,7 +4231,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
   `;
 
   wireEvents();
@@ -4325,6 +4379,42 @@ function renderRadiusNoticeOverlay() {
           <h2>Ищем чуть дальше</h2>
           <p>Похоже, в вашем районе сильная нехватка настоящих мужчин. Мы расширили радиус поиска и обязательно кого-нибудь найдём.</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Открывается кнопкой «🛟» в шапке (см. data-action="show-support"), на
+// любом экране, вне зависимости от того, авторизован человек или нет.
+// Это не бот и не форма — прямая ссылка на личный Telegram и номер
+// телефона поддержки, оба варианта работают в один тап. Закрывается
+// свайпом (см. wireOnboardingSwipe — она общая для всех .onboarding-card)
+// или крестиком.
+function renderSupportOverlay() {
+  const tgUrl = `https://t.me/${SUPPORT_TELEGRAM_USERNAME}`;
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Поддержка</h2>
+          <p>Если что-то не работает или остались вопросы — пишите или звоните напрямую, это не бот.</p>
+          <a class="support-link-row support-link-row--telegram" href="${tgUrl}" target="_blank" rel="noopener">
+            <span class="support-link-icon">✈️</span>
+            <span class="support-link-text">
+              <span class="support-link-label">Написать в Telegram</span>
+              <span class="support-link-value">@${SUPPORT_TELEGRAM_USERNAME}</span>
+            </span>
+          </a>
+          <a class="support-link-row support-link-row--phone" href="tel:${SUPPORT_PHONE_TEL}">
+            <span class="support-link-icon">📞</span>
+            <span class="support-link-text">
+              <span class="support-link-label">Позвонить</span>
+              <span class="support-link-value">${escapeHtml(SUPPORT_PHONE_DISPLAY)}</span>
+            </span>
+          </a>
         </div>
       </div>
     </div>
@@ -4735,6 +4825,9 @@ async function handleAction(action, value) {
       return render();
     case 'show-help':
       state.infoOverlay = 'long';
+      return render();
+    case 'show-support':
+      state.infoOverlay = 'support';
       return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
