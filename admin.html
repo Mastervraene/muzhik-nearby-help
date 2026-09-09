@@ -135,6 +135,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .btn-sm.primary { background: var(--accent); color: #fff; }
 .btn-sm.primary:hover { background: var(--accent-strong); }
 .btn-sm.danger { background: #fef2f2; color: var(--red); }
+.btn-sm.danger-solid { background: var(--red); color: #fff; }
+.btn-sm.danger-solid:hover { background: #b91c1c; }
 .btn-sm.ghost { background: var(--gray-100); color: var(--gray-700); }
 .save-hint { font-size: 12px; color: var(--green); margin-left: 6px; display: none; }
 
@@ -156,6 +158,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .form-section-label:first-child { margin-top: 0; }
 .skills-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
 .skills-list .pill { font-size: 11px; padding: 2px 8px; }
+.pill-stars { color: #f5a623; letter-spacing: 1px; }
 .skills-empty { font-size: 12px; color: var(--gray-500); }
 
 .empty-state { text-align: center; color: var(--gray-500); padding: 40px 20px; font-size: 14px; }
@@ -310,11 +313,29 @@ const CENTER = { lat: 55.751244, lng: 37.618423 }; // Москва — тот ж
 const CATEGORY_TITLES = {
   electrics: 'Электрика',
   plumbing: 'Сантехника',
-  assembly: 'Сборка и крепёж',
+  windows_doors: 'Окна и двери',
+  air_conditioning: 'Кондиционеры',
+  assembly: 'Сборка мебели',
   minor_repair: 'Мелкий ремонт',
   household_help: 'Уборка и бытовая помощь',
   moving_help: 'Вынос и перемещение вещей',
 };
+
+/**
+ * Уровень владения навыком (1–5 звёзд), закодированный в skills.note —
+ * см. подробное пояснение в index.html рядом с parseSkillNote. Тот же
+ * формат ("LVL4::текст"), продублировано здесь, т.к. admin.html не
+ * подключает общий JS-модуль с основным приложением.
+ */
+function parseSkillNote(rawNote) {
+  const m = /^LVL([1-5])::/.exec(rawNote || '');
+  if (m) return { level: Number(m[1]), text: rawNote.slice(m[0].length) };
+  return { level: 0, text: rawNote || '' };
+}
+function renderStars(level) {
+  if (!level) return '';
+  return '★'.repeat(level) + '☆'.repeat(5 - level);
+}
 
 const STATUS_LABELS = {
   draft: 'Черновик',
@@ -385,6 +406,15 @@ async function updateRow(table, id, patch) {
   if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   return Array.isArray(data) ? data[0] : data;
+}
+
+async function deleteRow(table, id, byField) {
+  const field = byField || 'id';
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${field}=eq.${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: sbHeaders({ Prefer: 'return=minimal' }),
+  });
+  if (!res.ok) throw new Error(`DELETE ${table} failed: ${res.status} ${await res.text()}`);
 }
 
 // -----------------------------------------------------------------------
@@ -889,13 +919,25 @@ function masterFormHtml(u) {
       <p class="form-section-label">Навыки</p>
       <div class="skills-list">
         ${skills.length
-          ? skills.map((s) => `<span class="pill">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}${s.verification ? ' ✓' : ''}</span>`).join('')
+          ? skills
+              .map((s) => {
+                const { level, text } = parseSkillNote(s.note);
+                const stars = level ? ` <span class="pill-stars">${renderStars(level)}</span>` : '';
+                const noteText = text ? `: ${escapeHtml(text)}` : '';
+                return `<span class="pill">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}${noteText}${s.verification === 'verified' ? ' ✓' : ''}${stars}</span>`;
+              })
+              .join('')
           : '<span class="skills-empty">Навыки не указаны</span>'}
       </div>
 
       <div class="row-actions">
         <button class="btn-sm primary" id="save-master-${u.id}">Сохранить</button>
         <span class="save-hint" id="save-master-hint-${u.id}">Сохранено ✓</span>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
+        <button class="btn-sm danger-solid" id="delete-master-${u.id}">Удалить пользователя</button>
+        <span class="save-hint" id="delete-master-hint-${u.id}" style="color:var(--gray-500);"></span>
       </div>
     </div>
   `;
@@ -932,6 +974,56 @@ function wireMasterForm(u) {
     } finally {
       const freshBtn = document.getElementById(`save-master-${u.id}`);
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
+    }
+  });
+
+  document.getElementById(`delete-master-${u.id}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const label = u.displayName || u.phone || u.id;
+    const ok = confirm(
+      `Удалить пользователя «${label}»?\n\nЕсли по нему есть заказы, полное удаление невозможно — тогда профиль будет очищен (обезличен) и заблокирован, а история заказов сохранится.`
+    );
+    if (!ok) return;
+    const btn = document.getElementById(`delete-master-${u.id}`);
+    btn.disabled = true;
+    btn.textContent = 'Удаляю…';
+    try {
+      // Навыки не защищены внешними ключами ни от чего — удаляем их в любом
+      // случае, и при полном удалении, и при обезличивании профиля.
+      try {
+        await deleteRow('skills', u.id, 'user_id');
+      } catch (skillErr) {
+        console.warn('Не удалось удалить навыки пользователя:', skillErr);
+      }
+
+      try {
+        await deleteRow('users', u.id);
+        openMasterId = null;
+        await loadData();
+        alert('Пользователь удалён.');
+      } catch (deleteErr) {
+        // Скорее всего мешают внешние ключи — есть заказы, где этот
+        // пользователь заказчик или исполнитель. Чтобы не терять историю
+        // заказов, вместо удаления строки очищаем персональные данные.
+        await updateRow('users', u.id, {
+          display_name: 'Удалённый пользователь',
+          phone: `deleted-${u.id}`,
+          telegram_id: null,
+          phone_verified: false,
+          district: '',
+          available_as_worker: false,
+          blocked: true,
+          lat: 0,
+          lng: 0,
+        });
+        openMasterId = null;
+        await loadData();
+        alert('Полное удаление невозможно — у пользователя есть связанные заказы. Личные данные очищены, аккаунт заблокирован.');
+      }
+    } catch (err) {
+      alert('Не удалось удалить пользователя: ' + err.message);
+      const freshBtn = document.getElementById(`delete-master-${u.id}`);
+      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Удалить пользователя'; }
     }
   });
 }

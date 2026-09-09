@@ -807,6 +807,31 @@ body {
   font-weight: 700;
 }
 
+.skill-chip-stars {
+  color: #f5a623;
+  letter-spacing: 1px;
+}
+
+.star-picker {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 10px;
+}
+
+.star-btn {
+  background: none;
+  border: none;
+  font-size: 26px;
+  line-height: 1;
+  padding: 2px;
+  color: var(--gray-300);
+  cursor: pointer;
+}
+
+.star-btn.filled {
+  color: #f5a623;
+}
+
 .timeline {
   margin-top: 10px;
   border-left: 2px solid var(--gray-200);
@@ -1598,6 +1623,8 @@ async function issueSessionToken(userId) {
 const CATEGORY_KEYWORDS = {
   electrics: ['розетк', 'выключател', 'свет', 'лампоч', 'проводк', 'щиток'],
   plumbing: ['смесител', 'кран', 'сифон', 'течёт', 'протечк', 'труб', 'унитаз'],
+  windows_doors: ['окно', 'окна', 'дверь', 'двери', 'фурнитур', 'москитн', 'петл', 'замок', 'уплотнител'],
+  air_conditioning: ['кондиционер', 'сплит-систем', 'сплит систем', 'фреон', 'кондей'],
   assembly: ['полк', 'карниз', 'телевизор', 'мебел', 'собрать', 'повесить'],
   minor_repair: ['обои', 'герметик', 'скол', 'трещин', 'подклеить'],
   household_help: ['убор', 'вынести', 'перенести', 'переставить', 'мусор'],
@@ -2221,10 +2248,29 @@ function pushNotification(notification) {
 const CATEGORIES = [
   { id: 'electrics', title: 'Электрика' },
   { id: 'plumbing', title: 'Сантехника' },
-  { id: 'assembly', title: 'Сборка и крепёж' },
+  { id: 'windows_doors', title: 'Окна и двери' },
+  { id: 'air_conditioning', title: 'Кондиционеры' },
+  { id: 'assembly', title: 'Сборка мебели' },
   { id: 'minor_repair', title: 'Мелкий ремонт' },
   { id: 'household_help', title: 'Уборка и бытовая помощь' },
   { id: 'moving_help', title: 'Вынос и перемещение вещей' },
+];
+
+/**
+ * Группировка категорий по темам — только для UI выбора навыка в профиле
+ * мастера (см. renderProfile → «Добавить навык»). Сама категоризация
+ * заказов (CATEGORIES/CATEGORY_KEYWORDS) не меняется — группы лишь
+ * визуально организуют тот же список для более длинного набора навыков.
+ * «Без навыков» объединяет категории, не требующие отдельной квалификации
+ * (в отличие от электрика/сантехника/и т.п.) — общая бытовая помощь.
+ */
+const SKILL_GROUPS = [
+  { title: 'Электрика', categoryIds: ['electrics'] },
+  { title: 'Сантехника', categoryIds: ['plumbing'] },
+  { title: 'Окна и двери', categoryIds: ['windows_doors'] },
+  { title: 'Кондиционеры', categoryIds: ['air_conditioning'] },
+  { title: 'Сборка мебели', categoryIds: ['assembly'] },
+  { title: 'Без навыков (общая помощь)', categoryIds: ['minor_repair', 'household_help', 'moving_help'] },
 ];
 
 const SERVICES_SEED = [
@@ -2237,6 +2283,10 @@ const SERVICES_SEED = [
   { id: 'svc-shelf', categoryId: 'assembly', title: 'Повесить полку или карниз', basePriceMin: 600, basePriceMax: 1400, unit: 'шт', modifiers: ['high_quantity', 'hard_access'], riskFlag: false, active: true, origin: 'catalog' },
   { id: 'svc-tv', categoryId: 'assembly', title: 'Повесить телевизор', basePriceMin: 1000, basePriceMax: 2000, unit: 'шт', modifiers: ['hard_access'], riskFlag: false, active: true, origin: 'catalog' },
   { id: 'svc-furniture', categoryId: 'assembly', title: 'Собрать мебель', basePriceMin: 1500, basePriceMax: 4000, unit: 'услуга', modifiers: ['high_quantity'], riskFlag: false, active: true, origin: 'catalog' },
+  { id: 'svc-window-adjust', categoryId: 'windows_doors', title: 'Регулировка окна/двери', basePriceMin: 800, basePriceMax: 1800, unit: 'услуга', modifiers: ['urgency_urgent'], riskFlag: false, active: true, origin: 'catalog' },
+  { id: 'svc-door-lock', categoryId: 'windows_doors', title: 'Замена/ремонт замка или фурнитуры', basePriceMin: 900, basePriceMax: 2200, unit: 'шт', modifiers: ['urgency_urgent', 'hard_access'], riskFlag: false, active: true, origin: 'catalog' },
+  { id: 'svc-ac-clean', categoryId: 'air_conditioning', title: 'Чистка и обслуживание кондиционера', basePriceMin: 1500, basePriceMax: 3000, unit: 'шт', modifiers: ['high_quantity'], riskFlag: false, active: true, origin: 'catalog' },
+  { id: 'svc-ac-install', categoryId: 'air_conditioning', title: 'Установка кондиционера', basePriceMin: 4000, basePriceMax: 9000, unit: 'шт', modifiers: ['hard_access'], riskFlag: true, active: true, origin: 'catalog' },
   { id: 'svc-wallpaper', categoryId: 'minor_repair', title: 'Подклеить обои', basePriceMin: 500, basePriceMax: 1200, unit: 'м2', modifiers: ['high_quantity'], riskFlag: false, active: true, origin: 'catalog' },
   { id: 'svc-clean', categoryId: 'household_help', title: 'Уборка квартиры', basePriceMin: 1800, basePriceMax: 3500, unit: 'услуга', modifiers: ['urgency_urgent'], riskFlag: false, active: true, origin: 'catalog' },
   { id: 'svc-move', categoryId: 'moving_help', title: 'Вынести/переставить вещи', basePriceMin: 600, basePriceMax: 1800, unit: 'услуга', modifiers: ['high_quantity', 'needs_materials'], riskFlag: false, active: true, origin: 'catalog' },
@@ -2560,6 +2610,27 @@ const SUPPORT_PHONE_DISPLAY = '+7 916 814 3487';
 const SUPPORT_PHONE_TEL = '+79168143487';
 
 const CATEGORY_TITLES = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.title]));
+
+/**
+ * Уровень владения навыком (1–5 звёзд) хранится БЕЗ изменения схемы БД —
+ * закодирован префиксом прямо в текстовом поле skills.note (например,
+ * "LVL4::Электрик, опыт 8 лет"). Так можно выкатить фичу сразу, не дожидаясь
+ * миграции таблицы skills в Supabase. Если решим завести отдельную колонку
+ * `level` — здесь единственное место, которое нужно будет переключить.
+ */
+function parseSkillNote(rawNote) {
+  const m = /^LVL([1-5])::/.exec(rawNote || '');
+  if (m) return { level: Number(m[1]), text: rawNote.slice(m[0].length) };
+  return { level: 0, text: rawNote || '' };
+}
+function encodeSkillNote(level, text) {
+  return level >= 1 && level <= 5 ? `LVL${level}::${text}` : text;
+}
+function renderStars(level) {
+  if (!level) return '';
+  return '★'.repeat(level) + '☆'.repeat(5 - level);
+}
+
 const STATUS_LABELS = {
   draft: 'Черновик',
   collecting_details: 'Уточняем детали',
@@ -2589,6 +2660,13 @@ const state = {
   // краткая карточка «Локация — самое важное» (авто при старте без
   // входа); 'long' — подробное «Как это работает» (по кнопке «?»).
   infoOverlay: null,
+  // Состояние формы «Добавить навык» на экране профиля. Держим здесь, а не
+  // только в DOM, т.к. клик по звезде вызывает render() (полная замена
+  // innerHTML всего экрана), который иначе стирал бы уже введённые
+  // категорию/текст. Сбрасывается после добавления навыка (см. addSkill).
+  newSkillCategoryId: null,
+  newSkillNote: '',
+  newSkillLevel: 0,
 };
 
 function currentUser() {
@@ -3372,17 +3450,20 @@ function rateCustomer(orderId, rating) {
   render();
 }
 
-function addSkill(categoryId, note) {
+function addSkill(categoryId, note, level) {
   const user = currentUser();
   if (!user.availableAsWorker) {
     saveUser({ ...user, availableAsWorker: true });
   }
   addSkillForUser(user.id, {
     categoryId,
-    note,
+    note: encodeSkillNote(level, note),
     verification: 'unverified',
     addedAt: new Date().toISOString(),
   });
+  state.newSkillCategoryId = null;
+  state.newSkillNote = '';
+  state.newSkillLevel = 0;
   showToast('Навык добавлен — теперь вам будут показываться подходящие заказы рядом');
   render();
 }
@@ -4083,18 +4164,36 @@ function renderProfile() {
         ${
           user.skills.length
             ? user.skills
-                .map(
-                  (s) =>
-                    `<span class="skill-chip ${s.verification === 'verified' ? 'verified' : ''}">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}: ${escapeHtml(s.note)}</span>`
-                )
+                .map((s) => {
+                  const { level, text } = parseSkillNote(s.note);
+                  const stars = level ? ` <span class="skill-chip-stars">${renderStars(level)}</span>` : '';
+                  return `<span class="skill-chip ${s.verification === 'verified' ? 'verified' : ''}">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}: ${escapeHtml(text)}${stars}</span>`;
+                })
                 .join('')
             : `<p class="empty-state">Навыков пока нет — вы только заказчик</p>`
         }
         <label style="margin-top:10px;">Добавить навык</label>
-        <select id="field-skill-category">
-          ${CATEGORIES.map((c) => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('')}
+        <select id="field-skill-category" onchange="state.newSkillCategoryId=this.value;">
+          ${SKILL_GROUPS.map(
+            (g) =>
+              `<optgroup label="${escapeHtml(g.title)}">${g.categoryIds
+                .map(
+                  (id) =>
+                    `<option value="${id}" ${id === state.newSkillCategoryId ? 'selected' : ''}>${escapeHtml(CATEGORY_TITLES[id] || id)}</option>`
+                )
+                .join('')}</optgroup>`
+          ).join('')}
         </select>
-        <input type="text" id="field-skill-note" placeholder="Коротко опишите опыт" />
+        <input type="text" id="field-skill-note" placeholder="Коротко опишите опыт" value="${escapeHtml(state.newSkillNote || '')}" oninput="state.newSkillNote=this.value;" />
+        <label style="margin-top:10px;">Уровень владения</label>
+        <div class="star-picker" role="radiogroup" aria-label="Уровень владения навыком">
+          ${[1, 2, 3, 4, 5]
+            .map(
+              (n) =>
+                `<button type="button" class="star-btn ${n <= state.newSkillLevel ? 'filled' : ''}" data-action="set-skill-level" data-value="${n}" aria-label="${n} из 5">★</button>`
+            )
+            .join('')}
+        </div>
         <button class="primary-button" data-action="add-skill">Добавить навык</button>
         <p class="order-meta" style="margin-top:8px;">Так мы не покажем вам сантехнику, если вы электрик — и наоборот.</p>
       </div>
@@ -4930,11 +5029,15 @@ async function handleAction(action, value) {
       showToast('Радиус сохранён');
       return render();
     }
+    case 'set-skill-level':
+      state.newSkillLevel = Number(value);
+      return render();
     case 'add-skill': {
       const cat = document.getElementById('field-skill-category').value;
       const note = document.getElementById('field-skill-note').value.trim();
       if (!note) return showToast('Опишите коротко навык');
-      return addSkill(cat, note);
+      if (!state.newSkillLevel) return showToast('Отметьте уровень владения — от 1 до 5 звёзд');
+      return addSkill(cat, note, state.newSkillLevel);
     }
     case 'switch-demo-user': {
       state.currentUserId = document.getElementById('field-demo-user').value;
