@@ -64,6 +64,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
+
+<!-- Подготовка к PWA/приложению (App Store, Google Play через Capacitor) -->
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Мужик" />
+<meta name="mobile-web-app-capable" content="yes" />
+
 <style>
 /* Только мобильная раскладка. Оттенки серого (цвет не используется намеренно). */
 
@@ -1012,7 +1021,7 @@ body {
         <li>Вынос и перемещение вещей — от 600 до 1800 ₽</li>
       </ul>
       <p>Подробнее о видах работ и ценах — в <a href="/articles/">статьях о наших услугах</a>.</p>
-      <p style="font-size:12px;color:#767676;">Мастер в районе — информационный сервис. ИП Матреницкая Луиза Алексеевна ИНН 770301870259</p>
+      <p style="font-size:12px;color:#767676;">Мастер в районе — информационный сервис. ИП Матреницкая Луиза Алексеевна ИНН 770301870259. <a href="/privacy-policy.html">Политика конфиденциальности</a> · <a href="/personal-data-policy.html">Обработка персональных данных</a></p>
     </div>
   </noscript>
   <div id="app" class="app-shell"></div>
@@ -3771,7 +3780,7 @@ function renderHome() {
           </div>
         </div>
       </div>
-      <p class="legal-footer">Найти помощника по дому от 500 рублей.<br />Мастер в районе — информационный сервис. ИП Матреницкая Луиза Алексеевна ИНН 770301870259</p>
+      <p class="legal-footer">Найти помощника по дому от 500 рублей.<br />Мастер в районе — информационный сервис. ИП Матреницкая Луиза Алексеевна ИНН 770301870259. <a href="/privacy-policy.html" style="color:inherit;">Политика конфиденциальности</a> · <a href="/personal-data-policy.html" style="color:inherit;">Обработка персональных данных</a></p>
     </div>
   `;
 }
@@ -5001,6 +5010,17 @@ async function boot() {
 }
 
 boot();
+
+// Регистрация service worker для PWA/офлайн app-шелла (см. sw.js —
+// намеренно network-first, чтобы новый деплой всегда был виден). Только
+// на главном сайте, не в admin.html — там регистрации нет вообще.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.error('[sw] регистрация не удалась', err);
+    });
+  });
+}
 
 })();
   </script>
