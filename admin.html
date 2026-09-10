@@ -1075,13 +1075,15 @@ function fillMapPoints() {
   const map = window.__adminMap;
   if (!map) return;
   map.geoObjects.removeAll();
-  const bounds = [];
+  let pointCount = 0;
+  let singlePoint = null;
 
   allUsers
     .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
     .forEach((u) => {
       const coords = [u.location.lat, u.location.lng];
-      bounds.push(coords);
+      pointCount++;
+      singlePoint = coords;
       const pm = new window.ymaps.Placemark(coords, {
         balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
         balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км`,
@@ -1093,7 +1095,8 @@ function fillMapPoints() {
     .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
     .forEach((o) => {
       const coords = [o.exactLocation.lat, o.exactLocation.lng];
-      bounds.push(coords);
+      pointCount++;
+      singlePoint = coords;
       const pm = new window.ymaps.Placemark(coords, {
         balloonContentHeader: escapeHtml(o.title || 'Заказ'),
         balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
@@ -1101,8 +1104,20 @@ function fillMapPoints() {
       map.geoObjects.add(pm);
     });
 
-  if (bounds.length) {
-    map.setBounds(bounds, { checkZoomRange: true, zoomMargin: 40 });
+  // map.setBounds() ждёт РОВНО два угла [[юго-запад],[северо-восток]], а не
+  // список всех точек — раньше сюда передавался массив со ВСЕМИ метками
+  // (по одной на мастера/заказ), и Яндекс.Карты трактовали 1-ю и 2-ю точку
+  // как углы прямоугольника, что при близко расположенных метках давало
+  // случайный/вывернутый прямоугольник и карта улетала на весь мир. Метод
+  // getBounds() самой коллекции меток считает настоящий охватывающий
+  // прямоугольник по всем меткам — это и нужно.
+  if (pointCount === 1) {
+    map.setCenter(singlePoint, 14);
+  } else if (pointCount > 1) {
+    const objectsBounds = map.geoObjects.getBounds();
+    if (objectsBounds) {
+      map.setBounds(objectsBounds, { checkZoomRange: true, zoomMargin: 40 });
+    }
   }
 }
 
