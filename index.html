@@ -5021,7 +5021,7 @@ function wireEvents() {
     });
   }
   if (composerSend) {
-    composerSend.addEventListener('click', () => {
+    composerSend.addEventListener('click', async () => {
       const text = composerInput.value.trim();
       const address = composerAddressValue.trim();
       if (!text || !address) return;
@@ -5029,9 +5029,29 @@ function wireEvents() {
       const atts = pendingAttachments;
       pendingAttachments = [];
       composerDescriptionValue = '';
+
+      // composerExactLocation заполняется только кнопкой «геолокация»
+      // (captureComposerAddressGeo). Если адрес вписан вручную — точных
+      // координат ещё нет, и раньше exactLocation заказа молча откатывался
+      // на user.location/CENTER (см. startQuickDraft), из-за чего точка на
+      // карте у мастеров могла не совпадать с вписанным текстом адреса.
+      // Теперь для ручного текста тоже пробуем прямое геокодирование —
+      // тем же способом, что и адрес мастера в профиле (geocodeAddressYandex).
+      let exactLocation = composerExactLocation;
+      if (!exactLocation) {
+        composerSend.disabled = true;
+        try {
+          exactLocation = await geocodeAddressYandex(address);
+        } catch (err) {
+          console.warn('[geo] геокодирование адреса заявки не удалось', err);
+        } finally {
+          composerSend.disabled = false;
+        }
+      }
+
       // Телефон (для новых пользователей) запрашивается позже, на экране
       // подтверждения заявки — см. renderCompose()/case 'publish-draft'.
-      startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo, composerExactLocation);
+      startQuickDraft(text, atts, address, composerDesiredDate, composerTimeFrom, composerTimeTo, exactLocation);
       composerExpandedField = null;
       composerExactLocation = null;
     });
@@ -5245,8 +5265,13 @@ async function handleAction(action, value) {
         const sendBtn = document.getElementById('compose-publish-send');
         if (sendBtn) sendBtn.disabled = true;
         try {
+          // Раньше новый пользователь всегда создавался с CENTER — даже если
+          // заявка уже несёт настоящий геокодированный адрес (см. вызов
+          // startQuickDraft в wireEvents). Берём тот же exactLocation, что и
+          // у заказа, чтобы профиль нового заказчика сразу указывал на его
+          // реальный адрес, а не на дефолтную точку города.
           const user = await ensureUserByPhone(composePhone.value, {
-            location: CENTER,
+            location: state.draft.exactLocation || CENTER,
             district: state.draft.district,
           });
           state.currentUserId = user.id;
