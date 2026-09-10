@@ -509,6 +509,21 @@ body {
   display: none;
 }
 
+.msg.assistant .assistant-suggestion-text {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.assistant-suggestion-btn {
+  border: none;
+  background: var(--gray-900);
+  color: var(--gray-0);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
 .attachment-preview {
   display: flex;
   gap: 8px;
@@ -790,32 +805,10 @@ body {
   margin-bottom: 8px;
 }
 
-.skill-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--gray-100);
-  color: var(--gray-700);
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  margin: 0 6px 6px 0;
-}
-
-.skill-chip.verified::before {
-  content: "✓";
-  font-weight: 700;
-}
-
-.skill-chip-stars {
-  color: #f5a623;
-  letter-spacing: 1px;
-}
-
 .star-picker {
   display: flex;
   gap: 4px;
-  margin: 4px 0 10px;
+  margin: 6px 0 2px;
 }
 
 .star-btn {
@@ -830,6 +823,61 @@ body {
 
 .star-btn.filled {
   color: #f5a623;
+}
+
+/* ---------- Навыки мастера: кнопки-переключатели со звёздным рейтингом ---------- */
+
+.skill-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-btn-wrap {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.skill-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  /* По умолчанию — ненасыщенный серый (навык не выбран). */
+  background: var(--gray-100);
+  color: var(--gray-500);
+}
+
+.skill-btn.skill-btn-active {
+  /* Навык выбран — ненасыщенный (приглушённый) синий, а не яркий акцент. */
+  background: #dde7f4;
+  color: #45618a;
+}
+
+.skill-btn.open {
+  border-radius: 12px 12px 0 0;
+}
+
+.skill-btn-stars {
+  color: #f5a623;
+  letter-spacing: 1px;
+  font-weight: 400;
+  font-size: 13px;
+}
+
+.skill-btn-wrap .star-picker {
+  justify-content: center;
+  background: var(--gray-50);
+  border-radius: 0 0 12px 12px;
+  padding: 10px 0 12px;
+  margin: 0;
 }
 
 .timeline {
@@ -2175,7 +2223,30 @@ function addSkillForUser(userId, skill) {
     category_id: skill.categoryId,
     note: skill.note,
     verification: skill.verification,
-  }).catch((err) => reportError('добавление навыка', err));
+  })
+    .then((row) => {
+      // Запоминаем настоящий id строки в БД — пригодится, если в этой же
+      // сессии сразу поменяют уровень владения (см. updateSkillNoteForUser):
+      // без него нечем было бы адресовать UPDATE. `skill` — та же ссылка,
+      // что уже лежит в user.skills, поэтому мутация видна сразу.
+      skill._dbId = row.id;
+      skill._userId = userId;
+    })
+    .catch((err) => reportError('добавление навыка', err));
+}
+
+/** Смена уровня владения (звёзд) у уже существующего навыка — без вставки новой строки. */
+function updateSkillNoteForUser(userId, skill, newNote) {
+  const user = cache.users.find((u) => u.id === userId);
+  if (!user) return;
+  skill.note = newNote; // skill — ссылка на объект внутри user.skills, мутация видна сразу
+
+  if (!isSupabaseConfigured()) {
+    local.saveUser(user);
+    return;
+  }
+  if (!skill._dbId) return; // строка ещё не сохранилась (см. addSkillForUser) — обновится при следующей загрузке
+  updateRow('skills', skill._dbId, { note: newNote }).catch((err) => reportError('обновление навыка', err));
 }
 
 function saveOrder(order) {
@@ -2272,6 +2343,9 @@ const SKILL_GROUPS = [
   { title: 'Сборка мебели', categoryIds: ['assembly'] },
   { title: 'Без навыков (общая помощь)', categoryIds: ['minor_repair', 'household_help', 'moving_help'] },
 ];
+// Плоский список всех выбираемых категорий навыков — порядок кнопок в
+// профиле (renderProfile → «Мои навыки») берём из группировки выше.
+const ALL_SKILL_CATEGORY_IDS = SKILL_GROUPS.flatMap((g) => g.categoryIds);
 
 const SERVICES_SEED = [
   { id: 'svc-socket', categoryId: 'electrics', title: 'Заменить розетку/выключатель', basePriceMin: 700, basePriceMax: 1200, unit: 'шт', modifiers: ['urgency_urgent', 'high_quantity'], riskFlag: false, active: true, origin: 'catalog' },
@@ -2660,13 +2734,12 @@ const state = {
   // краткая карточка «Локация — самое важное» (авто при старте без
   // входа); 'long' — подробное «Как это работает» (по кнопке «?»).
   infoOverlay: null,
-  // Состояние формы «Добавить навык» на экране профиля. Держим здесь, а не
-  // только в DOM, т.к. клик по звезде вызывает render() (полная замена
-  // innerHTML всего экрана), который иначе стирал бы уже введённые
-  // категорию/текст. Сбрасывается после добавления навыка (см. addSkill).
-  newSkillCategoryId: null,
-  newSkillNote: '',
-  newSkillLevel: 0,
+  // Навыки на экране профиля — теперь просто кнопки-переключатели (см.
+  // renderProfile → «Мои навыки»): клик по навыку открывает звёздный
+  // рейтинг прямо под ним, клик по звезде сразу сохраняет уровень и
+  // закрывает рейтинг. openSkillPicker — id категории, чей рейтинг сейчас
+  // развёрнут (только один одновременно), или null, если ни один не открыт.
+  openSkillPicker: null,
 };
 
 function currentUser() {
@@ -3081,15 +3154,33 @@ function renderTelegramLinkCard(purposeText) {
  * мастера. Категория и время — по тексту сообщения; всё остальное —
  * разумные значения по умолчанию, которые при желании можно будет
  * уточнить в диалоге с мастером.
+ *
+ * Категория: если настоящий ИИ-ассистент подключён (ASSISTANT_FUNCTION_URL)
+ * и уже успел классифицировать именно этот текст (см.
+ * lastAssistantInterpretation в runComposerAssistantCheck) — используем его
+ * ответ, он точнее офлайн-заглушки. Если ассистент не настроен, не успел
+ * ответить или классифицировал другой (уже изменённый) текст — как и
+ * раньше, падаем обратно на офлайн-классификацию по ключевым словам, чтобы
+ * заявка в любом случае получила категорию.
  */
 function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredTimeFrom, desiredTimeTo, exactLocation) {
   const interpretation = interpretCustomerMessage(rawMessage);
+  const trimmedMessage = rawMessage.trim();
+  const freshAssistantMatch =
+    isAssistantConfigured() &&
+    lastAssistantInterpretation &&
+    lastAssistantInterpretation.text === trimmedMessage &&
+    lastAssistantInterpretation.categoryId
+      ? lastAssistantInterpretation
+      : null;
   const user = currentUser();
   state.draft = {
     step: 'quickReview',
     rawMessage,
     attachments,
-    categoryId: interpretation.categoryId,
+    categoryId: freshAssistantMatch ? freshAssistantMatch.categoryId : interpretation.categoryId,
+    // riskWarning — по-прежнему офлайн-проверка на опасные ключевые слова:
+    // это не зависит от того, ответил ли ассистент, и работает даже без него.
     riskWarning: interpretation.riskWarning,
     quantity: 1,
     accessDifficulty: 'easy',
@@ -3450,43 +3541,93 @@ function rateCustomer(orderId, rating) {
   render();
 }
 
-function addSkill(categoryId, note, level) {
+/**
+ * Клик по звезде в развёрнутом рейтинге навыка (см. renderProfile → «Мои
+ * навыки»): либо заводит навык впервые (если его ещё нет), либо меняет
+ * уровень уже существующего — без отдельной кнопки «Добавить» и без
+ * текстового описания (убрано по просьбе: только категория + рейтинг).
+ */
+function setUserSkillLevel(categoryId, level) {
   const user = currentUser();
-  if (!user.availableAsWorker) {
-    saveUser({ ...user, availableAsWorker: true });
+  const existing = user.skills.find((s) => s.categoryId === categoryId);
+  if (existing) {
+    updateSkillNoteForUser(user.id, existing, encodeSkillNote(level, ''));
+  } else {
+    if (!user.availableAsWorker) {
+      saveUser({ ...user, availableAsWorker: true });
+    }
+    addSkillForUser(user.id, {
+      categoryId,
+      note: encodeSkillNote(level, ''),
+      verification: 'unverified',
+      addedAt: new Date().toISOString(),
+    });
   }
-  addSkillForUser(user.id, {
-    categoryId,
-    note: encodeSkillNote(level, note),
-    verification: 'unverified',
-    addedAt: new Date().toISOString(),
-  });
-  state.newSkillCategoryId = null;
-  state.newSkillNote = '';
-  state.newSkillLevel = 0;
-  showToast('Навык добавлен — теперь вам будут показываться подходящие заказы рядом');
+  state.openSkillPicker = null;
+  showToast('Навык обновлён — теперь вам будут показываться подходящие заказы рядом');
   render();
 }
 
+/**
+ * «Обновить геопозицию» в профиле мастера. Раньше эта кнопка обновляла
+ * только координаты (user.location) и никак не трогала текстовое поле
+ * «Район» — то есть на экране визуально ничего не менялось, и казалось,
+ * что кнопка не работает. Теперь, как и в композере (см.
+ * captureComposerAddressGeo), пробуем сразу получить читаемый адрес через
+ * обратное геокодирование Яндекс.Карт и подставить его в поле района —
+ * человек может тут же его подправить и сохранить, а не гадать, сработало
+ * ли вообще нажатие.
+ */
 function captureGeolocation() {
   if (!navigator.geolocation) {
-    showToast('Геолокация недоступна в этом браузере, введите район вручную');
+    showToast('Геолокация недоступна в этом браузере — укажите район вручную ниже');
     return;
   }
+  const btn = document.getElementById('profile-geo-btn');
+  if (btn) {
+    btn.disabled = true;
+    const label = btn.querySelector('span');
+    if (label) label.textContent = 'Определяем…';
+  }
   navigator.geolocation.getCurrentPosition(
-    (pos) => {
+    async (pos) => {
+      const { latitude, longitude } = pos.coords;
       const user = currentUser();
-      const updated = {
-        ...user,
-        location: { lat: pos.coords.latitude, lng: pos.coords.longitude },
-      };
-      saveUser(updated);
+      let district = user?.district || '';
+      try {
+        const address = await reverseGeocodeYandex(latitude, longitude);
+        if (address) district = address;
+      } catch (err) {
+        console.warn('[geo] обратное геокодирование не удалось', err);
+      }
+      saveUser({ ...user, location: { lat: latitude, lng: longitude }, district });
+      profileDistrictValue = district;
       showToast('Геопозиция обновлена');
       render();
     },
-    () => showToast('Доступ к геолокации отклонён — можно указать район вручную вводом текста'),
-    { timeout: 8000 }
+    () => {
+      showToast('Доступ к геолокации отклонён — можно указать район вручную ниже');
+      if (btn) {
+        btn.disabled = false;
+        const label = btn.querySelector('span');
+        if (label) label.textContent = 'Обновить геопозицию';
+      }
+    },
+    { timeout: 8000, enableHighAccuracy: true }
   );
+}
+
+/** Заказчик/мастер вписал район руками (без геолокации) и нажал «Сохранить». */
+function saveProfileDistrict() {
+  const input = document.getElementById('field-profile-district');
+  if (!input) return;
+  const district = input.value.trim();
+  if (!district) return showToast('Введите район или адрес');
+  const user = currentUser();
+  saveUser({ ...user, district });
+  profileDistrictValue = district;
+  showToast('Район сохранён');
+  render();
 }
 
 // ---------------------------------------------------------------------
@@ -3649,6 +3790,16 @@ async function sendVoiceForTranscription(blob) {
 let composerAssistantTimer = null;
 let composerAssistantRequestId = 0;
 
+/**
+ * Последний реальный ответ ассистента (/interpret) по ТЕКУЩЕМУ тексту
+ * композера. startQuickDraft() использует его вместо офлайн-заглушки
+ * interpretCustomerMessage(), если он «свежий» — то есть text совпадает
+ * с тем, что заказчик отправляет прямо сейчас. Если ассистент не
+ * настроен, не успел ответить или текст с тех пор поменялся — сайт как и
+ * раньше падает обратно на офлайн-классификацию по ключевым словам.
+ */
+let lastAssistantInterpretation = null;
+
 /** Вызывается при каждом вводе текста в композере — с задержкой спрашивает ассистента, не нужно ли уточнение. */
 function scheduleComposerAssistantCheck(text) {
   if (!isAssistantConfigured()) return;
@@ -3678,16 +3829,52 @@ async function runComposerAssistantCheck(text) {
     if (!res.ok) throw new Error(`interpret ${res.status}`);
     const data = await res.json();
     if (requestId !== composerAssistantRequestId) return; // текст уже изменился — ответ устарел
+
+    // Доверяем только известным сайту id категорий — если сервер вернул
+    // что-то незнакомое, считаем, что категория не определена.
+    const categoryId =
+      data && typeof data.categoryId === 'string' && CATEGORIES.some((c) => c.id === data.categoryId)
+        ? data.categoryId
+        : null;
+    const normalizedText =
+      data && typeof data.normalizedText === 'string' && data.normalizedText.trim() ? data.normalizedText.trim() : null;
+    lastAssistantInterpretation = { text, categoryId, normalizedText };
+
     const hintEl = document.getElementById('composer-assistant-hint');
     if (!hintEl) return;
-    hintEl.innerHTML =
-      data && data.clarifyingQuestion
-        ? `<div class="msg assistant">${escapeHtml(data.clarifyingQuestion)}</div>`
-        : '';
+    const parts = [];
+    if (normalizedText) {
+      parts.push(
+        `<div class="msg assistant"><span class="assistant-suggestion-text">Может, так понятнее: «${escapeHtml(
+          normalizedText
+        )}»?</span><button type="button" class="assistant-suggestion-btn" id="composer-assistant-apply-btn">Использовать эту формулировку</button></div>`
+      );
+    }
+    if (data && data.clarifyingQuestion) {
+      parts.push(`<div class="msg assistant">${escapeHtml(data.clarifyingQuestion)}</div>`);
+    }
+    hintEl.innerHTML = parts.join('');
+    const applyBtn = document.getElementById('composer-assistant-apply-btn');
+    if (applyBtn) applyBtn.addEventListener('click', applyAssistantNormalizedText);
   } catch (err) {
     console.warn('[assistant] уточнение не удалось получить', err);
     // Тихо игнорируем — ассистент необязателен, форма и так собирает нужные данные.
   }
+}
+
+/** Заказчик нажал «Использовать эту формулировку» — подставляем предложенный ассистентом текст вместо своего. */
+function applyAssistantNormalizedText() {
+  const input = document.getElementById('composer-input');
+  if (!input || !lastAssistantInterpretation || !lastAssistantInterpretation.normalizedText) return;
+  input.value = lastAssistantInterpretation.normalizedText;
+  composerDescriptionValue = input.value;
+  updateComposerSendState();
+  autosizeComposerTextarea(input);
+  updateHomeHeroVisibility(input);
+  // Текст поменялся — переспрашиваем ассистента заново по новой формулировке.
+  scheduleComposerAssistantCheck(input.value);
+  const hintEl = document.getElementById('composer-assistant-hint');
+  if (hintEl) hintEl.innerHTML = '';
 }
 
 // ---------------------------------------------------------------------
@@ -4140,15 +4327,21 @@ function renderNotifications() {
 
 function renderProfile() {
   const user = currentUser();
+  if (!profileDistrictValue.trim() && user?.district) profileDistrictValue = user.district;
   return `
     <div class="screen">
       <div class="section-title">Профиль</div>
       <div class="field-card">
         <p><b>${escapeHtml(user.displayName)}</b></p>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
-        <p class="order-meta"><span>Район: ${escapeHtml(user.district)}</span></p>
-        <button class="secondary-button" data-action="use-geo-profile">📍 Обновить геопозицию</button>
-        <label style="margin-top:10px;">Радиус поиска заказов рядом (км)</label>
+        <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
+        <input type="text" id="field-profile-district" placeholder="Например: г. Москва, район Аэропорт" value="${escapeHtml(profileDistrictValue)}" oninput="profileDistrictValue=this.value;" />
+        <div class="composer-field-inline" style="margin-top:8px;">
+          <button class="secondary-button" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
+          <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Обновить геопозицию</span></button>
+        </div>
+        <p class="order-meta" style="margin-top:8px;">Можно вписать район вручную и сохранить, либо определить его автоматически по геолокации браузера.</p>
+        <label style="margin-top:14px;">Радиус поиска заказов рядом (км)</label>
         <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
         <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
       </div>
@@ -4161,41 +4354,38 @@ function renderProfile() {
 
       <div class="section-title">Мои навыки</div>
       <div class="field-card">
-        ${
-          user.skills.length
-            ? user.skills
-                .map((s) => {
-                  const { level, text } = parseSkillNote(s.note);
-                  const stars = level ? ` <span class="skill-chip-stars">${renderStars(level)}</span>` : '';
-                  return `<span class="skill-chip ${s.verification === 'verified' ? 'verified' : ''}">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}: ${escapeHtml(text)}${stars}</span>`;
-                })
-                .join('')
-            : `<p class="empty-state">Навыков пока нет — вы только заказчик</p>`
-        }
-        <label style="margin-top:10px;">Добавить навык</label>
-        <select id="field-skill-category" onchange="state.newSkillCategoryId=this.value;">
-          ${SKILL_GROUPS.map(
-            (g) =>
-              `<optgroup label="${escapeHtml(g.title)}">${g.categoryIds
-                .map(
-                  (id) =>
-                    `<option value="${id}" ${id === state.newSkillCategoryId ? 'selected' : ''}>${escapeHtml(CATEGORY_TITLES[id] || id)}</option>`
-                )
-                .join('')}</optgroup>`
-          ).join('')}
-        </select>
-        <input type="text" id="field-skill-note" placeholder="Коротко опишите опыт" value="${escapeHtml(state.newSkillNote || '')}" oninput="state.newSkillNote=this.value;" />
-        <label style="margin-top:10px;">Уровень владения</label>
-        <div class="star-picker" role="radiogroup" aria-label="Уровень владения навыком">
-          ${[1, 2, 3, 4, 5]
-            .map(
-              (n) =>
-                `<button type="button" class="star-btn ${n <= state.newSkillLevel ? 'filled' : ''}" data-action="set-skill-level" data-value="${n}" aria-label="${n} из 5">★</button>`
-            )
-            .join('')}
+        <p class="order-meta" style="margin-bottom:8px;">Нажмите на навык и выберите уровень владения — от 1 до 5 звёзд. Так мы не покажем вам сантехнику, если вы электрик — и наоборот.</p>
+        <div class="skill-buttons">
+          ${ALL_SKILL_CATEGORY_IDS.map((catId) => {
+            const skill = user.skills.find((s) => s.categoryId === catId);
+            const { level } = parseSkillNote(skill?.note || '');
+            const isOpen = state.openSkillPicker === catId;
+            const verified = skill?.verification === 'verified';
+            const label = `${escapeHtml(CATEGORY_TITLES[catId] || catId)}${verified ? ' ✓' : ''}`;
+            const stars = level ? `<span class="skill-btn-stars">${renderStars(level)}</span>` : '';
+            return `
+              <div class="skill-btn-wrap">
+                <button type="button" class="skill-btn ${level ? 'skill-btn-active' : ''} ${isOpen ? 'open' : ''}" data-action="toggle-skill-picker" data-value="${catId}">
+                  <span>${label}</span>${stars}
+                </button>
+                ${
+                  isOpen
+                    ? `
+                <div class="star-picker" role="radiogroup" aria-label="Уровень владения — ${escapeHtml(CATEGORY_TITLES[catId] || catId)}">
+                  ${[1, 2, 3, 4, 5]
+                    .map(
+                      (n) =>
+                        `<button type="button" class="star-btn ${n <= level ? 'filled' : ''}" data-action="set-skill-level" data-value="${catId}:${n}" aria-label="${n} из 5">★</button>`
+                    )
+                    .join('')}
+                </div>
+                `
+                    : ''
+                }
+              </div>
+            `;
+          }).join('')}
         </div>
-        <button class="primary-button" data-action="add-skill">Добавить навык</button>
-        <p class="order-meta" style="margin-top:8px;">Так мы не покажем вам сантехнику, если вы электрик — и наоборот.</p>
       </div>
 
       ${
@@ -4290,8 +4480,22 @@ function renderPhoneGate() {
   `;
 }
 
+// Экран (.screen) целиком пересоздаётся при каждом render() — это полная
+// замена innerHTML, а не точечное обновление DOM. У нового элемента
+// scrollTop всегда 0, поэтому без специальной обработки любое действие на
+// экране (звезда рейтинга, добавление навыка, всплывающий toast и т.п.)
+// незаметно для пользователя «подбрасывало» страницу наверх. Раз в
+// pending-переменную запоминаем, на каком экране и с каким scrollTop
+// произошёл предыдущий render(); если экран не поменялся — восстанавливаем
+// прежнюю прокрутку сразу после перерисовки. При настоящем переходе между
+// экранами (go()) scrollTop намеренно остаётся 0 — так и должно быть.
+let lastRenderedScreen = null;
+
 function render() {
   const app = document.getElementById('app');
+  const prevScreenEl = app.querySelector('.screen');
+  const preserveScroll = Boolean(prevScreenEl) && lastRenderedScreen === state.screen;
+  const savedScrollTop = preserveScroll ? prevScreenEl.scrollTop : 0;
 
   if (state.screen === 'boot' || state.booting) {
     app.innerHTML = renderBooting();
@@ -4342,6 +4546,12 @@ function render() {
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
   `;
 
+  lastRenderedScreen = state.screen;
+  if (preserveScroll) {
+    const newScreenEl = app.querySelector('.screen');
+    if (newScreenEl) newScreenEl.scrollTop = savedScrollTop;
+  }
+
   wireEvents();
 }
 
@@ -4362,6 +4572,10 @@ let composerExpandedField = null; // 'address' | 'date' | null
 // textarea в разметке не привязана к состоянию.
 let composerDescriptionValue = '';
 let composerAddressValue = '';
+// Поле «Район» на экране профиля (renderProfile) — тот же приём: живёт вне
+// state, чтобы повторный render() (например, после showToast) не стирал
+// то, что человек уже успел вписать руками.
+let profileDistrictValue = '';
 // То же самое для полей «Имя»/«Телефон» на экране подтверждения заявки
 // (renderCompose → quickReview): без этого повторный render() посреди
 // набора текста (например, из-за showToast() при попытке приложить больше
@@ -4855,6 +5069,12 @@ function wireOnboardingSwipe() {
   const bodyIsScrollable = () => Boolean(body && body.scrollHeight > body.clientHeight + 1);
 
   const onPointerDown = (e) => {
+    // Тап по кнопке/ссылке (крестик «✕», «Понятно» и т.п.) не должен
+    // запускать жест свайпа-закрытия — иначе обычный клик «проглатывается»
+    // (см. onPointerEnd: короткий тап без движения ничего не делает, кроме
+    // возврата карточки на место) и кнопки визуально не реагируют. Жест
+    // остаётся только для пустых областей карточки.
+    if (e.target.closest('button, a, [data-action]')) return;
     if (bodyIsScrollable() && body.contains(e.target)) return;
     startY = e.clientY;
     dragging = true;
@@ -5023,21 +5243,21 @@ async function handleAction(action, value) {
 
     case 'use-geo-profile':
       return captureGeolocation();
+    case 'save-profile-district':
+      return saveProfileDistrict();
     case 'save-radius': {
       const user = currentUser();
       saveUser({ ...user, searchRadiusKm: Number(document.getElementById('field-radius').value || 3) });
       showToast('Радиус сохранён');
       return render();
     }
-    case 'set-skill-level':
-      state.newSkillLevel = Number(value);
+    case 'toggle-skill-picker':
+      // Открыт максимум один рейтинг за раз — клик по уже открытому навыку закрывает его.
+      state.openSkillPicker = state.openSkillPicker === value ? null : value;
       return render();
-    case 'add-skill': {
-      const cat = document.getElementById('field-skill-category').value;
-      const note = document.getElementById('field-skill-note').value.trim();
-      if (!note) return showToast('Опишите коротко навык');
-      if (!state.newSkillLevel) return showToast('Отметьте уровень владения — от 1 до 5 звёзд');
-      return addSkill(cat, note, state.newSkillLevel);
+    case 'set-skill-level': {
+      const [catId, levelStr] = value.split(':');
+      return setUserSkillLevel(catId, Number(levelStr));
     }
     case 'switch-demo-user': {
       state.currentUserId = document.getElementById('field-demo-user').value;
