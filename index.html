@@ -3719,11 +3719,14 @@ function captureGeolocation() {
  * кнопка «Обновить геопозицию», только без запроса геолокации браузера.
  * Если геокодер не настроен (ключа нет вовсе) — текст района сохраняется,
  * координаты остаются прежними, как и раньше (бонус просто не активен).
- * Но если геокодер НАСТРОЕН, а конкретный адрес распознать не вышло —
- * координаты не остаются молча прежними (это была бы неверная точка для
- * нового адреса), а явно сбрасываются в сентинел {0,0} (hasValidLocation):
- * человеку показывается предупреждение, а метка на карте в админке для
- * такого профиля просто не рисуется, пока адрес не переуточнят.
+ * Но если геокодер НАСТРОЕН, а введённый адрес распознать не вышло —
+ * сохранение теперь блокируется целиком (а не молча падает в сентинел
+ * {0,0}, как было раньше): нет отдельного ключа Геосаджеста с честным
+ * автодополнением по базе реальных адресов, поэтому единственная
+ * доступная проверка «адрес вообще существует» — это как раз попытка его
+ * геокодировать. Человеку показывается тост с просьбой уточнить адрес
+ * или выбрать вариант из подсказок (wireAddressSuggestions), а старые
+ * координаты профиля не трогаются, пока адрес не переуточнят.
  */
 async function saveProfileDistrict() {
   const input = document.getElementById('field-profile-district');
@@ -3739,27 +3742,34 @@ async function saveProfileDistrict() {
 
   const user = currentUser();
   let location = user.location;
-  let geoFailed = false;
   if (profileDistrictSelectedLocation) {
     // Адрес выбран из подсказки (wireAddressSuggestions) — координаты уже
     // точные, повторно геокодировать текст не нужно.
     location = profileDistrictSelectedLocation;
   } else if (isGeocoderConfigured()) {
+    let coords = null;
     try {
-      const coords = await geocodeAddressYandex(district);
-      location = coords || { lat: 0, lng: 0 };
-      geoFailed = !coords;
+      coords = await geocodeAddressYandex(district);
     } catch (err) {
       console.warn('[geo] прямое геокодирование адреса не удалось', err);
-      location = { lat: 0, lng: 0 };
-      geoFailed = true;
     }
+    if (!coords) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Сохранить';
+      }
+      showToast('Не удалось распознать такой адрес — выберите вариант из подсказок или уточните адрес');
+      return;
+    }
+    location = coords;
   }
+  // Если геокодер вовсе не настроен (нет ключа) — строгую проверку включить
+  // не можем, координаты остаются прежними, как и раньше.
 
   saveUser({ ...user, district, location });
   profileDistrictValue = district;
   profileDistrictSelectedLocation = null;
-  showToast(geoFailed ? 'Район сохранён, но точку на карте определить не удалось — проверьте адрес' : 'Район сохранён');
+  showToast('Район сохранён');
   render();
 }
 
@@ -5349,28 +5359,44 @@ function wireEvents() {
         showToast('Дата не указана — так сложнее подобрать мастера, но заявку можно отправить');
       }
 
+      // composerExactLocation заполняется кнопкой «геолокация»
+      // (captureComposerAddressGeo) или выбором подсказки адреса
+      // (wireAddressSuggestions). Если адрес вписан вручную и точных
+      // координат ещё нет — пробуем прямое геокодирование, тем же
+      // способом, что и адрес мастера в профиле (geocodeAddressYandex).
+      // Отдельного ключа Геосаджеста с честным автодополнением по базе
+      // реальных адресов у нас нет, поэтому единственная доступная
+      // проверка «адрес вообще существует» — это попытка его
+      // геокодировать: если она не удалась, заявка теперь НЕ отправляется
+      // (раньше в этом случае всё равно уходила с сентинелом {0,0} и
+      // предупреждением на экране проверки — теперь строже).
+      let exactLocation = composerExactLocation;
+      if (!hasValidLocation(exactLocation)) {
+        if (isGeocoderConfigured()) {
+          composerSend.disabled = true;
+          try {
+            exactLocation = await geocodeAddressYandex(address);
+          } catch (err) {
+            console.warn('[geo] геокодирование адреса заявки не удалось', err);
+            exactLocation = null;
+          } finally {
+            composerSend.disabled = false;
+          }
+          if (!hasValidLocation(exactLocation)) {
+            showToast('Не удалось распознать такой адрес — выберите вариант из подсказок или уточните адрес');
+            return;
+          }
+        } else {
+          // Геокодер вовсе не настроен (нет ключа) — строгую проверку
+          // включить не можем, пропускаем заявку без проверенных координат,
+          // как и раньше.
+          exactLocation = null;
+        }
+      }
+
       const atts = pendingAttachments;
       pendingAttachments = [];
       composerDescriptionValue = '';
-
-      // composerExactLocation заполняется только кнопкой «геолокация»
-      // (captureComposerAddressGeo). Если адрес вписан вручную — точных
-      // координат ещё нет, и раньше exactLocation заказа молча откатывался
-      // на user.location/CENTER (см. startQuickDraft), из-за чего точка на
-      // карте у мастеров могла не совпадать с вписанным текстом адреса.
-      // Теперь для ручного текста тоже пробуем прямое геокодирование —
-      // тем же способом, что и адрес мастера в профиле (geocodeAddressYandex).
-      let exactLocation = composerExactLocation;
-      if (!exactLocation) {
-        composerSend.disabled = true;
-        try {
-          exactLocation = await geocodeAddressYandex(address);
-        } catch (err) {
-          console.warn('[geo] геокодирование адреса заявки не удалось', err);
-        } finally {
-          composerSend.disabled = false;
-        }
-      }
 
       // Телефон (для новых пользователей) запрашивается позже, на экране
       // подтверждения заявки — см. renderCompose()/case 'publish-draft'.
