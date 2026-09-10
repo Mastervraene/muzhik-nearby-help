@@ -168,8 +168,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.dot.master { background: #16a34a; }
-.dot.order { background: #2563eb; }
+.dot.order { background: #e53935; }
+.legend-logo { width: 16px; height: 16px; display: inline-block; vertical-align: middle; }
 .map-note {
   background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; padding: 10px 12px;
   border-radius: 10px; margin-bottom: 12px;
@@ -254,7 +254,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
   <div class="tab-panel" id="panel-map">
     <div class="map-legend">
-      <span><i class="dot master"></i> Мастера</span>
+      <span><img class="legend-logo" src="logo.png" alt="" /> Мастера</span>
       <span><i class="dot order"></i> Заказы</span>
     </div>
     <div id="map-note-slot"></div>
@@ -1078,19 +1078,31 @@ function fillMapPoints() {
   let pointCount = 0;
   let singlePoint = null;
 
+  // Метка мастера — логотип сайта (щит с «М») вместо стандартной точки:
+  // свой узнаваемый значок вместо предустановленного преcета Яндекс.Карт.
   allUsers
     .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
     .forEach((u) => {
       const coords = [u.location.lat, u.location.lng];
       pointCount++;
       singlePoint = coords;
-      const pm = new window.ymaps.Placemark(coords, {
-        balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
-        balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км`,
-      }, { preset: 'islands#greenDotIcon' });
+      const pm = new window.ymaps.Placemark(
+        coords,
+        {
+          balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
+          balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км`,
+        },
+        {
+          iconLayout: 'default#image',
+          iconImageHref: 'logo.png',
+          iconImageSize: [32, 32],
+          iconImageOffset: [-16, -16], // логотип симметричный — центрируем прямо на координате, не как «булавку»
+        }
+      );
       map.geoObjects.add(pm);
     });
 
+  // Метка заказа — красная точка (было синей).
   allOrders
     .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
     .forEach((o) => {
@@ -1100,7 +1112,7 @@ function fillMapPoints() {
       const pm = new window.ymaps.Placemark(coords, {
         balloonContentHeader: escapeHtml(o.title || 'Заказ'),
         balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
-      }, { preset: 'islands#blueDotIcon' });
+      }, { preset: 'islands#redDotIcon' });
       map.geoObjects.add(pm);
     });
 
