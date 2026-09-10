@@ -3798,12 +3798,29 @@ async function reverseGeocodeYandex(lat, lng) {
   return found?.metaDataProperty?.GeocoderMetaData?.text || found?.name || null;
 }
 
+// Сервис — гиперлокальный, только Москва и область (профили мастеров и
+// подбор заказов рядом строятся вокруг CENTER). Геокодер Яндекса при этом
+// НЕ отказывает на бессмысленный текст — он нечётко ищет ближайшее по
+// буквам совпадение по всей базе, вплоть до других регионов и стран
+// (проверено вживую: «Тыртыртыр несуществующая улица дом 999» подобрал
+// посёлок Тыр в Хабаровском крае, в 6000+ км от Москвы, с precision:
+// "other" — это самый низкий уровень уверенности геокодера). Поэтому
+// прямого geocode-запроса с непустым результатом недостаточно, чтобы
+// считать адрес существующим — дополнительно отсекаем откровенно левые
+// совпадения по расстоянию от Москвы и по precision.
+const MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM = 120; // Москва + область с запасом
+/** Совпадения с такой precision — самый низкий уровень уверенности геокодера, фактически «не нашли, но что-то вернуть надо». */
+const GEOCODER_JUNK_PRECISION = new Set(['other']);
+
 /**
  * Прямое геокодирование: текстовый адрес → координаты. Используется, когда
  * человек вписывает адрес руками (без геолокации браузера) — например, в
  * профиле мастера (см. saveProfileDistrict), чтобы координаты для карты в
- * админке обновлялись вместе с текстом, а не только текст.
- * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён или адрес не распознан
+ * админке обновлялись вместе с текстом, а не только текст. Явно
+ * отбрасывает нечёткие совпадения (см. MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM/
+ * GEOCODER_JUNK_PRECISION выше) — иначе бессмысленный ввод мог бы пройти
+ * проверку и заявка/профиль сохранились бы с координатами не в Москве.
+ * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён, адрес не распознан или совпадение похоже на мусорное
  */
 async function geocodeAddressYandex(addressText) {
   const env = (typeof window !== 'undefined' && window.__ENV__) || {};
@@ -3818,6 +3835,11 @@ async function geocodeAddressYandex(addressText) {
   if (!pos) return null;
   const [lng, lat] = pos.split(' ').map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const precision = found?.metaDataProperty?.GeocoderMetaData?.precision;
+  if (precision && GEOCODER_JUNK_PRECISION.has(precision)) return null;
+  if (distanceKm(CENTER, { lat, lng }) > MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM) return null;
+
   return { lat, lng };
 }
 
@@ -3849,6 +3871,12 @@ async function searchAddressSuggestionsYandex(query) {
     if (!text || !pos || seen.has(text)) continue;
     const [lng, lat] = pos.split(' ').map(Number);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    // Те же фильтры, что и в geocodeAddressYandex — иначе в подсказках
+    // может мелькнуть нечёткое совпадение вроде посёлка в другом регионе
+    // (см. MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM/GEOCODER_JUNK_PRECISION выше).
+    const precision = geo?.metaDataProperty?.GeocoderMetaData?.precision;
+    if (precision && GEOCODER_JUNK_PRECISION.has(precision)) continue;
+    if (distanceKm(CENTER, { lat, lng }) > MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM) continue;
     seen.add(text);
     out.push({ text, lat, lng });
   }
