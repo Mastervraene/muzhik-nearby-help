@@ -91,6 +91,7 @@
   --accent: #2563eb;
   --accent-strong: #1d4ed8;
   --accent-soft: #eff6ff;
+  --accent-muted: #a8c8fb;
   --radius: 20px;
   --radius-sm: 14px;
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
@@ -478,13 +479,27 @@ body {
   display: block;
 }
 
+/*
+ * Три градации цвета кнопки отправки заявки (composer-send), вместо
+ * жёсткого disabled — так нажатие всегда что-то отвечает, а не просто
+ * молчит, если человек пытается отправить раньше времени:
+ *   1. .send-button (без модификатора) — ничего не заполнено, бесцветная;
+ *   2. .send-button.grade-2 — текст задачи есть, адреса ещё нет;
+ *   3. .send-button.grade-3 — и текст, и адрес заполнены, готово к отправке.
+ * Классы навешивает updateComposerSendState().
+ */
 .send-button {
-  background: var(--accent);
+  background: var(--gray-300);
   color: var(--gray-0);
+  transition: background-color 0.15s ease;
 }
 
-.send-button:disabled {
-  background: var(--gray-300);
+.send-button.grade-2 {
+  background: var(--accent-muted);
+}
+
+.send-button.grade-3 {
+  background: var(--accent);
 }
 
 .tool-button.recording {
@@ -4135,7 +4150,7 @@ function renderHome() {
           </div>
           <div class="composer-tools">
             <button class="tool-button" data-action="voice-toggle" title="Голосовое сообщение">${ICON_MIC}</button>
-            <button class="send-button" id="composer-send" disabled>${ICON_ARROW_UP}</button>
+            <button type="button" class="send-button" id="composer-send">${ICON_ARROW_UP}</button>
           </div>
         </div>
       </div>
@@ -4962,13 +4977,24 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
   if (onDone) onDone();
 }
 
+/**
+ * Три градации цвета кнопки отправки (см. .send-button в CSS), вместо
+ * жёсткого disabled — кнопка остаётся нажимаемой всегда, а не заполненные
+ * поля объясняются сообщением по клику (см. composerSend click-обработчик
+ * в wireEvents), а не молчаливым бездействием кнопки.
+ */
 function updateComposerSendState() {
   const composerInput = document.getElementById('composer-input');
   const composerSend = document.getElementById('composer-send');
   if (!composerSend) return;
   const textOk = Boolean(composerInput && composerInput.value.trim());
   const addressOk = Boolean(composerAddressValue.trim());
-  composerSend.disabled = !(textOk && addressOk);
+  composerSend.classList.remove('grade-2', 'grade-3');
+  if (textOk && addressOk) {
+    composerSend.classList.add('grade-3');
+  } else if (textOk) {
+    composerSend.classList.add('grade-2');
+  }
 }
 
 const COMPOSER_TEXTAREA_MAX_HEIGHT = 160;
@@ -5071,7 +5097,24 @@ function wireEvents() {
     composerSend.addEventListener('click', async () => {
       const text = composerInput.value.trim();
       const address = composerAddressValue.trim();
-      if (!text || !address) return;
+      // Кнопка больше не disabled жёстко (см. updateComposerSendState) — она
+      // нажимаема всегда, три градации цвета лишь подсказывают готовность.
+      // Незаполненные обязательные поля объясняются тостом по клику, а не
+      // молчаливым бездействием кнопки.
+      if (!text) {
+        showToast('Опишите, что нужно сделать');
+        return;
+      }
+      if (!address) {
+        showToast('Укажите адрес, чтобы отправить заявку');
+        return;
+      }
+      // Дата — необязательна (в отличие от адреса): без неё заявку всё
+      // равно можно отправить, просто предупреждаем, что так сложнее
+      // подобрать мастера на конкретный день.
+      if (!composerDesiredDate) {
+        showToast('Дата не указана — так сложнее подобрать мастера, но заявку можно отправить');
+      }
 
       const atts = pendingAttachments;
       pendingAttachments = [];
