@@ -524,6 +524,56 @@ body {
   display: none;
 }
 
+.composer-sanitize-hint {
+  font-size: 11.5px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+.composer-sanitize-hint:empty {
+  display: none;
+}
+
+/* Выпадающий список подсказок реального адреса (Яндекс.Геокодер) —
+   добавляется прямо под текстовым полем адреса, без полного render(),
+   чтобы не терять фокус/курсор во время набора (см. wireAddressSuggestions). */
+.address-suggest-list {
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  overflow: hidden;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.address-suggest-list:empty {
+  display: none;
+  border: none;
+}
+
+.address-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--gray-100);
+  background: var(--gray-0);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gray-800);
+  cursor: pointer;
+}
+
+.address-suggest-item:last-child {
+  border-bottom: none;
+}
+
+.address-suggest-item:hover,
+.address-suggest-item:active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .msg.assistant .assistant-suggestion-text {
   display: block;
   margin-bottom: 6px;
@@ -3690,7 +3740,11 @@ async function saveProfileDistrict() {
   const user = currentUser();
   let location = user.location;
   let geoFailed = false;
-  if (isGeocoderConfigured()) {
+  if (profileDistrictSelectedLocation) {
+    // Адрес выбран из подсказки (wireAddressSuggestions) — координаты уже
+    // точные, повторно геокодировать текст не нужно.
+    location = profileDistrictSelectedLocation;
+  } else if (isGeocoderConfigured()) {
     try {
       const coords = await geocodeAddressYandex(district);
       location = coords || { lat: 0, lng: 0 };
@@ -3704,6 +3758,7 @@ async function saveProfileDistrict() {
 
   saveUser({ ...user, district, location });
   profileDistrictValue = district;
+  profileDistrictSelectedLocation = null;
   showToast(geoFailed ? 'Район сохранён, но точку на карте определить не удалось — проверьте адрес' : 'Район сохранён');
   render();
 }
@@ -3754,6 +3809,111 @@ async function geocodeAddressYandex(addressText) {
   const [lng, lat] = pos.split(' ').map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   return { lat, lng };
+}
+
+/**
+ * Подсказки реального адреса по мере ввода — чтобы в заявку/профиль нельзя
+ * было ввести несуществующий адрес. У нас нет отдельного платного ключа для
+ * API Геосаджеста Яндекса (suggest-maps.yandex.ru — это отдельный продукт,
+ * не работает с обычным ключом геокодера, проверено), поэтому вместо него
+ * переиспользуем тот же Геокодер (geocodeAddressYandex выше) с results=5 —
+ * по неполному адресу он и так возвращает несколько похожих реальных
+ * вариантов, этого достаточно для подсказок.
+ * @returns {Promise<Array<{text:string, lat:number, lng:number}>>}
+ */
+async function searchAddressSuggestionsYandex(query) {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  const apiKey = env.YANDEX_GEOCODER_API_KEY;
+  if (!apiKey) return [];
+  const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${encodeURIComponent(apiKey)}&geocode=${encodeURIComponent(query)}&format=json&results=5`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Yandex geocoder ${res.status}`);
+  const data = await res.json();
+  const members = data?.response?.GeoObjectCollection?.featureMember || [];
+  const seen = new Set();
+  const out = [];
+  for (const member of members) {
+    const geo = member?.GeoObject;
+    const text = geo?.metaDataProperty?.GeocoderMetaData?.text;
+    const pos = geo?.Point?.pos; // формат "долгота широта"
+    if (!text || !pos || seen.has(text)) continue;
+    const [lng, lat] = pos.split(' ').map(Number);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    seen.add(text);
+    out.push({ text, lat, lng });
+  }
+  return out;
+}
+
+/**
+ * Подключает выпадающий список подсказок адреса к текстовому полю: с
+ * задержкой (дебаунс) ищет похожие реальные адреса по мере ввода и
+ * подставляет выбранный вариант по клику вместе с его координатами.
+ * Работает через прямые DOM-манипуляции, а не через полный render() —
+ * иначе поле теряло бы фокус на каждую подсказку (см. общий паттерн
+ * composer-assistant-hint). Если геокодер не настроен (YANDEX_GEOCODER_API_KEY
+ * пуст) — подсказки просто не показываются, поле остаётся обычным текстовым.
+ * @param {HTMLInputElement} input
+ * @param {HTMLElement} listEl
+ * @param {(item: {text:string, lat:number, lng:number}) => void} onSelect
+ */
+function wireAddressSuggestions(input, listEl, onSelect) {
+  if (!input || !listEl) return;
+  let timer = null;
+  let requestId = 0;
+
+  function hideList() {
+    listEl.innerHTML = '';
+  }
+
+  function renderList(items) {
+    if (!items.length) {
+      hideList();
+      return;
+    }
+    listEl.innerHTML = items
+      .map((item, i) => `<button type="button" class="address-suggest-item" data-suggest-index="${i}">${escapeHtml(item.text)}</button>`)
+      .join('');
+    listEl.querySelectorAll('.address-suggest-item').forEach((btn) => {
+      // mousedown, а не click — срабатывает раньше, чем blur поля успеет
+      // скрыть список (см. обработчик blur ниже).
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const item = items[Number(btn.dataset.suggestIndex)];
+        if (!item) return;
+        input.value = item.text;
+        hideList();
+        onSelect(item);
+      });
+    });
+  }
+
+  input.addEventListener('input', () => {
+    if (timer) clearTimeout(timer);
+    const query = input.value.trim();
+    if (!isGeocoderConfigured() || query.length < 5) {
+      hideList();
+      return;
+    }
+    const myRequestId = ++requestId;
+    timer = setTimeout(async () => {
+      try {
+        const items = await searchAddressSuggestionsYandex(query);
+        if (myRequestId !== requestId) return; // поле уже изменилось — ответ устарел
+        renderList(items);
+      } catch (err) {
+        console.warn('[geo] подсказки адреса не удалось получить', err);
+      }
+    }, 400);
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(hideList, 150);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideList();
+  });
 }
 
 function captureComposerAddressGeo() {
@@ -3973,7 +4133,7 @@ function applyAssistantNormalizedText() {
   const input = document.getElementById('composer-input');
   if (!input || !lastAssistantInterpretation || !lastAssistantInterpretation.normalizedText) return;
   input.value = lastAssistantInterpretation.normalizedText;
-  composerDescriptionValue = input.value;
+  composerDescriptionValue = sanitizeComposerTextarea(input);
   updateComposerSendState();
   autosizeComposerTextarea(input);
   updateHomeHeroVisibility(input);
@@ -3995,6 +4155,50 @@ function el(html) {
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---------------------------------------------------------------------
+// Фильтр символов в описании задачи (composer-input): разрешены только
+// буквы (рус/лат), цифры, пробелы/переносы строк и обычные знаки
+// препинания — символы вроде <, >, {, }, `, которые в принципе могли бы
+// что-то сломать при выводе, вырезаются прямо во время набора. Это
+// дополнительная страховка поверх escapeHtml() (который и так экранирует
+// весь пользовательский текст при отрисовке) — двойная защита не помешает.
+// ---------------------------------------------------------------------
+const TASK_TEXT_DISALLOWED_CHARS = /[^a-zA-Zа-яёА-ЯЁ0-9\s.,!?:;()'"«»\-–—/№#+%&*@]/g;
+let sanitizeHintTimer = null;
+
+/**
+ * Убирает запрещённые символы из значения textarea, сохраняя позицию
+ * курсора (иначе после каждого «плохого» символа курсор прыгал бы в конец
+ * поля). Показывает короткую подсказку, если что-то было вырезано.
+ * @returns {string} очищенное значение
+ */
+function sanitizeComposerTextarea(textarea) {
+  const before = textarea.value;
+  const cleaned = before.replace(TASK_TEXT_DISALLOWED_CHARS, '');
+  if (cleaned === before) return before;
+
+  const cursor = textarea.selectionStart ?? before.length;
+  const beforeCursor = before.slice(0, cursor);
+  const removedBeforeCursor = beforeCursor.length - beforeCursor.replace(TASK_TEXT_DISALLOWED_CHARS, '').length;
+  textarea.value = cleaned;
+  const newCursor = Math.max(0, cursor - removedBeforeCursor);
+  try {
+    textarea.setSelectionRange(newCursor, newCursor);
+  } catch (err) {
+    // не критично, если конкретный тип поля не поддерживает setSelectionRange
+  }
+
+  const hintEl = document.getElementById('composer-sanitize-hint');
+  if (hintEl) {
+    hintEl.textContent = 'Некоторые символы убраны — доступны буквы, цифры и обычные знаки препинания';
+    clearTimeout(sanitizeHintTimer);
+    sanitizeHintTimer = setTimeout(() => {
+      hintEl.textContent = '';
+    }, 2500);
+  }
+  return cleaned;
 }
 
 // Иконки для нижнего ряда composer'а — svg вместо эмодзи/текстовых глифов,
@@ -4104,12 +4308,14 @@ function renderHome() {
       }
       <div class="composer-card">
         <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото, укажите адрес и удобное время." rows="1">${escapeHtml(composerDescriptionValue)}</textarea>
+        <div id="composer-sanitize-hint" class="composer-sanitize-hint"></div>
         <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
           composerExpandedField === 'address'
             ? `
         <div class="composer-field-inline">
-          <input type="text" id="composer-address" placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44" value="${escapeHtml(composerAddressValue)}" />
+          <input type="text" id="composer-address" placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44" value="${escapeHtml(composerAddressValue)}" autocomplete="off" />
+          <div id="composer-address-suggestions" class="address-suggest-list"></div>
           <button type="button" class="secondary-button composer-geo-button" id="composer-geo-btn" data-action="capture-composer-geo" style="margin-top:0;">${ICON_PIN}<span>Определить автоматически</span></button>
           <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
         </div>
@@ -4446,7 +4652,8 @@ function renderProfile() {
         <p><b>${escapeHtml(user.displayName)}</b></p>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
-        <input type="text" id="field-profile-district" placeholder="Например: г. Москва, район Аэропорт" value="${escapeHtml(profileDistrictValue)}" oninput="profileDistrictValue=this.value;" />
+        <input type="text" id="field-profile-district" placeholder="Например: г. Москва, район Аэропорт" value="${escapeHtml(profileDistrictValue)}" autocomplete="off" />
+        <div id="profile-district-suggestions" class="address-suggest-list"></div>
         <div class="composer-field-inline" style="margin-top:8px;">
           <button class="secondary-button" id="profile-district-save-btn" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
           <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Обновить геопозицию</span></button>
@@ -4688,6 +4895,11 @@ let composerAddressValue = '';
 // state, чтобы повторный render() (например, после showToast) не стирал
 // то, что человек уже успел вписать руками.
 let profileDistrictValue = '';
+// Координаты, выбранные явно из подсказки адреса (wireAddressSuggestions)
+// в поле профиля — если заданы, saveProfileDistrict() использует их
+// напрямую вместо повторного геокодирования. Сбрасываются при ручном
+// редактировании текста после выбора (см. wireEvents).
+let profileDistrictSelectedLocation = null;
 // То же самое для полей «Имя»/«Телефон» на экране подтверждения заявки
 // (renderCompose → quickReview): без этого повторный render() посреди
 // набора текста (например, из-за showToast() при попытке приложить больше
@@ -5035,6 +5247,27 @@ function wireEvents() {
       composerExactLocation = null;
       updateComposerSendState();
     });
+    // Подсказки реального адреса (см. wireAddressSuggestions/
+    // searchAddressSuggestionsYandex выше) — выбор из списка сразу
+    // проставляет проверенные координаты, минуя повторное геокодирование.
+    wireAddressSuggestions(composerAddress, document.getElementById('composer-address-suggestions'), (item) => {
+      composerAddressValue = item.text;
+      composerExactLocation = { lat: item.lat, lng: item.lng };
+      updateComposerSendState();
+    });
+  }
+  const profileDistrictInput = document.getElementById('field-profile-district');
+  if (profileDistrictInput) {
+    profileDistrictInput.addEventListener('input', () => {
+      profileDistrictValue = profileDistrictInput.value;
+      // Ручное редактирование после выбора подсказки — координаты из
+      // подсказки больше не гарантированно соответствуют тексту.
+      profileDistrictSelectedLocation = null;
+    });
+    wireAddressSuggestions(profileDistrictInput, document.getElementById('profile-district-suggestions'), (item) => {
+      profileDistrictValue = item.text;
+      profileDistrictSelectedLocation = { lat: item.lat, lng: item.lng };
+    });
   }
   if (composerDate) {
     composerDate.addEventListener('change', () => {
@@ -5065,7 +5298,7 @@ function wireEvents() {
     autosizeComposerTextarea(composerInput);
     updateHomeHeroVisibility(composerInput);
     composerInput.addEventListener('input', () => {
-      composerDescriptionValue = composerInput.value;
+      composerDescriptionValue = sanitizeComposerTextarea(composerInput);
       updateComposerSendState();
       autosizeComposerTextarea(composerInput);
       updateHomeHeroVisibility(composerInput);
