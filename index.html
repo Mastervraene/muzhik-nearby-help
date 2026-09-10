@@ -3617,14 +3617,41 @@ function captureGeolocation() {
   );
 }
 
-/** Заказчик/мастер вписал район руками (без геолокации) и нажал «Сохранить». */
-function saveProfileDistrict() {
+/**
+ * Заказчик/мастер вписал район руками (без геолокации) и нажал «Сохранить».
+ *
+ * Раньше это сохраняло только текст района, а координаты (user.location)
+ * не трогало — из-за этого метка мастера на карте в админке не двигалась,
+ * даже если человек честно обновил адрес в профиле: карта строится по
+ * координатам, а не по тексту. Теперь при сохранении пробуем ещё и
+ * прямое геокодирование введённого адреса через Яндекс.Карты, чтобы
+ * координаты обновились вместе с текстом — так же, как их обновляет
+ * кнопка «Обновить геопозицию», только без запроса геолокации браузера.
+ * Если геокодер недоступен/не настроен или адрес не распознан — текст
+ * района всё равно сохраняется, просто координаты остаются прежними.
+ */
+async function saveProfileDistrict() {
   const input = document.getElementById('field-profile-district');
   if (!input) return;
   const district = input.value.trim();
   if (!district) return showToast('Введите район или адрес');
+
+  const btn = document.getElementById('profile-district-save-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Сохраняем…';
+  }
+
   const user = currentUser();
-  saveUser({ ...user, district });
+  let location = user.location;
+  try {
+    const coords = await geocodeAddressYandex(district);
+    if (coords) location = coords;
+  } catch (err) {
+    console.warn('[geo] прямое геокодирование адреса не удалось', err);
+  }
+
+  saveUser({ ...user, district, location });
   profileDistrictValue = district;
   showToast('Район сохранён');
   render();
@@ -3648,6 +3675,29 @@ async function reverseGeocodeYandex(lat, lng) {
   const data = await res.json();
   const found = data?.response?.GeoObjectCollection?.featureMember?.[0]?.GeoObject;
   return found?.metaDataProperty?.GeocoderMetaData?.text || found?.name || null;
+}
+
+/**
+ * Прямое геокодирование: текстовый адрес → координаты. Используется, когда
+ * человек вписывает адрес руками (без геолокации браузера) — например, в
+ * профиле мастера (см. saveProfileDistrict), чтобы координаты для карты в
+ * админке обновлялись вместе с текстом, а не только текст.
+ * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён или адрес не распознан
+ */
+async function geocodeAddressYandex(addressText) {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  const apiKey = env.YANDEX_GEOCODER_API_KEY;
+  if (!apiKey) return null;
+  const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${encodeURIComponent(apiKey)}&geocode=${encodeURIComponent(addressText)}&format=json&results=1`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Yandex geocoder ${res.status}`);
+  const data = await res.json();
+  const found = data?.response?.GeoObjectCollection?.featureMember?.[0]?.GeoObject;
+  const pos = found?.Point?.pos; // формат "долгота широта"
+  if (!pos) return null;
+  const [lng, lat] = pos.split(' ').map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
 }
 
 function captureComposerAddressGeo() {
@@ -4337,7 +4387,7 @@ function renderProfile() {
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
         <input type="text" id="field-profile-district" placeholder="Например: г. Москва, район Аэропорт" value="${escapeHtml(profileDistrictValue)}" oninput="profileDistrictValue=this.value;" />
         <div class="composer-field-inline" style="margin-top:8px;">
-          <button class="secondary-button" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
+          <button class="secondary-button" id="profile-district-save-btn" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
           <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Обновить геопозицию</span></button>
         </div>
         <p class="order-meta" style="margin-top:8px;">Можно вписать район вручную и сохранить, либо определить его автоматически по геолокации браузера.</p>
