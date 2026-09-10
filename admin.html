@@ -1102,17 +1102,32 @@ function fillMapPoints() {
       map.geoObjects.add(pm);
     });
 
-  // Метка заказа — красная точка (было синей).
+  // Метка заказа — свой PNG (красный кружок), а не пресет Яндекса. Пресет
+  // 'islands#redDotIcon' на практике рисовался обычной «булавкой»-каплей,
+  // а не кружком — на своей картинке форма гарантирована и не зависит от
+  // того, что именно Яндекс.Карты решат отрисовать под этим именем.
+  // .filter() ниже — тот же самый «пустой» сентинел (0,0), что и у
+  // мастеров: заказ, для которого адрес не удалось определить на карте
+  // (см. hasValidLocation в index.html), сюда просто не попадёт.
   allOrders
     .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
     .forEach((o) => {
       const coords = [o.exactLocation.lat, o.exactLocation.lng];
       pointCount++;
       singlePoint = coords;
-      const pm = new window.ymaps.Placemark(coords, {
-        balloonContentHeader: escapeHtml(o.title || 'Заказ'),
-        balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
-      }, { preset: 'islands#redDotIcon' });
+      const pm = new window.ymaps.Placemark(
+        coords,
+        {
+          balloonContentHeader: escapeHtml(o.title || 'Заказ'),
+          balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
+        },
+        {
+          iconLayout: 'default#image',
+          iconImageHref: 'red-dot.png',
+          iconImageSize: [22, 22],
+          iconImageOffset: [-11, -11], // кружок симметричный — центрируем прямо на координате
+        }
+      );
       map.geoObjects.add(pm);
     });
 

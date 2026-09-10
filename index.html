@@ -1317,6 +1317,20 @@ function compareBudgetToEstimate(customerBudget, estimate) {
  * расстояния — так поиск остаётся быстрым при большой базе.
  */
 
+/**
+ * lat/lng === 0 — наш «пустой» сентинел для точки на карте (реальный адрес
+ * в Москве никогда не попадёт ровно в (0,0), это Гвинейский залив), а не
+ * настоящая координата. Колонки exact_lat/exact_lng и lat/lng в БД — NOT
+ * NULL, поэтому null туда не запишешь; вместо null-проверки используем
+ * этот сентинел везде, где раньше подставлялся CENTER/старая точка —
+ * см. startQuickDraft, saveProfileDistrict. Отсутствие валидной точки — это
+ * сигнал не рисовать метку на карте (см. fillMapPoints в admin.html) и
+ * показать предупреждение в UI, а не подставлять случайную координату.
+ */
+function hasValidLocation(loc) {
+  return Boolean(loc && loc.lat && loc.lng);
+}
+
 const EARTH_RADIUS_KM = 6371;
 
 /**
@@ -2033,8 +2047,12 @@ function orderToDbOrder(order) {
     attachments: order.attachments,
     has_voice_transcript: order.hasVoiceTranscript,
     voice_transcript: order.voiceTranscript,
-    exact_lat: order.exactLocation?.lat,
-    exact_lng: order.exactLocation?.lng,
+    // exact_lat/exact_lng — колонки NOT NULL в Supabase, null туда не
+    // запишется (проверено). ?? 0 — подстраховка на случай, если
+    // exactLocation вдруг не задан: 0,0 — тот же сентинел «адрес не
+    // определён», что и hasValidLocation() ожидает при чтении обратно.
+    exact_lat: order.exactLocation?.lat ?? 0,
+    exact_lng: order.exactLocation?.lng ?? 0,
     district: order.district,
     house_number_public: order.houseNumberPublic || null,
     full_address: order.fullAddress || null,
@@ -2915,7 +2933,10 @@ async function ensureUserByPhone(phone, extra = {}) {
     displayName: 'Гость',
     phone: canonicalPhone,
     phoneVerified: false,
-    location: extra.location || CENTER,
+    // CENTER раньше маскировал «адреса ещё нет» под настоящую точку в
+    // центре города — теперь честный сентинел {0,0} (см. hasValidLocation):
+    // и в профиле, и на карте админки будет видно, что место не определено.
+    location: hasValidLocation(extra.location) ? extra.location : { lat: 0, lng: 0 },
     district: extra.district || '',
     searchRadiusKm: 3,
     skills: [],
@@ -3189,10 +3210,14 @@ function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredT
     houseNumberPublic: '',
     fullAddress: address || '',
     useMyLocation: true,
-    // Точный адрес из композера (геолокация + Яндекс.Геокодер) в приоритете
-    // над местоположением профиля — так подбор мастеров считает расстояние
-    // от реального адреса заявки, а не от прежнего/дефолтного местоположения.
-    exactLocation: exactLocation || user?.location || CENTER,
+    // Точный адрес из композера (геолокация + Яндекс.Геокодер). Раньше при
+    // неудаче тут тихо подставлялись user.location или CENTER — заказ
+    // выглядел сохранённым, но точка на карте могла быть где угодно, вплоть
+    // до чужого района. Теперь при неудаче — явный «пустой» сентинел
+    // (hasValidLocation), а не угаданная координата: предупреждение
+    // покажется в отзыве заявки и в карточке заказа, а метка на карте в
+    // админке для такого заказа просто не появится (см. hasValidLocation).
+    exactLocation: hasValidLocation(exactLocation) ? exactLocation : { lat: 0, lng: 0 },
     // Храним «сырую» ISO-дату (yyyy-mm-dd), а не отформатированную метку —
     // именно она пойдёт в реальную колонку orders.desired_date (тип date).
     // Человекочитаемое форматирование делается только на отображении.
@@ -3627,8 +3652,13 @@ function captureGeolocation() {
  * прямое геокодирование введённого адреса через Яндекс.Карты, чтобы
  * координаты обновились вместе с текстом — так же, как их обновляет
  * кнопка «Обновить геопозицию», только без запроса геолокации браузера.
- * Если геокодер недоступен/не настроен или адрес не распознан — текст
- * района всё равно сохраняется, просто координаты остаются прежними.
+ * Если геокодер не настроен (ключа нет вовсе) — текст района сохраняется,
+ * координаты остаются прежними, как и раньше (бонус просто не активен).
+ * Но если геокодер НАСТРОЕН, а конкретный адрес распознать не вышло —
+ * координаты не остаются молча прежними (это была бы неверная точка для
+ * нового адреса), а явно сбрасываются в сентинел {0,0} (hasValidLocation):
+ * человеку показывается предупреждение, а метка на карте в админке для
+ * такого профиля просто не рисуется, пока адрес не переуточнят.
  */
 async function saveProfileDistrict() {
   const input = document.getElementById('field-profile-district');
@@ -3644,16 +3674,22 @@ async function saveProfileDistrict() {
 
   const user = currentUser();
   let location = user.location;
-  try {
-    const coords = await geocodeAddressYandex(district);
-    if (coords) location = coords;
-  } catch (err) {
-    console.warn('[geo] прямое геокодирование адреса не удалось', err);
+  let geoFailed = false;
+  if (isGeocoderConfigured()) {
+    try {
+      const coords = await geocodeAddressYandex(district);
+      location = coords || { lat: 0, lng: 0 };
+      geoFailed = !coords;
+    } catch (err) {
+      console.warn('[geo] прямое геокодирование адреса не удалось', err);
+      location = { lat: 0, lng: 0 };
+      geoFailed = true;
+    }
   }
 
   saveUser({ ...user, district, location });
   profileDistrictValue = district;
-  showToast('Район сохранён');
+  showToast(geoFailed ? 'Район сохранён, но точку на карте определить не удалось — проверьте адрес' : 'Район сохранён');
   render();
 }
 
@@ -3663,6 +3699,11 @@ async function saveProfileDistrict() {
 // подключён (YANDEX_GEOCODER_API_KEY пуст) или запрос не удался, поле
 // адреса всё равно можно заполнить руками — форма ничего не теряет.
 // ---------------------------------------------------------------------
+
+function isGeocoderConfigured() {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  return Boolean(env.YANDEX_GEOCODER_API_KEY);
+}
 
 /** @returns {Promise<string|null>} человекочитаемый адрес либо null, если ключ не подключён */
 async function reverseGeocodeYandex(lat, lng) {
@@ -4120,7 +4161,7 @@ function orderCardHtml(order, { viewer }) {
   const dist =
     typeof order.distanceKm === 'number'
       ? order.distanceKm.toFixed(1)
-      : order.exactLocation && currentUser()
+      : hasValidLocation(order.exactLocation) && currentUser()
       ? distanceKm(currentUser().location, order.exactLocation).toFixed(1)
       : null;
   return `
@@ -4141,6 +4182,7 @@ function orderCardHtml(order, { viewer }) {
           ? `<div class="order-warning">Прецедент: цена согласовывается сторонами</div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
       }
+      ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
       ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
     </div>
   `;
@@ -4163,6 +4205,7 @@ function renderOrders() {
           o.status === 'searching' &&
           o.customerId !== state.currentUserId &&
           user.skills.some((s) => s.categoryId === o.categoryId) &&
+          hasValidLocation(o.exactLocation) &&
           distanceKm(user.location, o.exactLocation) <= (o.searchRadiusKm || user.searchRadiusKm || 3)
       );
   const assignedToMe = getOrders().filter(
@@ -4208,6 +4251,7 @@ function renderCompose() {
             : `<p>Обычно такая задача стоит примерно <b>${d.estimate.min}–${d.estimate.max} ₽</b>.<small>${d.estimate.factors.join(', ') || 'Базовая оценка без надбавок'}</small></p>`
         }
         ${d.riskWarning ? `<div class="order-warning">${escapeHtml(d.riskWarning)}</div>` : ''}
+        ${!hasValidLocation(d.exactLocation) ? `<div class="order-warning">⚠ Не удалось определить точку на карте по адресу «${escapeHtml(d.fullAddress || d.district || '')}». Заявку можно отправить, но мастера рядом могут её не увидеть в поиске — попробуйте уточнить адрес.</div>` : ''}
         <div id="quick-review-attachments" class="attachment-preview">
           ${(d.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
         </div>
@@ -4323,8 +4367,10 @@ function renderOrderDetail() {
         </p>
         <p>${escapeHtml(order.description)}</p>
         ${
-          showExact
+          showExact && hasValidLocation(order.exactLocation)
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
+            : showExact
+            ? `<div class="order-warning">⚠ Точная точка на карте не определена — адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) : escapeHtml(order.district) || 'не указан'}. На карте в админке эта заявка не отобразится.</div>`
             : ''
         }
         ${
@@ -4391,6 +4437,7 @@ function renderProfile() {
           <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Обновить геопозицию</span></button>
         </div>
         <p class="order-meta" style="margin-top:8px;">Можно вписать район вручную и сохранить, либо определить его автоматически по геолокации браузера.</p>
+        ${!hasValidLocation(user.location) ? `<div class="order-warning" style="margin-top:8px;">⚠ Точная точка на карте не определена — заказы рядом могут находиться неточно. Нажмите «Обновить геопозицию» или сохраните адрес ещё раз.</div>` : ''}
         <label style="margin-top:14px;">Радиус поиска заказов рядом (км)</label>
         <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
         <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
@@ -5265,13 +5312,13 @@ async function handleAction(action, value) {
         const sendBtn = document.getElementById('compose-publish-send');
         if (sendBtn) sendBtn.disabled = true;
         try {
-          // Раньше новый пользователь всегда создавался с CENTER — даже если
-          // заявка уже несёт настоящий геокодированный адрес (см. вызов
-          // startQuickDraft в wireEvents). Берём тот же exactLocation, что и
-          // у заказа, чтобы профиль нового заказчика сразу указывал на его
-          // реальный адрес, а не на дефолтную точку города.
+          // Берём тот же exactLocation, что и у заказа (startQuickDraft уже
+          // нормализовал его — либо реальные координаты, либо сентинел
+          // {lat:0,lng:0}, см. hasValidLocation), а не отдельный дефолт
+          // CENTER — профиль нового заказчика не должен выглядеть точнее
+          // (или неправильнее), чем сама заявка.
           const user = await ensureUserByPhone(composePhone.value, {
-            location: state.draft.exactLocation || CENTER,
+            location: state.draft.exactLocation,
             district: state.draft.district,
           });
           state.currentUserId = user.id;
