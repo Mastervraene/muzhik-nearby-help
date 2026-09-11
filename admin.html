@@ -620,6 +620,11 @@ function dbOrderToOrder(row) {
     warnings: row.warnings || [],
     searchRadiusKm: Number(row.search_radius_km ?? 3),
     createdAt: row.created_at,
+    // Структурированное ТЗ для исполнителя, сформированное ассистентом при
+    // создании заказа (см. requestFormattedBrief() в index.html). Может
+    // быть null — ассистент не настроен, сбой запроса, или заказ создан
+    // до появления этой функции.
+    formattedBrief: row.formatted_brief || null,
   };
 }
 
@@ -865,6 +870,34 @@ function orderCardHtml(o) {
   `;
 }
 
+/**
+ * Read-only карточка структурированного ТЗ для исполнителя, сформированного
+ * ассистентом при создании заказа (/format-brief, см. requestFormattedBrief()
+ * в index.html). Ничего не редактируется — это разбор задачи для мастера,
+ * админ видит его для контроля качества. Если ассистент не сформировал
+ * ТЗ (не настроен, сбой, старый заказ) — блок не выводится.
+ */
+function formattedBriefHtml(brief) {
+  if (!brief || !brief.problem) return '';
+  const rows = [
+    ['Суть работы', brief.problem],
+    ['Место / доступ', brief.locationDetails],
+    ['Материалы', brief.materialsNeeded],
+    ['Ожидаемый результат', brief.expectedOutcome],
+  ].filter(([, v]) => v && String(v).trim());
+  const missing =
+    Array.isArray(brief.missingInfo) && brief.missingInfo.length
+      ? `<p style="margin:4px 0;"><b>Уточнить у клиента:</b> ${brief.missingInfo.map((m) => escapeHtml(m)).join('; ')}</p>`
+      : '';
+  return `
+    <div class="field-sm" style="background:#f6f8fa;border-radius:8px;padding:10px 12px;">
+      <label>ТЗ для исполнителя (ассистент)</label>
+      ${rows.map(([label, value]) => `<p style="margin:4px 0;"><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`).join('')}
+      ${missing}
+    </div>
+  `;
+}
+
 function orderFormHtml(o) {
   const statusOptions = STATUS_KEYS.map(
     (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''} style="color:${statusColor(k).fg};">${escapeHtml(STATUS_LABELS[k])}</option>`
@@ -936,6 +969,7 @@ function orderFormHtml(o) {
         <label>Описание</label>
         <textarea id="f-desc-${o.id}">${escapeHtml(o.description || '')}</textarea>
       </div>
+      ${formattedBriefHtml(o.formattedBrief)}
       ${o.attachments && o.attachments.length
         ? `<div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${o.attachments
             .map(

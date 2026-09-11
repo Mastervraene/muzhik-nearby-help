@@ -2143,6 +2143,11 @@ function dbOrderToOrder(row) {
     workerRating: row.worker_rating ?? null,
     customerRating: row.customer_rating ?? null,
     customerRatedAt: row.customer_rated_at || null,
+    // Структурированное ТЗ для исполнителя — сформировано ассистентом
+    // (/format-brief) сразу при создании заказа, см. requestFormattedBrief().
+    // Может быть null: ассистент не настроен, запрос не удался, или заказ
+    // создан до появления этой функции.
+    formattedBrief: row.formatted_brief || null,
   };
 }
 
@@ -2182,6 +2187,7 @@ function orderToDbOrder(order) {
     worker_rating: order.workerRating ?? null,
     customer_rating: order.customerRating ?? null,
     customer_rated_at: order.customerRatedAt || null,
+    formatted_brief: order.formattedBrief || null,
   };
 }
 
@@ -3555,6 +3561,13 @@ async function publishDraft() {
   order = transition(order, 'collecting_details');
   order = transition(order, 'estimate_ready');
   order = transition(order, 'searching');
+
+  // Структурированное ТЗ для исполнителя — генерируется сразу при создании
+  // заказа (а не по запросу позже), чтобы мастер сразу видел разбор задачи,
+  // а не только сырой текст клиента. Необязательно: при сбое ассистента
+  // order.formattedBrief остаётся null, и сайт ведёт себя как раньше.
+  order.formattedBrief = await requestFormattedBrief(order, d);
+
   order = await saveOrder(order);
 
   pushNotification(
@@ -4611,6 +4624,53 @@ async function runComposerAssistantCheck(text) {
   }
 }
 
+/**
+ * Структурированное ТЗ для исполнителя (/format-brief) — вызывается один раз,
+ * в момент публикации заказа (см. publishDraft()), с уже полным контекстом
+ * (текст заявки + всё, что заказчик указал в форме: категория, объём, адрес,
+ * дата, срочность, фото). В отличие от /interpret (черновик, только
+ * категория), это разбор для конкретного мастера: суть работы, детали по
+ * месту, материалы, ожидаемый результат и что уточнить при первом контакте.
+ *
+ * Необязателен: если ассистент не настроен, запрос не удался или вернул
+ * пустой результат — возвращает null, и сайт как и раньше показывает
+ * исполнителю только «сырое» описание клиента (order.description).
+ */
+async function requestFormattedBrief(order, draft) {
+  if (!isAssistantConfigured()) return null;
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  try {
+    const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/format-brief`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+        apikey: env.SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({
+        description: order.description,
+        categoryId: order.categoryId,
+        quantity: order.scope?.quantity ?? null,
+        accessDifficulty: order.scope?.accessDifficulty ?? null,
+        needsMaterials: Boolean(draft && draft.needsMaterials),
+        attachmentsCount: Array.isArray(order.attachments) ? order.attachments.length : 0,
+        district: order.district || null,
+        fullAddress: order.fullAddress || null,
+        desiredDate: order.desiredDate || null,
+        timeWindow: order.timeWindow || null,
+        urgency: order.urgency || null,
+      }),
+    });
+    if (!res.ok) throw new Error(`format-brief ${res.status}`);
+    const data = await res.json();
+    if (!data || typeof data.problem !== 'string' || !data.problem.trim()) return null;
+    return data;
+  } catch (err) {
+    console.warn('[assistant] не удалось сформировать ТЗ для исполнителя', err);
+    return null;
+  }
+}
+
 /** Заказчик нажал «Использовать эту формулировку» — подставляем предложенный ассистентом текст вместо своего. */
 function applyAssistantNormalizedText() {
   const input = document.getElementById('composer-input');
@@ -5025,6 +5085,34 @@ function renderCompose() {
   `;
 }
 
+/**
+ * Карточка структурированного ТЗ для исполнителя (см. requestFormattedBrief()
+ * и Edge Function /format-brief). Показывается только мастеру/кандидату —
+ * заказчик и так видит свой исходный текст выше. Если ассистент не
+ * сформировал ТЗ (не настроен, сбой запроса, старый заказ) — ничего не
+ * выводим, мастер видит только «сырое» описание клиента, как раньше.
+ */
+function formattedBriefHtml(brief) {
+  if (!brief || !brief.problem) return '';
+  const rows = [
+    ['Суть работы', brief.problem],
+    ['Место / доступ', brief.locationDetails],
+    ['Материалы', brief.materialsNeeded],
+    ['Ожидаемый результат', brief.expectedOutcome],
+  ].filter(([, v]) => v && String(v).trim());
+  const missing =
+    Array.isArray(brief.missingInfo) && brief.missingInfo.length
+      ? `<p class="order-meta"><span>Уточнить у клиента: ${brief.missingInfo.map((m) => escapeHtml(m)).join('; ')}</span></p>`
+      : '';
+  return `
+    <div class="order-card" style="background:#f6f8fa;margin:8px 0;">
+      <p class="order-meta"><b>ТЗ для исполнителя (сформировано ассистентом)</b></p>
+      ${rows.map(([label, value]) => `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`).join('')}
+      ${missing}
+    </div>
+  `;
+}
+
 function renderOrderDetail() {
   const order = getOrders().find((o) => o.id === state.openOrderId);
   if (!order) return `<div class="screen"><div class="empty-state">Заказ не найден</div></div>`;
@@ -5085,6 +5173,7 @@ function renderOrderDetail() {
           <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
         </p>
         <p>${escapeHtml(order.description)}</p>
+        ${!isCustomer ? formattedBriefHtml(order.formattedBrief) : ''}
         ${
           showExact && hasValidLocation(order.exactLocation)
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
