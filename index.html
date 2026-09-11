@@ -5495,11 +5495,32 @@ function renderAvatarMenu(user, unreadCount) {
 // число непрочитанных уведомлений.
 function renderTopbar() {
   const user = currentUser();
-  const unread = user ? getUnreadNotificationsCount(user.id) : 0;
-  const avatarInner =
-    user && user.avatarUrl
-      ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`
-      : '👤';
+  // Без входа аватарка ведёт себя как раньше — прямой переход в профиль
+  // (а оттуда, если нужно, в гейт по номеру телефона): попап аккаунта
+  // просто нечего показывать гостю, у которого ещё нет ни профиля, ни
+  // уведомлений. Меню появляется только у вошедшего пользователя.
+  if (!user) {
+    return `
+    <header class="topbar">
+      <div class="brand-block" data-action="go-home" style="cursor:pointer;" title="На главную">
+        <img class="logo-slot" src="logo.png" alt="Мужик" />
+        <div>
+          <span class="brand-title">Мужик</span>
+          <span class="brand-sub">рядом поможет</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
+        <button class="icon-button" data-action="show-support" aria-label="Поддержка" title="Поддержка">🛟</button>
+        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+      </div>
+    </header>
+  `;
+  }
+  const unread = getUnreadNotificationsCount(user.id);
+  const avatarInner = user.avatarUrl
+    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`
+    : '👤';
   return `
     <header class="topbar">
       <div class="brand-block" data-action="go-home" style="cursor:pointer;" title="На главную">
@@ -5517,7 +5538,7 @@ function renderTopbar() {
             ${avatarInner}
             ${unread ? `<span class="badge">${unread > 9 ? '9+' : unread}</span>` : ''}
           </button>
-          ${avatarMenuOpen && user ? renderAvatarMenu(user, unread) : ''}
+          ${avatarMenuOpen ? renderAvatarMenu(user, unread) : ''}
         </div>
       </div>
     </header>
