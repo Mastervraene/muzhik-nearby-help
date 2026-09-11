@@ -143,6 +143,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .btn-sm.danger-solid { background: var(--red); color: #fff; }
 .btn-sm.danger-solid:hover { background: #b91c1c; }
 .btn-sm.ghost { background: var(--gray-100); color: var(--gray-700); }
+.btn-sm.ghost.has-filters { background: var(--accent-soft); color: var(--accent-strong); }
 .save-hint { font-size: 12px; color: var(--green); margin-left: 6px; display: none; }
 
 /* ---------- Плотная форма (карточка мастера — много полей, узкий экран) ---------- */
@@ -240,6 +241,46 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   background: var(--gray-50); font-weight: 700; color: var(--gray-500); font-size: 11.5px;
   text-transform: uppercase; letter-spacing: 0.02em; padding-top: 12px; padding-bottom: 6px;
 }
+
+/* ---------- Группировка заказов по заказчику ---------- */
+.customer-group { margin-bottom: 14px; }
+.customer-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer;
+  padding: 10px 14px; background: var(--gray-100); border-radius: var(--radius-sm); margin-bottom: 8px;
+}
+.customer-group-title { font-weight: 700; font-size: 13.5px; color: var(--gray-800); }
+.customer-group-count { font-size: 12px; color: var(--gray-500); margin-left: 8px; font-weight: 600; }
+.customer-group-body { display: flex; flex-direction: column; gap: 0; }
+.customer-group-body.collapsed { display: none; }
+
+/* ---------- Модальное окно (напр. «Сортировка» на вкладке «Карта») ---------- */
+.admin-modal-overlay {
+  position: fixed; inset: 0; background: rgba(18, 18, 18, 0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px;
+}
+.admin-modal-card {
+  width: 100%; max-width: 480px; max-height: 86vh; background: var(--gray-0);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: admin-modal-rise 0.18s ease-out;
+}
+@keyframes admin-modal-rise {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.admin-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 16px 18px; border-bottom: 1px solid var(--gray-100); flex-shrink: 0;
+}
+.admin-modal-head h2 { font-size: 16.5px; }
+.admin-modal-close {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--gray-100); color: var(--gray-600);
+  font-size: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.admin-modal-close:hover { background: var(--gray-200); }
+.admin-modal-body { padding: 16px 18px; overflow-y: auto; min-height: 0; }
+.admin-modal-actions { display: flex; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--gray-100); flex-shrink: 0; }
+.admin-modal-actions .btn-sm { flex: 1; text-align: center; }
 </style>
 </head>
 <body>
@@ -280,6 +321,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="">Все статусы</option>
       </select>
       <input type="text" id="orders-search" placeholder="Поиск по любому полю…" />
+      <button type="button" class="toggle-pill" id="orders-group-toggle">Группировать по заказчику</button>
       <span class="count-hint" id="orders-count"></span>
     </div>
     <div id="orders-list"></div>
@@ -303,15 +345,50 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <span><img class="legend-logo" src="logo.png" alt="" /> Мастера</span>
       <span><i class="dot order"></i> Заказы</span>
     </div>
-    <div class="toolbar zone-toolbar">
-      <select id="map-zone-select">
-        <option value="">Радиус поиска: не показывать</option>
-      </select>
+    <div class="toolbar">
+      <button type="button" class="btn-sm ghost" id="map-sort-toggle">Сортировка</button>
     </div>
     <div class="zone-hint" id="zone-hint" style="display:none;"></div>
     <div id="map-note-slot"></div>
     <div id="map-container"></div>
     <div id="map-zone-list"></div>
+  </div>
+
+  <div class="admin-modal-overlay" id="map-sort-overlay" style="display:none;" data-action="close-map-sort">
+    <div class="admin-modal-card" onclick="event.stopPropagation()">
+      <div class="admin-modal-head">
+        <h2 class="heading">Сортировка на карте</h2>
+        <button type="button" class="admin-modal-close" id="map-sort-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="admin-modal-body">
+        <div class="field-sm">
+          <label>Кого показывать на карте</label>
+          <select id="map-sort-audience">
+            <option value="all">Все — мастера и заказы</option>
+            <option value="workers">Только мастера</option>
+            <option value="orders">Только заказы</option>
+          </select>
+        </div>
+        <div id="map-sort-categories-wrap" style="margin-bottom:14px;">
+          <p class="form-section-label" style="margin-top:0;">Специализация мастеров (можно несколько; ничего не выбрано — любая)</p>
+          <div class="toggle-pills" id="map-sort-categories"></div>
+        </div>
+        <div id="map-sort-statuses-wrap" style="margin-bottom:14px;">
+          <p class="form-section-label" style="margin-top:0;">Статус заказа (можно несколько; ничего не выбрано — любой)</p>
+          <div class="toggle-pills" id="map-sort-statuses"></div>
+        </div>
+        <div class="field-sm" style="margin-bottom:0;">
+          <label>Показать радиус поиска конкретного мастера/заказа</label>
+          <select id="map-zone-select">
+            <option value="">Радиус поиска: не показывать</option>
+          </select>
+        </div>
+      </div>
+      <div class="admin-modal-actions">
+        <button type="button" class="btn-sm ghost" id="map-sort-reset">Сбросить всё</button>
+        <button type="button" class="btn-sm primary" id="map-sort-done">Готово</button>
+      </div>
+    </div>
   </div>
 
   <div class="tab-panel" id="panel-notify">
@@ -751,6 +828,8 @@ let allSkills = [];
 let allMessages = [];
 let ordersStatusFilter = '';
 let ordersSearchQuery = '';
+let ordersGroupByCustomer = false;
+let collapsedCustomerGroups = new Set(); // id заказчиков со свёрнутой группой (по умолчанию все развёрнуты)
 let mastersFilter = 'workers';
 let mastersSearchQuery = '';
 let openOrderId = null;
@@ -761,6 +840,11 @@ let mapLoaded = false;
 // либо заказ (кружок = радиус ИМЕННО этого заказа — а на практике именно
 // он решает, увидит ли мастер заказ: см. формулу в updateMapZoneOpacity).
 let mapZoneSelection = null; // { type: 'master' | 'order', id: string } | null
+// Фильтры вкладки «Карта» (открываются кнопкой «Сортировка») — те же по духу
+// критерии, что и в «Рассылке»: кого показывать + специализация/статус.
+let mapFilterAudience = 'all'; // 'all' | 'workers' | 'orders' — что показывать на карте
+let mapFilterCategories = new Set(); // специализации мастеров, можно несколько — пусто значит «любая»
+let mapFilterStatuses = new Set(); // статусы заказов, можно несколько — пусто значит «любой»
 let notifyAudience = 'all';
 let notifyCategories = new Set(); // специализации мастеров, можно несколько — пусто значит «любая»
 let notifyStatuses = new Set(); // статусы заказа клиента, можно несколько — пусто значит «любой»
@@ -821,8 +905,14 @@ function renderOrdersToolbar() {
   sel.value = ordersStatusFilter;
 }
 
+function renderOrdersGroupToggleUi() {
+  const btn = document.getElementById('orders-group-toggle');
+  if (btn) btn.classList.toggle('active', ordersGroupByCustomer);
+}
+
 function renderOrders() {
   renderOrdersToolbar();
+  renderOrdersGroupToggleUi();
   let list = ordersStatusFilter ? allOrders.filter((o) => o.status === ordersStatusFilter) : allOrders;
   const q = ordersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((o) => orderSearchHaystack(o).includes(q));
@@ -835,10 +925,59 @@ function renderOrders() {
     return;
   }
 
-  container.innerHTML = sorted.map((o) => orderCardHtml(o)).join('');
+  if (!ordersGroupByCustomer) {
+    container.innerHTML = sorted.map((o) => orderCardHtml(o)).join('');
+    wireOrderCards(sorted);
+    return;
+  }
 
+  // Группировка по заказчику: одна группа — все заказы одного клиента.
+  // Порядок групп определяется самым свежим заказом клиента (sorted уже
+  // отсортирован по дате убывания, поэтому первое появление customerId
+  // и задаёт позицию группы), заказы внутри группы — в том же порядке.
+  const customerIds = [];
+  const byCustomer = new Map();
   sorted.forEach((o) => {
-    document.getElementById(`order-head-${o.id}`).addEventListener('click', () => {
+    if (!byCustomer.has(o.customerId)) {
+      byCustomer.set(o.customerId, []);
+      customerIds.push(o.customerId);
+    }
+    byCustomer.get(o.customerId).push(o);
+  });
+
+  container.innerHTML = customerIds
+    .map((customerId) => {
+      const orders = byCustomer.get(customerId);
+      const collapsed = collapsedCustomerGroups.has(customerId);
+      return `
+        <div class="customer-group">
+          <div class="customer-group-head" id="customer-group-head-${customerId}">
+            <span class="customer-group-title">${escapeHtml(userName(customerId))}<span class="customer-group-count">${orders.length} заказ(ов)</span></span>
+            <span class="chevron">${collapsed ? '▼' : '▲'}</span>
+          </div>
+          <div class="customer-group-body ${collapsed ? 'collapsed' : ''}" id="customer-group-body-${customerId}">
+            ${orders.map((o) => orderCardHtml(o)).join('')}
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  customerIds.forEach((customerId) => {
+    document.getElementById(`customer-group-head-${customerId}`).addEventListener('click', () => {
+      if (collapsedCustomerGroups.has(customerId)) collapsedCustomerGroups.delete(customerId);
+      else collapsedCustomerGroups.add(customerId);
+      renderOrders();
+    });
+  });
+  wireOrderCards(sorted);
+}
+
+function wireOrderCards(list) {
+  list.forEach((o) => {
+    const head = document.getElementById(`order-head-${o.id}`);
+    if (!head) return; // заказ мог оказаться в свёрнутой группе — его карточки нет в DOM
+    head.addEventListener('click', () => {
       openOrderId = openOrderId === o.id ? null : o.id;
       renderOrders();
     });
@@ -1559,6 +1698,92 @@ function distanceKm(a, b) {
   return EARTH_RADIUS_KM * c;
 }
 
+// Мастера/заказы, которые нужно показывать на карте с учётом текущих
+// фильтров модалки «Сортировка» (mapFilterAudience/Categories/Statuses —
+// тот же принцип, что и notifyMatchingUsers() в «Рассылке»). Используется
+// и для меток на карте, и для списка «зона действия» под картой, и для
+// самого выпадающего списка «показать радиус» — везде одни и те же критерии.
+function getFilteredMapWorkers() {
+  if (mapFilterAudience === 'orders') return [];
+  let list = allUsers.filter((u) => u.availableAsWorker && u.location.lat && u.location.lng);
+  if (mapFilterCategories.size) {
+    const idsWithAnySkill = new Set(
+      allSkills.filter((s) => mapFilterCategories.has(s.categoryId)).map((s) => s.userId)
+    );
+    list = list.filter((u) => idsWithAnySkill.has(u.id));
+  }
+  return list;
+}
+function getFilteredMapOrders() {
+  if (mapFilterAudience === 'workers') return [];
+  let list = allOrders.filter((o) => o.exactLocation.lat && o.exactLocation.lng);
+  if (mapFilterStatuses.size) list = list.filter((o) => mapFilterStatuses.has(o.status));
+  return list;
+}
+
+// -----------------------------------------------------------------------
+// Модалка «Сортировка» на вкладке «Карта» — открывается кнопкой в тулбаре,
+// объединяет старую «зону действия» (map-zone-select) и новые фильтры по
+// аудитории/специализации/статусу того же вида, что в «Рассылке».
+// -----------------------------------------------------------------------
+function openMapSortModal() {
+  document.getElementById('map-sort-overlay').style.display = 'flex';
+  renderMapSortModal();
+}
+function closeMapSortModal() {
+  document.getElementById('map-sort-overlay').style.display = 'none';
+}
+
+function renderMapSortModal() {
+  document.getElementById('map-sort-audience').value = mapFilterAudience;
+  document.getElementById('map-sort-categories-wrap').style.display = mapFilterAudience === 'orders' ? 'none' : '';
+  document.getElementById('map-sort-statuses-wrap').style.display = mapFilterAudience === 'workers' ? 'none' : '';
+
+  const categoriesEl = document.getElementById('map-sort-categories');
+  categoriesEl.innerHTML = Object.entries(CATEGORY_TITLES)
+    .map(
+      ([key, title]) =>
+        `<button type="button" class="toggle-pill ${mapFilterCategories.has(key) ? 'active' : ''}" data-category="${key}">${escapeHtml(title)}</button>`
+    )
+    .join('');
+  categoriesEl.querySelectorAll('[data-category]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(mapFilterCategories, btn.dataset.category);
+      renderMapSortModal();
+      fillMapPoints();
+    });
+  });
+
+  const statusesEl = document.getElementById('map-sort-statuses');
+  statusesEl.innerHTML = STATUS_KEYS
+    .map(
+      (key) =>
+        `<button type="button" class="toggle-pill ${mapFilterStatuses.has(key) ? 'active' : ''}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}</button>`
+    )
+    .join('');
+  statusesEl.querySelectorAll('[data-status]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(mapFilterStatuses, btn.dataset.status);
+      renderMapSortModal();
+      fillMapPoints();
+    });
+  });
+
+  updateMapSortButtonLabel();
+}
+
+function updateMapSortButtonLabel() {
+  const btn = document.getElementById('map-sort-toggle');
+  if (!btn) return;
+  let active = 0;
+  if (mapFilterAudience !== 'all') active++;
+  if (mapFilterCategories.size) active++;
+  if (mapFilterStatuses.size) active++;
+  if (mapZoneSelection) active++;
+  btn.textContent = active ? `Сортировка (${active})` : 'Сортировка';
+  btn.classList.toggle('has-filters', Boolean(active));
+}
+
 function renderMapNote() {
   const slot = document.getElementById('map-note-slot');
   if (!YANDEX_MAPS_JS_API_KEY) {
@@ -1607,8 +1832,8 @@ async function renderMap() {
 function populateMapZoneSelect() {
   const sel = document.getElementById('map-zone-select');
   if (!sel) return;
-  const workers = allUsers.filter((u) => u.availableAsWorker && u.location.lat && u.location.lng);
-  const orders = allOrders.filter((o) => o.exactLocation.lat && o.exactLocation.lng);
+  const workers = getFilteredMapWorkers();
+  const orders = getFilteredMapOrders();
   const workerOpts = workers
     .map(
       (u) =>
@@ -1765,8 +1990,8 @@ function fillMapPoints() {
 
   // Метка мастера — логотип сайта (щит с «М») вместо стандартной точки:
   // свой узнаваемый значок вместо предустановленного преcета Яндекс.Карт.
-  allUsers
-    .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
+  // Список уже учитывает фильтры модалки «Сортировка» (getFilteredMapWorkers).
+  getFilteredMapWorkers()
     .forEach((u) => {
       const coords = [u.location.lat, u.location.lng];
       pointCount++;
@@ -1802,11 +2027,10 @@ function fillMapPoints() {
   // 'islands#redDotIcon' на практике рисовался обычной «булавкой»-каплей,
   // а не кружком — на своей картинке форма гарантирована и не зависит от
   // того, что именно Яндекс.Карты решат отрисовать под этим именем.
-  // .filter() ниже — тот же самый «пустой» сентинел (0,0), что и у
-  // мастеров: заказ, для которого адрес не удалось определить на карте
-  // (см. hasValidLocation в index.html), сюда просто не попадёт.
-  allOrders
-    .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
+  // Пустой сентинел (0,0) — заказ, для которого адрес не удалось определить
+  // на карте (см. hasValidLocation в index.html), сюда просто не попадёт.
+  // Список уже учитывает фильтры модалки «Сортировка» (getFilteredMapOrders).
+  getFilteredMapOrders()
     .forEach((o) => {
       const coords = [o.exactLocation.lat, o.exactLocation.lng];
       pointCount++;
@@ -1862,8 +2086,7 @@ function fillMapPoints() {
   // ловить пограничные случаи («3 км и 1 метр»), которые на глаз по цвету
   // точки не всегда различимы.
   if (zoneMaster) {
-    const rows = allOrders
-      .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
+    const rows = getFilteredMapOrders()
       .map((o) => {
         const distance = distanceKm(zoneMaster.location, o.exactLocation);
         const effRadius = o.searchRadiusKm || zoneMaster.searchRadiusKm || 3;
@@ -1872,8 +2095,7 @@ function fillMapPoints() {
       .sort((a, b) => Math.abs(a.margin) - Math.abs(b.margin));
     renderMapZoneList(rows, 'master');
   } else if (zoneOrder) {
-    const rows = allUsers
-      .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
+    const rows = getFilteredMapWorkers()
       .map((u) => {
         const distance = distanceKm(u.location, zoneOrder.exactLocation);
         const effRadius = zoneOrder.searchRadiusKm || u.searchRadiusKm || 3;
@@ -1995,6 +2217,10 @@ function showApp() {
     ordersSearchQuery = e.target.value;
     renderOrders();
   });
+  document.getElementById('orders-group-toggle').addEventListener('click', () => {
+    ordersGroupByCustomer = !ordersGroupByCustomer;
+    renderOrders();
+  });
   document.getElementById('masters-filter').addEventListener('change', (e) => {
     mastersFilter = e.target.value;
     renderMasters();
@@ -2011,6 +2237,28 @@ function showApp() {
       const sep = val.indexOf(':');
       mapZoneSelection = { type: val.slice(0, sep), id: val.slice(sep + 1) };
     }
+    fillMapPoints();
+    updateMapSortButtonLabel();
+  });
+  document.getElementById('map-sort-toggle').addEventListener('click', openMapSortModal);
+  document.getElementById('map-sort-close').addEventListener('click', closeMapSortModal);
+  document.getElementById('map-sort-done').addEventListener('click', closeMapSortModal);
+  document.getElementById('map-sort-overlay').addEventListener('click', (e) => {
+    if (e.target.dataset.action === 'close-map-sort') closeMapSortModal();
+  });
+  document.getElementById('map-sort-audience').addEventListener('change', (e) => {
+    mapFilterAudience = e.target.value;
+    if (mapFilterAudience === 'orders') mapFilterCategories.clear();
+    if (mapFilterAudience === 'workers') mapFilterStatuses.clear();
+    renderMapSortModal();
+    fillMapPoints();
+  });
+  document.getElementById('map-sort-reset').addEventListener('click', () => {
+    mapFilterAudience = 'all';
+    mapFilterCategories.clear();
+    mapFilterStatuses.clear();
+    mapZoneSelection = null;
+    renderMapSortModal();
     fillMapPoints();
   });
   document.getElementById('notify-audience').addEventListener('change', (e) => {
