@@ -3076,6 +3076,140 @@ async function ensureUserByPhone(phone, extra = {}) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Подтверждение номера звонком (Звонок.ком, тип кампании «Звонок на
+// проверочный номер»). Человек сам звонит на показанный номер и сразу
+// сбрасывает — Звонок.ком узнаёт его по CallerID. Работает через две
+// Edge Function-прокси — zvonok-start (регистрирует ожидание звонка и
+// возвращает номер для показа) и zvonok-check (сайт опрашивает её, пока
+// не придёт подтверждение). Если секреты ZVONOK_* не настроены на
+// сервере — обе функции отвечают { configured: false }, и вход проходит
+// как раньше, без этого шага (см. README, раздел про Звонок.ком).
+// ---------------------------------------------------------------------
+
+/** Живёт вне state, как и другие черновые поля экранов — см. комментарий выше про composerExpandedField. */
+let phoneVerifyState = null; // null | { userId, phone, numberToCall, since, status: 'waiting'|'confirmed'|'timeout', attemptsLeft }
+
+async function startPhoneCallVerification(phoneE164) {
+  if (!isSupabaseConfigured()) return { configured: false };
+  const { url } = getConfig();
+  try {
+    const res = await fetch(`${url}/functions/v1/zvonok-start`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ phone: phoneE164 }),
+    });
+    if (!res.ok) throw new Error(`zvonok-start failed: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('[zvonok] не удалось начать подтверждение звонком', err);
+    return { configured: true, error: true };
+  }
+}
+
+async function checkPhoneCallVerification(phoneE164, since) {
+  if (!isSupabaseConfigured()) return { configured: false, confirmed: false };
+  const { url } = getConfig();
+  try {
+    const res = await fetch(`${url}/functions/v1/zvonok-check`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ phone: phoneE164, since }),
+    });
+    if (!res.ok) throw new Error(`zvonok-check failed: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('[zvonok] не удалось проверить результат звонка', err);
+    return null;
+  }
+}
+
+/** Завершает вход независимо от того, было подтверждение звонком или нет. */
+async function finishPhoneGateLogin(user) {
+  phoneVerifyState = null;
+  state.currentUserId = user.id;
+  saveSession(user.id);
+  await issueSessionToken(user.id);
+  render();
+}
+
+/**
+ * Запускает подтверждение номера звонком для уже найденного/созданного
+ * пользователя. Если функция на сервере не настроена, номер уже
+ * подтверждён раньше, или сам запрос не удался — просто пускает дальше,
+ * как и раньше (см. комментарий к блоку выше — ничего не блокируем).
+ */
+async function beginPhoneCallVerification(user) {
+  if (user.phoneVerified) {
+    await finishPhoneGateLogin(user);
+    return;
+  }
+  const phoneE164 = '+7' + stripCountryPrefixDigits(user.phone);
+  const start = await startPhoneCallVerification(phoneE164);
+  if (!start || !start.configured || start.error || !start.numberToCall) {
+    await finishPhoneGateLogin(user);
+    return;
+  }
+  phoneVerifyState = {
+    userId: user.id,
+    phone: phoneE164,
+    numberToCall: start.numberToCall,
+    since: start.createdAt || new Date().toISOString(),
+    status: 'waiting',
+    attemptsLeft: 40, // ~40 попыток по 3 сек — около двух минут ожидания
+  };
+  render();
+  pollPhoneCallVerification(phoneVerifyState);
+}
+
+async function pollPhoneCallVerification(forState) {
+  if (phoneVerifyState !== forState || forState.status !== 'waiting') return;
+  if (forState.attemptsLeft <= 0) {
+    forState.status = 'timeout';
+    render();
+    return;
+  }
+  forState.attemptsLeft -= 1;
+  const result = await checkPhoneCallVerification(forState.phone, forState.since);
+  if (phoneVerifyState !== forState || forState.status !== 'waiting') return; // отменили/сменили номер, пока ждали ответ
+
+  if (result && result.configured === false) {
+    // Подтверждение выключили на сервере, пока человек ждал, — не блокируем.
+    const user = cache.users.find((u) => u.id === forState.userId) || { id: forState.userId };
+    await finishPhoneGateLogin(user);
+    return;
+  }
+  if (result && result.confirmed) {
+    forState.status = 'confirmed';
+    render();
+    try {
+      await updateRow('users', forState.userId, { phone_verified: true });
+      const idx = cache.users.findIndex((u) => u.id === forState.userId);
+      if (idx >= 0) cache.users[idx] = { ...cache.users[idx], phoneVerified: true };
+    } catch (err) {
+      reportError('сохранение подтверждения телефона', err);
+    }
+    const user = cache.users.find((u) => u.id === forState.userId) || { id: forState.userId };
+    await finishPhoneGateLogin(user);
+    return;
+  }
+  setTimeout(() => pollPhoneCallVerification(forState), 3000);
+}
+
+/** Отменяет ожидание звонка и возвращает к полю ввода телефона. */
+function cancelPhoneCallVerification() {
+  phoneVerifyState = null;
+  render();
+}
+
+/** «Продолжить без подтверждения» после таймаута — телефон остаётся непроверенным. */
+async function skipPhoneCallVerification() {
+  const forState = phoneVerifyState;
+  if (!forState) return;
+  const user = cache.users.find((u) => u.id === forState.userId) || { id: forState.userId };
+  await finishPhoneGateLogin(user);
+}
+
 function logout() {
   clearSession();
   state.currentUserId = null;
@@ -5071,6 +5205,8 @@ function renderNoUsers() {
 
 /** Экран «нужен номер телефона» — показывается перед заказами/профилем, если человек ещё не указал телефон. */
 function renderPhoneGate() {
+  if (phoneVerifyState) return renderPhoneVerifyStep(phoneVerifyState);
+
   const limit = getTelegramLinkLimitState();
   let hint = '';
   if (limit.overDay) {
@@ -5083,7 +5219,7 @@ function renderPhoneGate() {
   return `
     <div class="field-card">
       <p><b>Укажите номер телефона</b></p>
-      <p class="order-meta">Он привяжется к вашему аккаунту. Подтверждение по SMS добавим позже.</p>
+      <p class="order-meta">Он привяжется к вашему аккаунту.</p>
       <label>Телефон</label>
       <input type="text" id="gate-phone" value="+7 " placeholder="+7 900 000 00 00" />
       <div class="order-warning" id="gate-phone-error" style="display:none;"></div>
@@ -5101,6 +5237,37 @@ function renderPhoneGate() {
             : ''
         }
       </div>
+    </div>
+  `;
+}
+
+/** Подшаг renderPhoneGate() — ожидание/результат звонка на проверочный номер (см. beginPhoneCallVerification). */
+function renderPhoneVerifyStep(st) {
+  const number = displayPhone(st.numberToCall);
+  if (st.status === 'confirmed') {
+    return `
+      <div class="field-card">
+        <p><b>Номер подтверждён ✓</b></p>
+        <p class="order-meta">Заходим…</p>
+      </div>
+    `;
+  }
+  if (st.status === 'timeout') {
+    return `
+      <div class="field-card">
+        <p><b>Не дозвонились</b></p>
+        <p class="order-meta">Мы не увидели звонок с вашего номера на ${escapeHtml(number)}. Проверьте, что звонили именно с этого телефона, и попробуйте ещё раз.</p>
+        <button class="primary-button" data-action="phone-verify-retry">Попробовать ещё раз</button>
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="phone-verify-skip">Продолжить без подтверждения</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="field-card">
+      <p><b>Позвоните на ${escapeHtml(number)}</b></p>
+      <p class="order-meta">Наберите этот номер со своего телефона и сразу сбросьте — отвечать не нужно, ничего вводить не нужно. Мы сами узнаем ваш номер по входящему звонку.</p>
+      <p class="order-meta">⏳ Ждём звонка…</p>
+      <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="phone-verify-cancel">Ввести другой номер</button>
     </div>
   `;
 }
@@ -5706,10 +5873,7 @@ function wireEvents() {
       gateSend.disabled = true;
       try {
         const user = await ensureUserByPhone(gatePhone.value, {});
-        state.currentUserId = user.id;
-        saveSession(user.id);
-        await issueSessionToken(user.id);
-        render();
+        await beginPhoneCallVerification(user);
       } catch (err) {
         console.error('[phone-gate] failed', err);
         showToast('Не получилось продолжить — попробуйте ещё раз');
@@ -5842,6 +6006,16 @@ async function handleAction(action, value) {
       const el = document.getElementById('telegram-link-code');
       return submitTelegramLinkCode(el ? el.value : '');
     }
+
+    case 'phone-verify-cancel':
+      return cancelPhoneCallVerification();
+    case 'phone-verify-retry': {
+      const user = phoneVerifyState && (cache.users.find((u) => u.id === phoneVerifyState.userId) || { id: phoneVerifyState.userId, phone: phoneVerifyState.phone });
+      if (!user) return;
+      return beginPhoneCallVerification(user);
+    }
+    case 'phone-verify-skip':
+      return skipPhoneCallVerification();
 
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
