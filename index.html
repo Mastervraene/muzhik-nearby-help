@@ -3931,6 +3931,16 @@ function isMapsJsConfigured() {
 
 let quickReviewMapInstance = null;
 let quickReviewMapLoadPromise = null;
+// Счётчик вызовов initQuickReviewMap(). wireEvents() может вызвать функцию
+// несколько раз подряд (например, если render() случится дважды, пока
+// первый вызов ещё ждёт загрузки скрипта карт/ymaps.ready) — без этой
+// защиты оба вызова создавали свою карту в один и тот же контейнер,
+// оставляя две наложенные друг на друга ymaps.Map (проверено вживую: у
+// контейнера оказывалось два дочерних <ymaps> узла, и клики по видимой
+// сверху карте не долетали до «активного» экземпляра). Каждый вызов
+// получает свой токен и после каждого await сверяется, что он всё ещё
+// самый последний — иначе тихо прекращает работу.
+let quickReviewMapInitToken = 0;
 
 function loadYmapsScriptForCompose() {
   if (window.ymaps) return Promise.resolve();
@@ -3960,13 +3970,24 @@ async function initQuickReviewMap() {
   const container = document.getElementById('quick-review-map');
   if (!container) return; // не на этом шаге композера — ничего делать не нужно
 
-  if (quickReviewMapInstance) {
-    try { quickReviewMapInstance.destroy(); } catch (err) { /* контейнер уже мог исчезнуть — не критично */ }
-    quickReviewMapInstance = null;
-  }
+  const myToken = ++quickReviewMapInitToken;
+
+  const destroyExisting = () => {
+    if (quickReviewMapInstance) {
+      try { quickReviewMapInstance.destroy(); } catch (err) { /* контейнер уже мог исчезнуть — не критично */ }
+      quickReviewMapInstance = null;
+    }
+    // Подчищаем контейнер и вручную — .destroy() полагается на то, что
+    // именно ЭТОТ вызов создал единственную карту внутри него; если карт
+    // всё же оказалось больше (см. комментарий у quickReviewMapInitToken),
+    // это подчистит осиротевшие узлы, которые destroy() не знает.
+    const c = document.getElementById('quick-review-map');
+    if (c) c.innerHTML = '';
+  };
+
+  destroyExisting();
 
   if (!isMapsJsConfigured()) {
-    container.innerHTML = '';
     return;
   }
 
@@ -3976,10 +3997,16 @@ async function initQuickReviewMap() {
     console.warn('[geo] карта подтверждения адреса не загрузилась', err);
     return;
   }
+  if (myToken !== quickReviewMapInitToken) return; // нас уже обогнал более новый вызов
 
   window.ymaps.ready(() => {
+    if (myToken !== quickReviewMapInitToken) return; // нас уже обогнал более новый вызов
     const containerNow = document.getElementById('quick-review-map');
     if (!containerNow) return; // экран сменился, пока карта грузилась
+    // На всякий случай ещё раз чистим контейнер прямо перед созданием —
+    // между проверкой токена выше и этим моментом синхронного кода нет,
+    // но так надёжнее, если что-то успело дорисоваться асинхронно.
+    containerNow.innerHTML = '';
 
     const d = state.draft;
     const startCoords = hasValidLocation(d.exactLocation)
