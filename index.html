@@ -229,6 +229,94 @@ body {
   padding: 0 3px;
 }
 
+/* ---------- Avatar menu (попап аккаунта в шапке) ---------- */
+
+.avatar-menu-anchor {
+  position: relative;
+}
+
+.avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 240px;
+  background: var(--gray-0, #fff);
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.12);
+  padding: 8px;
+  z-index: 30;
+}
+
+.avatar-menu-header {
+  padding: 8px 10px 10px;
+}
+
+.avatar-menu-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--gray-900);
+}
+
+.avatar-menu-phone {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+.avatar-menu-divider {
+  height: 1px;
+  background: var(--gray-100);
+  margin: 4px 0;
+}
+
+.avatar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--gray-800, var(--gray-900));
+  text-align: left;
+  cursor: pointer;
+}
+
+.avatar-menu-item:hover,
+.avatar-menu-item:active {
+  background: var(--gray-100);
+}
+
+.avatar-menu-item-icon {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.avatar-menu-item-label {
+  flex: 1;
+}
+
+.avatar-menu-item-badge {
+  background: var(--gray-800);
+  color: var(--gray-0);
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+
+.avatar-menu-item-danger {
+  color: #d33;
+}
+
 /* ---------- Bottom nav ---------- */
 
 .bottom-nav {
@@ -3070,6 +3158,11 @@ function go(screen, extra = {}) {
     // редактирования, оставшейся с прошлого визита.
     profileAddressEditing = false;
   }
+  if (screen === 'notifications') {
+    // Заход на список уведомлений сразу гасит бейдж в шапке — см.
+    // markNotificationsSeen/getUnreadNotificationsCount у renderTopbar.
+    markNotificationsSeen(state.currentUserId);
+  }
   render();
   if (screen === 'orders') {
     // Не блокируем сам переход на экран — список кандидатов дорисуется
@@ -5315,11 +5408,98 @@ const ICON_ARROW_UP =
 const ICON_PIN =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-7.58 7-12.5A7 7 0 0 0 5 9.5C5 14.42 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.3"/></svg>';
 
-// Единственная точка входа в шапке — иконка профиля: по ней и происходит
-// вход (номер телефона), и через неё же специалист позже попадёт в
-// профиль вводить навыки/специализацию. Отдельная кнопка «режим
-// специалиста» и колокольчик уведомлений сюда больше не выводятся.
+// Открыт ли попап аккаунта (клик по аватарке в шапке) — живёт вне state,
+// как mapPickerOpenFor/passwordStepState, чтобы не тянуть его в остальную
+// логику экранов. Закрывается: повторным кликом по аватарке, кликом мимо
+// (см. wireEvents → document.body.onclick), клавишей Esc или выбором
+// любого пункта меню (см. handleAction).
+let avatarMenuOpen = false;
+
+// ---------------------------------------------------------------------
+// «Прочитанные» уведомления — только на этом устройстве: сервер не хранит
+// признак прочтения (таблица notifications его не знает), поэтому просто
+// запоминаем в localStorage момент последнего захода на экран
+// «Уведомления» для каждого пользователя и на бейдже в шапке показываем
+// количество уведомлений, пришедших после этого момента. Простая и
+// достаточная замена полноценному read/unread на сервере — бейдж и так
+// сбрасывается сразу, как только человек открыл список.
+// ---------------------------------------------------------------------
+const NOTIFICATIONS_SEEN_KEY = 'muzhik_notifications_seen_v1';
+
+function loadNotificationsSeenMap() {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(NOTIFICATIONS_SEEN_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function markNotificationsSeen(userId) {
+  if (!userId || typeof localStorage === 'undefined') return;
+  const map = loadNotificationsSeenMap();
+  map[userId] = new Date().toISOString();
+  localStorage.setItem(NOTIFICATIONS_SEEN_KEY, JSON.stringify(map));
+}
+
+function getUnreadNotificationsCount(userId) {
+  if (!userId) return 0;
+  const list = getNotificationsFor(userId);
+  if (!list.length) return 0;
+  const seenAt = loadNotificationsSeenMap()[userId];
+  if (!seenAt) return list.length;
+  const seenTime = new Date(seenAt).getTime();
+  return list.filter((n) => new Date(n.createdAt).getTime() > seenTime).length;
+}
+
+// Попап аккаунта: пункты меню — те же места, куда раньше вела сама
+// иконка профиля (плюс заказы/уведомления/поддержка одним списком) и
+// выход из аккаунта. Бейдж с числом непрочитанных уведомлений дублируется
+// и на самой аватарке (см. renderTopbar), и на пункте «Уведомления» внутри.
+function renderAvatarMenu(user, unreadCount) {
+  const items = [
+    { action: 'go-profile', icon: '◍', label: 'Профиль' },
+    { action: 'go-orders', icon: '▤', label: 'Заказы' },
+    { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
+    { action: 'show-support', icon: '🛟', label: 'Поддержка' },
+  ];
+  return `
+    <div class="avatar-menu" id="avatar-menu">
+      <div class="avatar-menu-header">
+        <div class="avatar-menu-name">${escapeHtml(user.displayName || 'Гость')}</div>
+        <div class="avatar-menu-phone">${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</div>
+      </div>
+      <div class="avatar-menu-divider"></div>
+      ${items
+        .map(
+          (it) => `
+        <button type="button" class="avatar-menu-item" data-action="${it.action}">
+          <span class="avatar-menu-item-icon">${it.icon}</span>
+          <span class="avatar-menu-item-label">${it.label}</span>
+          ${it.badge ? `<span class="avatar-menu-item-badge">${it.badge > 9 ? '9+' : it.badge}</span>` : ''}
+        </button>`
+        )
+        .join('')}
+      <div class="avatar-menu-divider"></div>
+      <button type="button" class="avatar-menu-item avatar-menu-item-danger" data-action="logout">
+        <span class="avatar-menu-item-icon">⇥</span>
+        <span class="avatar-menu-item-label">Выйти из аккаунта</span>
+      </button>
+    </div>
+  `;
+}
+
+// Единственная точка входа в шапке — аватарка: клик по ней открывает
+// попап-меню аккаунта (профиль/заказы/уведомления/поддержка/выход) вместо
+// мгновенного перехода в профиль, а бейдж поверх аватарки показывает
+// число непрочитанных уведомлений.
 function renderTopbar() {
+  const user = currentUser();
+  const unread = user ? getUnreadNotificationsCount(user.id) : 0;
+  const avatarInner =
+    user && user.avatarUrl
+      ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`
+      : '👤';
   return `
     <header class="topbar">
       <div class="brand-block" data-action="go-home" style="cursor:pointer;" title="На главную">
@@ -5332,7 +5512,13 @@ function renderTopbar() {
       <div class="topbar-actions">
         <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
         <button class="icon-button" data-action="show-support" aria-label="Поддержка" title="Поддержка">🛟</button>
-        <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
+        <div class="avatar-menu-anchor">
+          <button class="icon-button" style="overflow:hidden;" data-action="toggle-avatar-menu" aria-label="Аккаунт" title="Аккаунт">
+            ${avatarInner}
+            ${unread ? `<span class="badge">${unread > 9 ? '9+' : unread}</span>` : ''}
+          </button>
+          ${avatarMenuOpen && user ? renderAvatarMenu(user, unread) : ''}
+        </div>
       </div>
     </header>
   `;
@@ -6758,9 +6944,24 @@ function wireEvents() {
   // чуть ниже для document.body.onclick).
   document.onkeydown = (e) => {
     if (e.key === 'Escape' && mapPickerOpenFor) closeMapPicker();
+    if (e.key === 'Escape' && avatarMenuOpen) {
+      avatarMenuOpen = false;
+      render();
+    }
   };
 
-  document.body.onclick = null;
+  // Клик мимо открытого попапа аккаунта закрывает его — сама кнопка-
+  // переключатель и пункты внутри попапа обрабатываются своими
+  // data-action-обработчиками ниже (и там же попап закрывается через
+  // handleAction), так что здесь достаточно проверить, что клик пришёлся
+  // не на них.
+  document.body.onclick = (e) => {
+    if (!avatarMenuOpen) return;
+    if (e.target.closest('[data-action="toggle-avatar-menu"]')) return;
+    if (e.target.closest('#avatar-menu')) return;
+    avatarMenuOpen = false;
+    render();
+  };
   document.querySelectorAll('[data-action]').forEach((node) => {
     node.addEventListener('click', (e) => {
       const action = node.getAttribute('data-action');
@@ -6912,7 +7113,15 @@ function wireScrollBoundarySwipe(bodyEl, cardEl, onDismiss) {
 }
 
 async function handleAction(action, value) {
+  // Попап аккаунта закрывается при любом другом действии (переход по
+  // пункту меню, клик по чему угодно ещё на экране) — сам toggle
+  // управляет собой ниже отдельным case'ом.
+  if (avatarMenuOpen && action !== 'toggle-avatar-menu') avatarMenuOpen = false;
+
   switch (action) {
+    case 'toggle-avatar-menu':
+      avatarMenuOpen = !avatarMenuOpen;
+      return render();
     case 'go-home': return go('home');
     case 'go-orders': return go('orders');
     case 'go-notifications': return go('notifications');
