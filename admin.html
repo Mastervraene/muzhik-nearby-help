@@ -450,6 +450,7 @@ function dbUserToUser(row) {
     displayName: row.display_name || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
+    avatarUrl: row.avatar_url || '',
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
@@ -806,11 +807,14 @@ function masterCardHtml(u) {
   return `
     <div class="card">
       <div class="card-head" id="master-head-${u.id}">
+        <div class="card-avatar" style="width:36px;height:36px;border-radius:50%;overflow:hidden;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
+        </div>
         <div class="card-head-main">
           <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
-            ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>` : '<span class="pill muted">клиент</span>'}
+            ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>${!u.avatarUrl ? '<span class="pill warn">без фото</span>' : ''}` : '<span class="pill muted">клиент</span>'}
             <span>${u.location.lat ? `${u.location.lat.toFixed(4)}, ${u.location.lng.toFixed(4)}` : 'без геоточки'}</span>
           </div>
         </div>

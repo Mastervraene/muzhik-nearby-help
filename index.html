@@ -2054,6 +2054,7 @@ function dbUserToUser(row, skillsByUser) {
     displayName: row.display_name || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
+    avatarUrl: row.avatar_url || '',
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
@@ -2082,6 +2083,7 @@ function userToDbUser(user) {
     display_name: user.displayName,
     phone: user.phone,
     phone_verified: Boolean(user.phoneVerified),
+    avatar_url: user.avatarUrl || null,
     lat: user.location?.lat ?? null,
     lng: user.location?.lng ?? null,
     district: user.district,
@@ -3041,6 +3043,7 @@ async function ensureUserByPhone(phone, extra = {}) {
     displayName: 'Гость',
     phone: canonicalPhone,
     phoneVerified: false,
+    avatarUrl: '',
     // CENTER раньше маскировал «адреса ещё нет» под настоящую точку в
     // центре города — теперь честный сентинел {0,0} (см. hasValidLocation):
     // и в профиле, и на карте админки будет видно, что место не определено.
@@ -3957,6 +3960,35 @@ async function saveProfileDistrict() {
   profileDistrictSelectedLocation = null;
   showToast('Район сохранён');
   render();
+}
+
+/**
+ * Загрузка/замена аватарки в профиле — своя кнопка над именем (см.
+ * renderProfile). Пока это просто фото для профиля, без проверки на
+ * сервере и без блокировки чего-либо — приём заказов без фото не
+ * ограничиваем, это будет отдельным шагом позже.
+ * @param {File} file
+ */
+async function changeProfileAvatar(file) {
+  const user = currentUser();
+  if (!user) return;
+  const btn = document.getElementById('profile-avatar-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Загружаем…';
+  }
+  try {
+    const compact = await compressImageFile(file, { maxBytes: 400_000, maxDim: 800 });
+    const { url } = await uploadAvatar(compact, user.id);
+    saveUser({ ...user, avatarUrl: url });
+    render();
+  } catch (err) {
+    reportError('загрузка фото профиля', err);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = user.avatarUrl ? 'Изменить фото' : 'Добавить фото';
+    }
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -5111,6 +5143,24 @@ function renderProfile() {
     <div class="screen">
       <div class="section-title">Профиль</div>
       <div class="field-card">
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+          <div class="profile-avatar" style="width:64px;height:64px;border-radius:50%;overflow:hidden;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            ${
+              user.avatarUrl
+                ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />`
+                : `<span style="font-size:26px;">👤</span>`
+            }
+          </div>
+          <div>
+            <button type="button" class="secondary-button" id="profile-avatar-btn" data-action="pick-avatar" style="margin-top:0;">${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}</button>
+            <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
+            ${
+              user.availableAsWorker && !user.avatarUrl
+                ? `<p class="order-meta" style="margin-top:6px;">Мастерам скоро понадобится фото, чтобы брать заказы, — добавьте заранее.</p>`
+                : ''
+            }
+          </div>
+        </div>
         <p><b>${escapeHtml(user.displayName)}</b></p>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
@@ -5588,6 +5638,34 @@ async function uploadAttachment(file) {
   return { url: `${url}/storage/v1/object/public/order-attachments/${path}`, path };
 }
 
+/**
+ * Загружает аватарку профиля — тот же бакет order-attachments (публичный
+ * на чтение), что и фото к заявкам, просто в отдельной «папке» avatars/,
+ * чтобы не заводить для этого отдельный бакет и не просить настраивать
+ * новые политики доступа в Supabase.
+ * @param {File} file
+ * @param {string} userId
+ */
+async function uploadAvatar(file, userId) {
+  if (!isSupabaseConfigured()) return { url: file.name };
+  const { url, key } = getConfig();
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const path = `avatars/${userId}-${Date.now()}.${ext}`;
+  const res = await fetch(`${url}/storage/v1/object/order-attachments/${path}`, {
+    method: 'POST',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    throw new Error(`Не удалось загрузить фото: ${res.status} ${await res.text()}`);
+  }
+  return { url: `${url}/storage/v1/object/public/order-attachments/${path}` };
+}
+
 // Видео к заказу больше не прикладываем — только фото (проще для мастера
 // посмотреть, дешевле для нас хранить), и не больше этого числа за раз.
 const MAX_ORDER_PHOTOS = 5;
@@ -5919,6 +5997,14 @@ function wireEvents() {
     });
   }
 
+  const profileAvatarFile = document.getElementById('profile-avatar-file');
+  if (profileAvatarFile) {
+    profileAvatarFile.addEventListener('change', () => {
+      const file = profileAvatarFile.files && profileAvatarFile.files[0];
+      if (file) changeProfileAvatar(file);
+    });
+  }
+
   const reviewFile = document.getElementById('quick-review-file');
   const reviewAttachments = document.getElementById('quick-review-attachments');
   if (reviewFile && reviewAttachments) {
@@ -6161,6 +6247,9 @@ async function handleAction(action, value) {
       return captureGeolocation();
     case 'save-profile-district':
       return saveProfileDistrict();
+    case 'pick-avatar':
+      document.getElementById('profile-avatar-file')?.click();
+      return;
     case 'save-radius': {
       const user = currentUser();
       saveUser({ ...user, searchRadiusKm: Number(document.getElementById('field-radius').value || 3) });
