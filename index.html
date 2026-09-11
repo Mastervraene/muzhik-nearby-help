@@ -3850,14 +3850,36 @@ async function acceptOrder(orderId) {
  * список заказов, подходящих текущему мастеру рядом, теперь считает и
  * фильтрует сервер (сервисным ключом), а не браузер по уже скачанному
  * cache.orders. Вызывается при входе на экран «Заказы» и после
- * приёма/публикации заказа. Тихо ничего не делает вне режима Supabase,
- * без токена сессии или если пользователь ещё не мастер.
+ * приёма/публикации заказа. Тихо ничего не делает вне режима Supabase
+ * или если пользователь ещё не мастер.
+ *
+ * Токен сессии (см. issueSessionToken) на боте выдаётся в фоне и не
+ * дожидается своего завершения (boot() его не await-ит) — если мастер
+ * успевает открыть «Заказы» раньше, чем токен долетел до localStorage,
+ * раньше эта функция тихо выходила с пустым списком и НИКОГДА не
+ * пересматривала это позже: список оставался пустым до следующего явного
+ * захода на экран, хотя все условия (радиус, специализации, статус
+ * заказов) были в порядке — баг, из-за которого мастер с полностью
+ * корректно настроенным профилем не видел ни одного заказа. Ниже — та же
+ * подстраховка на случай, если токен в localStorage разошёлся с тем, что
+ * сервер считает актуальным (см. комментарий про 401 внутри функции).
+ *
+ * @param {boolean} [isRetry] — внутренний флаг, чтобы не зациклиться, если
+ * даже свежевыданный токен почему-то не подходит.
  */
-async function refreshAvailableOrders() {
+async function refreshAvailableOrders(isRetry) {
   const user = currentUser();
-  const token = loadSessionToken();
-  if (!isSupabaseConfigured() || !user || !user.availableAsWorker || !user.skills.length || !token) {
+  if (!isSupabaseConfigured() || !user || !user.availableAsWorker || !user.skills.length) {
     cache.availableOrders = [];
+    return;
+  }
+  let token = loadSessionToken();
+  if (!token) {
+    token = await issueSessionToken(user.id);
+  }
+  if (!token) {
+    cache.availableOrders = [];
+    if (state.screen === 'orders') render();
     return;
   }
   try {
@@ -3867,6 +3889,15 @@ async function refreshAvailableOrders() {
       headers: headers(),
       body: JSON.stringify({ workerId: user.id, sessionToken: token }),
     });
+    // 401 здесь означает, что сохранённый токен разошёлся с тем, что
+    // сейчас в user_sessions (например, вход был на другом устройстве и
+    // выдал новый токен) — старый токен в localStorage тихо переживал
+    // сам себя. Выпускаем новый и пробуем один раз ещё, вместо того чтобы
+    // просто молча остаться с пустым списком.
+    if (res.status === 401 && !isRetry) {
+      const freshToken = await issueSessionToken(user.id);
+      if (freshToken) return refreshAvailableOrders(true);
+    }
     if (!res.ok) throw new Error(`available-orders failed: ${res.status}`);
     const data = await res.json();
     cache.availableOrders = (data.orders || []).map((o) => ({
