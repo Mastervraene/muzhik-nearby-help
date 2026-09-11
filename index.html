@@ -796,6 +796,31 @@ body {
   border-radius: 6px;
 }
 
+.location-confirm {
+  margin-top: 10px;
+}
+
+.location-confirm-map {
+  height: 220px;
+  border-radius: var(--radius-sm, 10px);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm, 0 1px 4px rgba(0,0,0,0.08));
+  background: var(--gray-100);
+}
+
+.location-confirm-hint {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin: 6px 0 0;
+}
+
+.location-confirm-address {
+  font-size: 13px;
+  color: var(--gray-700);
+  margin: 6px 0 0;
+  font-weight: 500;
+}
+
 .empty-state {
   text-align: center;
   color: var(--gray-400);
@@ -1174,6 +1199,12 @@ body {
       // от ключа YandexGPT/SpeechKit). Пусто — автоопределение адреса просто
       // возьмёт сырые координаты без красивого текста.
       YANDEX_GEOCODER_API_KEY: '4be0a4fc-08bd-4859-9145-ac737b71c49f',
+      // Отдельный ключ JavaScript API Яндекс.Карт (для интерактивной карты
+      // на экране «Проверьте заявку») — тот же ключ, что уже используется
+      // в admin.html для отрисовки карты заказов/мастеров, проверен вживую.
+      // Ключ Геокодера (выше) для этого НЕ подходит — в кабинете Яндекса
+      // это разные продукты с разными ключами.
+      YANDEX_MAPS_JS_API_KEY: 'a286e6c9-cbc9-42ef-9bd6-a923d0c7e227',
       // Базовый URL Supabase Edge Function с расшифровкой голоса (/transcribe)
       // и уточняющими вопросами по тексту заявки (/interpret). Пусто —
       // ассистент выключен, сайт работает как раньше (ручной ввод).
@@ -3754,14 +3785,14 @@ async function saveProfileDistrict() {
       console.warn('[geo] прямое геокодирование адреса не удалось', err);
     }
     if (!coords) {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Сохранить';
-      }
-      showToast('Не удалось распознать такой адрес — выберите вариант из подсказок или уточните адрес');
-      return;
+      // Не блокируем сохранение — просто предупреждаем и сохраняем адрес
+      // с нераспознанной точкой (0,0). Уточнить точку можно будет на карте
+      // при следующей заявке (см. renderCompose → quickReview).
+      showToast('Не удалось распознать адрес на карте — точку можно будет уточнить позже');
+      location = { lat: 0, lng: 0 };
+    } else {
+      location = coords;
     }
-    location = coords;
   }
   // Если геокодер вовсе не настроен (нет ключа) — строгую проверку включить
   // не можем, координаты остаются прежними, как и раньше.
@@ -3798,17 +3829,17 @@ async function reverseGeocodeYandex(lat, lng) {
   return found?.metaDataProperty?.GeocoderMetaData?.text || found?.name || null;
 }
 
-// Сервис — гиперлокальный, только Москва и область (профили мастеров и
-// подбор заказов рядом строятся вокруг CENTER). Геокодер Яндекса при этом
-// НЕ отказывает на бессмысленный текст — он нечётко ищет ближайшее по
-// буквам совпадение по всей базе, вплоть до других регионов и стран
-// (проверено вживую: «Тыртыртыр несуществующая улица дом 999» подобрал
-// посёлок Тыр в Хабаровском крае, в 6000+ км от Москвы, с precision:
-// "other" — это самый низкий уровень уверенности геокодера). Поэтому
-// прямого geocode-запроса с непустым результатом недостаточно, чтобы
-// считать адрес существующим — дополнительно отсекаем откровенно левые
-// совпадения по расстоянию от Москвы и по precision.
-const MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM = 120; // Москва + область с запасом
+// Сервис не ограничен одной Москвой — заказчики могут быть и в регионах
+// (в том числе уже на альфа-тесте), поэтому отсекать совпадения по
+// расстоянию от Москвы нельзя. Геокодер Яндекса при этом НЕ отказывает на
+// бессмысленный текст — он нечётко ищет ближайшее по буквам совпадение по
+// всей базе (проверено вживую: «Тыртыртыр несуществующая улица дом 999»
+// подобрал посёлок Тыр в Хабаровском крае с precision: "other" — это самый
+// низкий уровень уверенности геокодера). Такие мусорные совпадения
+// по-прежнему отсекаем по precision — это единственный надёжный,
+// не привязанный к региону сигнал. Дальше сохранённая точка в любом случае
+// уточняется человеком на интерактивной карте (см. renderCompose →
+// quickReview), поэтому жёсткая блокировка на этом шаге не нужна.
 /** Совпадения с такой precision — самый низкий уровень уверенности геокодера, фактически «не нашли, но что-то вернуть надо». */
 const GEOCODER_JUNK_PRECISION = new Set(['other']);
 
@@ -3816,10 +3847,10 @@ const GEOCODER_JUNK_PRECISION = new Set(['other']);
  * Прямое геокодирование: текстовый адрес → координаты. Используется, когда
  * человек вписывает адрес руками (без геолокации браузера) — например, в
  * профиле мастера (см. saveProfileDistrict), чтобы координаты для карты в
- * админке обновлялись вместе с текстом, а не только текст. Явно
- * отбрасывает нечёткие совпадения (см. MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM/
- * GEOCODER_JUNK_PRECISION выше) — иначе бессмысленный ввод мог бы пройти
- * проверку и заявка/профиль сохранились бы с координатами не в Москве.
+ * админке обновлялись вместе с текстом, а не только текст. Отбрасывает
+ * явно мусорные совпадения (см. GEOCODER_JUNK_PRECISION выше); итоговая
+ * точка в любом случае перепроверяется человеком на карте на шаге
+ * подтверждения заявки.
  * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён, адрес не распознан или совпадение похоже на мусорное
  */
 async function geocodeAddressYandex(addressText) {
@@ -3838,7 +3869,6 @@ async function geocodeAddressYandex(addressText) {
 
   const precision = found?.metaDataProperty?.GeocoderMetaData?.precision;
   if (precision && GEOCODER_JUNK_PRECISION.has(precision)) return null;
-  if (distanceKm(CENTER, { lat, lng }) > MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM) return null;
 
   return { lat, lng };
 }
@@ -3871,16 +3901,146 @@ async function searchAddressSuggestionsYandex(query) {
     if (!text || !pos || seen.has(text)) continue;
     const [lng, lat] = pos.split(' ').map(Number);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    // Те же фильтры, что и в geocodeAddressYandex — иначе в подсказках
-    // может мелькнуть нечёткое совпадение вроде посёлка в другом регионе
-    // (см. MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM/GEOCODER_JUNK_PRECISION выше).
+    // Тот же фильтр, что и в geocodeAddressYandex — иначе в подсказках
+    // может мелькнуть совсем нечёткое совпадение (см. GEOCODER_JUNK_PRECISION
+    // выше). По расстоянию от Москвы больше не фильтруем — заказчики могут
+    // быть и в регионах.
     const precision = geo?.metaDataProperty?.GeocoderMetaData?.precision;
     if (precision && GEOCODER_JUNK_PRECISION.has(precision)) continue;
-    if (distanceKm(CENTER, { lat, lng }) > MAX_PLAUSIBLE_ADDRESS_DISTANCE_KM) continue;
     seen.add(text);
     out.push({ text, lat, lng });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------
+// Интерактивная карта подтверждения точки на экране «Проверьте заявку»
+// (renderCompose → quickReview). Адрес больше не блокирует отправку заявки
+// сам по себе (см. composerSend/saveProfileDistrict выше) — вместо этого
+// человек своими глазами видит метку на карте и может перетащить её на
+// нужное место, если геокодер ошибся или адрес не распознался вовсе.
+// Карта — тот же JS API Яндекс.Карт 2.1, что и в admin.html, только со
+// своим ключом (YANDEX_MAPS_JS_API_KEY) и с одной перетаскиваемой меткой
+// вместо множества.
+// ---------------------------------------------------------------------
+
+function isMapsJsConfigured() {
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  return Boolean(env.YANDEX_MAPS_JS_API_KEY);
+}
+
+let quickReviewMapInstance = null;
+let quickReviewMapLoadPromise = null;
+
+function loadYmapsScriptForCompose() {
+  if (window.ymaps) return Promise.resolve();
+  if (quickReviewMapLoadPromise) return quickReviewMapLoadPromise;
+  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
+  const apiKey = env.YANDEX_MAPS_JS_API_KEY;
+  quickReviewMapLoadPromise = new Promise((resolve, reject) => {
+    if (!apiKey) return reject(new Error('YANDEX_MAPS_JS_API_KEY не задан'));
+    const script = document.createElement('script');
+    script.src = `https://api-maps.yandex.ru/2.1/?apikey=${encodeURIComponent(apiKey)}&lang=ru_RU`;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Не удалось загрузить Яндекс.Карты'));
+    document.head.appendChild(script);
+  });
+  return quickReviewMapLoadPromise;
+}
+
+/**
+ * Инициализирует (или переинициализирует после re-render) интерактивную
+ * карту с перетаскиваемой меткой на экране подтверждения заявки. Вызывается
+ * из wireEvents() — из-за паттерна «render() каждый раз заменяет всё #app
+ * целиком» старый экземпляр ymaps.Map живёт в уже удалённом из DOM
+ * контейнере, поэтому его сперва аккуратно уничтожаем (.destroy()), чтобы
+ * не плодить утечки и невидимые обработчики событий.
+ */
+async function initQuickReviewMap() {
+  const container = document.getElementById('quick-review-map');
+  if (!container) return; // не на этом шаге композера — ничего делать не нужно
+
+  if (quickReviewMapInstance) {
+    try { quickReviewMapInstance.destroy(); } catch (err) { /* контейнер уже мог исчезнуть — не критично */ }
+    quickReviewMapInstance = null;
+  }
+
+  if (!isMapsJsConfigured()) {
+    container.innerHTML = '';
+    return;
+  }
+
+  try {
+    await loadYmapsScriptForCompose();
+  } catch (err) {
+    console.warn('[geo] карта подтверждения адреса не загрузилась', err);
+    return;
+  }
+
+  window.ymaps.ready(() => {
+    const containerNow = document.getElementById('quick-review-map');
+    if (!containerNow) return; // экран сменился, пока карта грузилась
+
+    const d = state.draft;
+    const startCoords = hasValidLocation(d.exactLocation)
+      ? [d.exactLocation.lat, d.exactLocation.lng]
+      : [CENTER.lat, CENTER.lng];
+
+    const map = new window.ymaps.Map('quick-review-map', {
+      center: startCoords,
+      zoom: hasValidLocation(d.exactLocation) ? 16 : 10,
+      controls: ['zoomControl'],
+    });
+    quickReviewMapInstance = map;
+
+    const placemark = new window.ymaps.Placemark(
+      startCoords,
+      {},
+      {
+        iconLayout: 'default#image',
+        iconImageHref: 'red-dot.png',
+        iconImageSize: [22, 22],
+        iconImageOffset: [-11, -11], // кружок симметричный — центрируем прямо на координате
+        draggable: true,
+      }
+    );
+    map.geoObjects.add(placemark);
+
+    const applyPoint = async (lat, lng) => {
+      state.draft.exactLocation = { lat, lng };
+      const hint = document.getElementById('quick-review-map-address');
+      if (hint) hint.textContent = 'Определяем адрес…';
+      try {
+        const text = await reverseGeocodeYandex(lat, lng);
+        if (text) {
+          state.draft.fullAddress = text;
+          state.draft.district = text;
+        }
+      } catch (err) {
+        console.warn('[geo] обратное геокодирование точки на карте не удалось', err);
+      }
+      if (hint) {
+        hint.textContent = state.draft.fullAddress
+          ? `📍 ${state.draft.fullAddress}`
+          : 'Адрес не определён — можно уточнить его текстом выше';
+      }
+      // Предупреждение «точка не определена» относится к старому состоянию —
+      // раз человек только что подтвердил метку на карте, лишний банер уже
+      // не нужен, а полный render() сейчас сбил бы фокус/позицию карты.
+      const warn = document.getElementById('quick-review-location-warning');
+      if (warn) warn.remove();
+    };
+
+    placemark.events.add('dragend', () => {
+      const coords = placemark.geometry.getCoordinates();
+      applyPoint(coords[0], coords[1]);
+    });
+    map.events.add('click', (e) => {
+      const coords = e.get('coords');
+      placemark.geometry.setCoordinates(coords);
+      applyPoint(coords[0], coords[1]);
+    });
+  });
 }
 
 /**
@@ -4510,7 +4670,20 @@ function renderCompose() {
             : `<p>Обычно такая задача стоит примерно <b>${d.estimate.min}–${d.estimate.max} ₽</b>.<small>${d.estimate.factors.join(', ') || 'Базовая оценка без надбавок'}</small></p>`
         }
         ${d.riskWarning ? `<div class="order-warning">${escapeHtml(d.riskWarning)}</div>` : ''}
-        ${!hasValidLocation(d.exactLocation) ? `<div class="order-warning">⚠ Не удалось определить точку на карте по адресу «${escapeHtml(d.fullAddress || d.district || '')}». Заявку можно отправить, но мастера рядом могут её не увидеть в поиске — попробуйте уточнить адрес.</div>` : ''}
+        ${
+          !hasValidLocation(d.exactLocation)
+            ? `<div class="order-warning" id="quick-review-location-warning">⚠ Не удалось точно определить адрес «${escapeHtml(d.fullAddress || d.district || '')}» на карте. Заявку можно отправить, но, пожалуйста, уточните точку на карте ниже — иначе мастера рядом могут её не увидеть в поиске.</div>`
+            : ''
+        }
+        <div class="location-confirm">
+          <div class="location-confirm-map" id="quick-review-map"></div>
+          ${
+            isMapsJsConfigured()
+              ? `<p class="location-confirm-hint">Перетащите метку или нажмите на карте, чтобы уточнить точку</p>
+                 <p class="location-confirm-address" id="quick-review-map-address">${hasValidLocation(d.exactLocation) ? `📍 ${escapeHtml(d.fullAddress || d.district || '')}` : 'Уточните точку на карте'}</p>`
+              : ''
+          }
+        </div>
         <div id="quick-review-attachments" class="attachment-preview">
           ${(d.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
         </div>
@@ -5393,32 +5566,24 @@ function wireEvents() {
       // координат ещё нет — пробуем прямое геокодирование, тем же
       // способом, что и адрес мастера в профиле (geocodeAddressYandex).
       // Отдельного ключа Геосаджеста с честным автодополнением по базе
-      // реальных адресов у нас нет, поэтому единственная доступная
-      // проверка «адрес вообще существует» — это попытка его
-      // геокодировать: если она не удалась, заявка теперь НЕ отправляется
-      // (раньше в этом случае всё равно уходила с сентинелом {0,0} и
-      // предупреждением на экране проверки — теперь строже).
+      // реальных адресов у нас нет, поэтому это лишь попытка подсказать
+      // точку заранее — блокировать отправку не нужно: если геокодирование
+      // не удалось, заявка всё равно уходит с сентинелом {0,0} и
+      // предупреждением, а точную точку человек подтвердит на карте на
+      // следующем шаге («Проверьте заявку»).
       let exactLocation = composerExactLocation;
-      if (!hasValidLocation(exactLocation)) {
-        if (isGeocoderConfigured()) {
-          composerSend.disabled = true;
-          try {
-            exactLocation = await geocodeAddressYandex(address);
-          } catch (err) {
-            console.warn('[geo] геокодирование адреса заявки не удалось', err);
-            exactLocation = null;
-          } finally {
-            composerSend.disabled = false;
-          }
-          if (!hasValidLocation(exactLocation)) {
-            showToast('Не удалось распознать такой адрес — выберите вариант из подсказок или уточните адрес');
-            return;
-          }
-        } else {
-          // Геокодер вовсе не настроен (нет ключа) — строгую проверку
-          // включить не можем, пропускаем заявку без проверенных координат,
-          // как и раньше.
+      if (!hasValidLocation(exactLocation) && isGeocoderConfigured()) {
+        composerSend.disabled = true;
+        try {
+          exactLocation = await geocodeAddressYandex(address);
+        } catch (err) {
+          console.warn('[geo] геокодирование адреса заявки не удалось', err);
           exactLocation = null;
+        } finally {
+          composerSend.disabled = false;
+        }
+        if (!hasValidLocation(exactLocation)) {
+          showToast('Адрес не распознан на карте — уточните точку на следующем шаге');
         }
       }
 
@@ -5485,6 +5650,14 @@ function wireEvents() {
       });
     });
   }
+
+  // Карта подтверждения точки (renderCompose → quickReview) — есть в DOM,
+  // только пока открыт этот шаг композера (initQuickReviewMap сама
+  // проверяет наличие #quick-review-map и ничего не делает на других
+  // экранах). Обновление координат при перетаскивании метки/клике по карте
+  // делается точечно (см. applyPoint внутри initQuickReviewMap), без
+  // полного render() — иначе каждый клик пересоздавал бы саму карту.
+  initQuickReviewMap();
 
   document.body.onclick = null;
   document.querySelectorAll('[data-action]').forEach((node) => {
