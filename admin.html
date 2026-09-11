@@ -198,6 +198,23 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .dot.order { background: #e53935; }
 .legend-logo { width: 16px; height: 16px; display: inline-block; vertical-align: middle; }
+.zone-toolbar { margin-bottom: 10px; }
+.zone-toolbar select { min-width: 260px; }
+.zone-hint { font-size: 12px; color: var(--gray-500); margin: -4px 0 12px; }
+.zone-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+.zone-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 10px; background: var(--gray-50);
+  border-left: 4px solid var(--gray-300);
+}
+.zone-row.in { border-left-color: var(--green); }
+.zone-row.out { border-left-color: var(--red); }
+.zone-row-main { min-width: 0; }
+.zone-row-title { font-weight: 700; font-size: 13px; color: var(--gray-900); }
+.zone-row-meta { color: var(--gray-500); font-size: 11.5px; margin-top: 2px; }
+.zone-row-actions { display: flex; gap: 6px; flex-shrink: 0; white-space: nowrap; }
+.zone-row-actions a { font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 700; }
+.btn-sm.mini { padding: 5px 10px; font-size: 11.5px; }
 .map-note {
   background: var(--accent-soft); color: var(--accent-strong); font-size: 12.5px; padding: 10px 12px;
   border-radius: 10px; margin-bottom: 12px;
@@ -286,8 +303,15 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <span><img class="legend-logo" src="logo.png" alt="" /> Мастера</span>
       <span><i class="dot order"></i> Заказы</span>
     </div>
+    <div class="toolbar zone-toolbar">
+      <select id="map-zone-select">
+        <option value="">Радиус поиска: не показывать</option>
+      </select>
+    </div>
+    <div class="zone-hint" id="zone-hint" style="display:none;"></div>
     <div id="map-note-slot"></div>
     <div id="map-container"></div>
+    <div id="map-zone-list"></div>
   </div>
 
   <div class="tab-panel" id="panel-notify">
@@ -727,6 +751,11 @@ let mastersSearchQuery = '';
 let openOrderId = null;
 let openMasterId = null;
 let mapLoaded = false;
+// Выбранная «зона действия» на карте — либо мастер (кружок = его радиус
+// по умолчанию, используется только когда у заказа своего радиуса нет),
+// либо заказ (кружок = радиус ИМЕННО этого заказа — а на практике именно
+// он решает, увидит ли мастер заказ: см. формулу в updateMapZoneOpacity).
+let mapZoneSelection = null; // { type: 'master' | 'order', id: string } | null
 let notifyAudience = 'all';
 let notifyCategories = new Set(); // специализации мастеров, можно несколько — пусто значит «любая»
 let notifyStatuses = new Set(); // статусы заказа клиента, можно несколько — пусто значит «любой»
@@ -1480,6 +1509,22 @@ function renderNotify() {
 // -----------------------------------------------------------------------
 // Вкладка «Карта» (Яндекс.Карты JS API)
 // -----------------------------------------------------------------------
+// Тот же haversine, что и в index.html (distanceKm) — сюда скопирован
+// один в один, чтобы «попадает ли заказ в радиус» на карте админки
+// считалось точно так же, как реальный подбор кандидатов для мастера.
+const EARTH_RADIUS_KM = 6371;
+function distanceKm(a, b) {
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return EARTH_RADIUS_KM * c;
+}
+
 function renderMapNote() {
   const slot = document.getElementById('map-note-slot');
   if (!YANDEX_MAPS_JS_API_KEY) {
@@ -1521,12 +1566,168 @@ async function renderMap() {
   }
 }
 
+// Заполняет <select id="map-zone-select"> списком «Мастер: …» / «Заказ: …»
+// для визуализации радиуса поиска. Пересобирается при каждом fillMapPoints
+// (после loadData список мастеров/заказов мог измениться), но сохраняет
+// текущий выбор, если он ещё существует.
+function populateMapZoneSelect() {
+  const sel = document.getElementById('map-zone-select');
+  if (!sel) return;
+  const workers = allUsers.filter((u) => u.availableAsWorker && u.location.lat && u.location.lng);
+  const orders = allOrders.filter((o) => o.exactLocation.lat && o.exactLocation.lng);
+  const workerOpts = workers
+    .map(
+      (u) =>
+        `<option value="master:${u.id}">Мастер: ${escapeHtml(u.displayName || u.phone || u.id)}${
+          u.district ? ' — ' + escapeHtml(u.district) : ''
+        } (радиус ${u.searchRadiusKm} км)</option>`
+    )
+    .join('');
+  const orderOpts = orders
+    .map(
+      (o) =>
+        `<option value="order:${o.id}">Заказ: ${escapeHtml(o.title || 'без названия')}${
+          o.district ? ' — ' + escapeHtml(o.district) : ''
+        } (радиус ${o.searchRadiusKm ?? 3} км)</option>`
+    )
+    .join('');
+  sel.innerHTML =
+    `<option value="">Радиус поиска: не показывать</option>` +
+    (workerOpts ? `<optgroup label="Показать зону мастера">${workerOpts}</optgroup>` : '') +
+    (orderOpts ? `<optgroup label="Показать зону заказа">${orderOpts}</optgroup>` : '');
+  const wantValue = mapZoneSelection ? `${mapZoneSelection.type}:${mapZoneSelection.id}` : '';
+  const exists = wantValue && [...sel.options].some((opt) => opt.value === wantValue);
+  sel.value = exists ? wantValue : '';
+  if (wantValue && !exists) mapZoneSelection = null;
+}
+
+// Принудительное назначение мастера прямо из списка «зоны» на карте — та
+// же логика подтверждения + уведомления в Telegram, что и в форме заказа
+// (wireOrderForm), но отдельной копией: форма заказа патчит СРАЗУ много
+// полей одним запросом, а тут нужно менять только assigned_worker_id, не
+// трогая остальное — проще и безопаснее продублировать, чем расщеплять
+// уже проверенный код формы на два запроса.
+async function quickAssignWorkerToOrder(orderId, workerId) {
+  const order = allOrders.find((o) => o.id === orderId);
+  const worker = allUsers.find((u) => u.id === workerId);
+  if (!order || !worker) return;
+  if (order.assignedWorkerId === worker.id) {
+    alert('Этот мастер уже назначен на заказ.');
+    return;
+  }
+  const label = worker.displayName || worker.phone || worker.id;
+  const ok = confirm(
+    `Принудительно назначить заказ «${order.title || 'без названия'}» мастеру «${label}»?\n\nЕсли у него привязан Telegram — придёт уведомление о назначении.`
+  );
+  if (!ok) return;
+  try {
+    await updateRow('orders', order.id, { assigned_worker_id: worker.id });
+    if (worker.telegramId) {
+      const orderLabel = order.title || 'Заказ';
+      const districtLabel = order.district || '';
+      const text = `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`;
+      try {
+        const res = await sendAdminNotification([worker.telegramId], text);
+        if (res.configured && res.sent > 0) {
+          try {
+            await insertRow('telegram_messages', {
+              user_id: worker.id,
+              telegram_id: worker.telegramId,
+              direction: 'out',
+              text,
+            });
+          } catch (logErr) {
+            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn('Не удалось отправить уведомление о назначении:', notifyErr);
+      }
+    }
+    await loadData({ keepOpen: true });
+    renderMap();
+  } catch (err) {
+    alert('Не удалось назначить: ' + err.message);
+  }
+}
+window.quickAssignWorkerToOrder = quickAssignWorkerToOrder;
+
+// Рендерит список под картой: для выбранного мастера — заказы рядом с ним,
+// для выбранного заказа — мастеров рядом с ним. Отсортировано по |запас/
+// перебор радиуса| по возрастанию — самые спорные случаи (в духе «3 км и
+// 1 метр») оказываются наверху списка, а не тонут среди явных попаданий
+// или явных промахов.
+function renderMapZoneList(rows, mode) {
+  const listEl = document.getElementById('map-zone-list');
+  const hintEl = document.getElementById('zone-hint');
+  if (!listEl) return;
+  if (!mode || !rows) {
+    listEl.innerHTML = '';
+    hintEl.style.display = 'none';
+    return;
+  }
+  hintEl.style.display = '';
+  hintEl.textContent =
+    mode === 'master'
+      ? 'Кружок на карте — радиус мастера по умолчанию: реально учитывается, только если у заказа не задан свой радиус. Цвет точек и список ниже считаются по фактической формуле (радиус самого заказа — он главный).'
+      : 'Кружок на карте — радиус ИМЕННО этого заказа: это и есть значение, которое реально решает, увидит ли мастер заказ в поиске.';
+
+  if (!rows.length) {
+    listEl.innerHTML = `<div class="empty-state">${mode === 'master' ? 'У этого мастера нет заказов с определённой точкой на карте' : 'Нет мастеров с определённой точкой на карте'}</div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows
+    .map((r) => {
+      const marginM = Math.round(Math.abs(r.margin) * 1000);
+      const marginLabel = r.eligible
+        ? `запас ${marginM >= 1000 ? (marginM / 1000).toFixed(2) + ' км' : marginM + ' м'}`
+        : `превышение на ${marginM >= 1000 ? (marginM / 1000).toFixed(2) + ' км' : marginM + ' м'}`;
+      if (mode === 'master') {
+        const o = r.item;
+        return `
+          <div class="zone-row ${r.eligible ? 'in' : 'out'}">
+            <div class="zone-row-main">
+              <div class="zone-row-title">${r.eligible ? '✅' : '❌'} ${escapeHtml(o.title || 'Заказ')}</div>
+              <div class="zone-row-meta">${escapeHtml(o.district || '')} · ${r.distance.toFixed(2)} км от мастера · радиус заказа ${r.effRadius} км · ${marginLabel}</div>
+            </div>
+            <div class="zone-row-actions">
+              <a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть →</a>
+            </div>
+          </div>`;
+      }
+      const u = r.item;
+      return `
+        <div class="zone-row ${r.eligible ? 'in' : 'out'}">
+          <div class="zone-row-main">
+            <div class="zone-row-title">${r.eligible ? '✅' : '❌'} ${escapeHtml(u.displayName || u.phone || 'Мастер')}</div>
+            <div class="zone-row-meta">${escapeHtml(u.district || '')} · ${r.distance.toFixed(2)} км от заказа · радиус заказа ${r.effRadius} км · ${marginLabel}</div>
+          </div>
+          <div class="zone-row-actions">
+            <a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Карточка →</a>
+            <button class="btn-sm primary mini" onclick="quickAssignWorkerToOrder('${r.orderId}','${u.id}')">Назначить</button>
+          </div>
+        </div>`;
+    })
+    .join('');
+}
+
 function fillMapPoints() {
   const map = window.__adminMap;
   if (!map) return;
+  populateMapZoneSelect();
   map.geoObjects.removeAll();
   let pointCount = 0;
   let singlePoint = null;
+
+  const zoneMaster =
+    mapZoneSelection && mapZoneSelection.type === 'master'
+      ? allUsers.find((u) => u.id === mapZoneSelection.id)
+      : null;
+  const zoneOrder =
+    mapZoneSelection && mapZoneSelection.type === 'order'
+      ? allOrders.find((o) => o.id === mapZoneSelection.id)
+      : null;
 
   // Метка мастера — логотип сайта (щит с «М») вместо стандартной точки:
   // свой узнаваемый значок вместо предустановленного преcета Яндекс.Карт.
@@ -1536,6 +1737,16 @@ function fillMapPoints() {
       const coords = [u.location.lat, u.location.lng];
       pointCount++;
       singlePoint = coords;
+      // Когда выбран конкретный заказ — приглушаем мастеров, которые его
+      // не увидят (дальше радиуса ИМЕННО этого заказа), чтобы «зона
+      // действия» была видна не только кружком, но и по самим меткам.
+      let opacity = 1;
+      if (zoneOrder) {
+        const dist = distanceKm(u.location, zoneOrder.exactLocation);
+        const effRadius = zoneOrder.searchRadiusKm || u.searchRadiusKm || 3;
+        opacity = dist <= effRadius ? 1 : 0.3;
+      }
+      const isCenter = zoneMaster && zoneMaster.id === u.id;
       const pm = new window.ymaps.Placemark(
         coords,
         {
@@ -1545,8 +1756,9 @@ function fillMapPoints() {
         {
           iconLayout: 'default#image',
           iconImageHref: 'logo.png',
-          iconImageSize: [32, 32],
-          iconImageOffset: [-16, -16], // логотип симметричный — центрируем прямо на координате, не как «булавку»
+          iconImageSize: isCenter ? [40, 40] : [32, 32],
+          iconImageOffset: isCenter ? [-20, -20] : [-16, -16], // логотип симметричный — центрируем прямо на координате, не как «булавку»
+          iconOpacity: opacity,
         }
       );
       map.geoObjects.add(pm);
@@ -1565,21 +1777,86 @@ function fillMapPoints() {
       const coords = [o.exactLocation.lat, o.exactLocation.lng];
       pointCount++;
       singlePoint = coords;
+      // Когда выбран мастер — приглушаем заказы вне его фактической
+      // досягаемости (по формуле «радиус заказа, при его отсутствии —
+      // радиус мастера, при отсутствии обоих — 3 км», как в реальном
+      // подборе кандидатов на сайте).
+      let opacity = 1;
+      if (zoneMaster) {
+        const dist = distanceKm(zoneMaster.location, o.exactLocation);
+        const effRadius = o.searchRadiusKm || zoneMaster.searchRadiusKm || 3;
+        opacity = dist <= effRadius ? 1 : 0.3;
+      }
+      const isCenter = zoneOrder && zoneOrder.id === o.id;
       const pm = new window.ymaps.Placemark(
         coords,
         {
           balloonContentHeader: escapeHtml(o.title || 'Заказ'),
-          balloonContentBody: `${statusPillHtml(o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}<br/><a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть карточку заказа →</a>`,
+          balloonContentBody: `${statusPillHtml(o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}<br/>радиус поиска: ${o.searchRadiusKm ?? 3} км<br/><a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть карточку заказа →</a>`,
         },
         {
           iconLayout: 'default#image',
           iconImageHref: 'red-dot.png',
-          iconImageSize: [22, 22],
-          iconImageOffset: [-11, -11], // кружок симметричный — центрируем прямо на координате
+          iconImageSize: isCenter ? [30, 30] : [22, 22],
+          iconImageOffset: isCenter ? [-15, -15] : [-11, -11], // кружок симметричный — центрируем прямо на координате
+          iconOpacity: opacity,
         }
       );
       map.geoObjects.add(pm);
     });
+
+  // Кружок радиуса поиска — вокруг мастера (его радиус по умолчанию) или
+  // вокруг заказа (радиус именно этого заказа, который на практике и
+  // решает всё — см. formula выше). Circle ждёт радиус в МЕТРАХ, не км.
+  if (zoneMaster) {
+    const circle = new window.ymaps.Circle(
+      [[zoneMaster.location.lat, zoneMaster.location.lng], zoneMaster.searchRadiusKm * 1000],
+      {},
+      { fillColor: '#2563eb26', strokeColor: '#2563eb', strokeWidth: 2, strokeOpacity: 0.8 }
+    );
+    map.geoObjects.add(circle);
+  } else if (zoneOrder) {
+    const circle = new window.ymaps.Circle(
+      [[zoneOrder.exactLocation.lat, zoneOrder.exactLocation.lng], (zoneOrder.searchRadiusKm || 3) * 1000],
+      {},
+      { fillColor: '#2563eb26', strokeColor: '#2563eb', strokeWidth: 2, strokeOpacity: 0.8 }
+    );
+    map.geoObjects.add(circle);
+  }
+
+  // Список под картой — точные расстояния и запас/перебор радиуса, чтобы
+  // ловить пограничные случаи («3 км и 1 метр»), которые на глаз по цвету
+  // точки не всегда различимы.
+  if (zoneMaster) {
+    const rows = allOrders
+      .filter((o) => o.exactLocation.lat && o.exactLocation.lng)
+      .map((o) => {
+        const distance = distanceKm(zoneMaster.location, o.exactLocation);
+        const effRadius = o.searchRadiusKm || zoneMaster.searchRadiusKm || 3;
+        return { item: o, distance, effRadius, eligible: distance <= effRadius, margin: effRadius - distance };
+      })
+      .sort((a, b) => Math.abs(a.margin) - Math.abs(b.margin));
+    renderMapZoneList(rows, 'master');
+  } else if (zoneOrder) {
+    const rows = allUsers
+      .filter((u) => u.availableAsWorker && u.location.lat && u.location.lng)
+      .map((u) => {
+        const distance = distanceKm(u.location, zoneOrder.exactLocation);
+        const effRadius = zoneOrder.searchRadiusKm || u.searchRadiusKm || 3;
+        return {
+          item: u,
+          orderId: zoneOrder.id,
+          distance,
+          effRadius,
+          eligible: distance <= effRadius,
+          margin: effRadius - distance,
+        };
+      })
+      .sort((a, b) => Math.abs(a.margin) - Math.abs(b.margin));
+    renderMapZoneList(rows, 'order');
+  } else {
+    renderMapZoneList(null, null);
+  }
 
   // map.setBounds() ждёт РОВНО два угла [[юго-запад],[северо-восток]], а не
   // список всех точек — раньше сюда передавался массив со ВСЕМИ метками
@@ -1691,6 +1968,16 @@ function showApp() {
   document.getElementById('masters-search').addEventListener('input', (e) => {
     mastersSearchQuery = e.target.value;
     renderMasters();
+  });
+  document.getElementById('map-zone-select').addEventListener('change', (e) => {
+    const val = e.target.value;
+    if (!val) {
+      mapZoneSelection = null;
+    } else {
+      const sep = val.indexOf(':');
+      mapZoneSelection = { type: val.slice(0, sep), id: val.slice(sep + 1) };
+    }
+    fillMapPoints();
   });
   document.getElementById('notify-audience').addEventListener('change', (e) => {
     notifyAudience = e.target.value;
