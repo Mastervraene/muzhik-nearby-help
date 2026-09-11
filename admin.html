@@ -281,6 +281,37 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .admin-modal-body { padding: 16px 18px; overflow-y: auto; min-height: 0; }
 .admin-modal-actions { display: flex; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--gray-100); flex-shrink: 0; }
 .admin-modal-actions .btn-sm { flex: 1; text-align: center; }
+
+/* ---------- Фото заказа: всплывающий баннер (лайтбокс) ---------- */
+.lightbox-overlay {
+  position: fixed; inset: 0; background: rgba(10, 10, 10, 0.88);
+  display: flex; align-items: center; justify-content: center; z-index: 300; padding: 16px;
+}
+.lightbox-stage {
+  position: relative; width: 100%; max-width: 640px; max-height: 86vh;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: none; animation: admin-modal-rise 0.18s ease-out;
+}
+.lightbox-stage img {
+  max-width: 100%; max-height: 86vh; border-radius: 10px; object-fit: contain;
+  user-select: none; -webkit-user-drag: none;
+}
+.lightbox-close {
+  position: absolute; top: -14px; right: -14px; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--gray-0); color: var(--gray-700); font-size: 15px;
+  display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); z-index: 1;
+}
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); width: 38px; height: 38px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92); color: var(--gray-700); font-size: 16px;
+  display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md);
+}
+.lightbox-prev { left: -8px; }
+.lightbox-next { right: -8px; }
+.lightbox-counter {
+  position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%);
+  color: var(--gray-0); font-size: 12.5px; font-weight: 600; opacity: 0.85;
+}
 </style>
 </head>
 <body>
@@ -388,6 +419,16 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <button type="button" class="btn-sm ghost" id="map-sort-reset">Сбросить всё</button>
         <button type="button" class="btn-sm primary" id="map-sort-done">Готово</button>
       </div>
+    </div>
+  </div>
+
+  <div class="lightbox-overlay" id="lightbox-overlay" style="display:none;" data-action="close-lightbox">
+    <div class="lightbox-stage" id="lightbox-stage" onclick="event.stopPropagation()">
+      <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Закрыть">✕</button>
+      <button type="button" class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Предыдущее фото">‹</button>
+      <img id="lightbox-img" src="" alt="" />
+      <button type="button" class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Следующее фото">›</button>
+      <span class="lightbox-counter" id="lightbox-counter"></span>
     </div>
   </div>
 
@@ -848,6 +889,9 @@ let mapFilterStatuses = new Set(); // статусы заказов, можно 
 let notifyAudience = 'all';
 let notifyCategories = new Set(); // специализации мастеров, можно несколько — пусто значит «любая»
 let notifyStatuses = new Set(); // статусы заказа клиента, можно несколько — пусто значит «любой»
+// Лайтбокс фото заказа (открывается кликом по миниатюре в карточке заказа).
+let lightboxPhotos = []; // массив attachments открытого сейчас заказа
+let lightboxIndex = 0;
 
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
@@ -1052,11 +1096,11 @@ function orderFormHtml(o) {
   return `
     <div class="card-body open" id="order-body-${o.id}">
       ${o.warnings && o.warnings.length ? `<div class="warnings-list">${o.warnings.map((w) => `⚠ ${escapeHtml(w)}`).join('<br/>')}</div>` : ''}
+      <div class="field-sm">
+        <label>Описание</label>
+        <textarea id="f-desc-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;">${escapeHtml(o.description || o.title || '')}</textarea>
+      </div>
       <div class="grid-2">
-        <div class="field-sm">
-          <label>Название</label>
-          <input type="text" id="f-title-${o.id}" value="${escapeHtml(o.title || '')}" />
-        </div>
         <div class="field-sm">
           <label>Категория</label>
           <select id="f-category-${o.id}">
@@ -1104,16 +1148,12 @@ function orderFormHtml(o) {
           <input type="number" id="f-radius-${o.id}" value="${o.searchRadiusKm ?? 3}" />
         </div>
       </div>
-      <div class="field-sm">
-        <label>Описание</label>
-        <textarea id="f-desc-${o.id}">${escapeHtml(o.description || '')}</textarea>
-      </div>
       ${formattedBriefHtml(o.formattedBrief)}
       ${o.attachments && o.attachments.length
         ? `<div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${o.attachments
             .map(
-              (a) =>
-                `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);" loading="lazy" /></a>`
+              (a, idx) =>
+                `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb" data-order-id="${o.id}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" />`
             )
             .join('')}</div>`
         : ''}
@@ -1126,19 +1166,40 @@ function orderFormHtml(o) {
   `;
 }
 
+function autosizeAdminTextarea(textarea) {
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.max(textarea.scrollHeight, 40) + 'px';
+}
+
 function wireOrderForm(o) {
   const statusSelectEl = document.getElementById(`f-status-${o.id}`);
   statusSelectEl.addEventListener('change', () => {
     statusSelectEl.style.borderLeft = `4px solid ${statusColor(statusSelectEl.value).dot}`;
   });
+  const descTextareaEl = document.getElementById(`f-desc-${o.id}`);
+  if (descTextareaEl) {
+    autosizeAdminTextarea(descTextareaEl);
+    descTextareaEl.addEventListener('input', () => autosizeAdminTextarea(descTextareaEl));
+  }
+  if (o.attachments && o.attachments.length) {
+    const photos = o.attachments;
+    document.querySelectorAll(`.order-photo-thumb[data-order-id="${o.id}"]`).forEach((thumbEl) => {
+      thumbEl.addEventListener('click', () => {
+        const idx = Number(thumbEl.getAttribute('data-photo-index') || 0);
+        openLightbox(photos, idx);
+      });
+    });
+  }
   document.getElementById(`save-order-${o.id}`).addEventListener('click', async () => {
     const newStatus = document.getElementById(`f-status-${o.id}`).value;
     const statusChanged = newStatus !== o.status;
     const newWorkerId = document.getElementById(`f-worker-${o.id}`).value || null;
     const workerChanged = newWorkerId !== (o.assignedWorkerId || null);
     const finalPriceRaw = document.getElementById(`f-final-price-${o.id}`).value.trim();
+    const descriptionValue = document.getElementById(`f-desc-${o.id}`).value.trim();
     const patch = {
-      title: document.getElementById(`f-title-${o.id}`).value.trim(),
+      title: descriptionValue.slice(0, 60),
       category_id: document.getElementById(`f-category-${o.id}`).value,
       status: newStatus,
       assigned_worker_id: newWorkerId,
@@ -1146,7 +1207,7 @@ function wireOrderForm(o) {
       district: document.getElementById(`f-district-${o.id}`).value.trim(),
       desired_date: document.getElementById(`f-date-${o.id}`).value.trim() || null,
       time_window: document.getElementById(`f-window-${o.id}`).value.trim(),
-      description: document.getElementById(`f-desc-${o.id}`).value.trim(),
+      description: descriptionValue,
       search_radius_km: Number(document.getElementById(`f-radius-${o.id}`).value || 3),
       estimate: {
         min: Number(document.getElementById(`f-est-min-${o.id}`).value || 0),
@@ -1734,6 +1795,132 @@ function closeMapSortModal() {
   document.getElementById('map-sort-overlay').style.display = 'none';
 }
 
+/**
+ * Свайп вверх ИЛИ вниз закрывает всплывающую карточку — тот же жест, что и
+ * в онбординге на главной странице (см. index.html → wireOnboardingSwipe).
+ * Игнорирует начало жеста с кнопок/ссылок/полей ввода и с прокручиваемой
+ * области тела карточки, чтобы не мешать обычному скроллу и тапам.
+ */
+function wireModalSwipeToClose(cardEl, onDismiss) {
+  if (!cardEl || cardEl.dataset.swipeWired) return;
+  cardEl.dataset.swipeWired = '1';
+  const scrollableBody = cardEl.querySelector('.admin-modal-body');
+  const DISMISS_THRESHOLD = 70;
+  let startY = null;
+  let dragging = false;
+
+  const bodyIsScrollable = () => Boolean(scrollableBody && scrollableBody.scrollHeight > scrollableBody.clientHeight + 1);
+
+  const onPointerDown = (e) => {
+    if (e.target.closest('button, a, select, input, textarea, [data-action]')) return;
+    if (bodyIsScrollable() && scrollableBody.contains(e.target)) return;
+    startY = e.clientY;
+    dragging = true;
+    cardEl.style.transition = 'none';
+    cardEl.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!dragging || startY === null) return;
+    cardEl.style.transform = `translateY(${e.clientY - startY}px)`;
+  };
+  const onPointerEnd = (e) => {
+    if (!dragging || startY === null) return;
+    const delta = e.clientY - startY;
+    dragging = false;
+    startY = null;
+    cardEl.style.transition = 'transform 0.2s ease';
+    cardEl.style.transform = 'translateY(0)';
+    if (Math.abs(delta) > DISMISS_THRESHOLD) onDismiss();
+  };
+
+  cardEl.addEventListener('pointerdown', onPointerDown);
+  cardEl.addEventListener('pointermove', onPointerMove);
+  cardEl.addEventListener('pointerup', onPointerEnd);
+  cardEl.addEventListener('pointercancel', onPointerEnd);
+}
+
+// -----------------------------------------------------------------------
+// Лайтбокс фото заказа — открывается кликом по миниатюре в карточке заказа
+// (см. orderFormHtml/wireOrderForm). Свайп влево/вправо — пролистать фото,
+// вверх/вниз — закрыть.
+// -----------------------------------------------------------------------
+function openLightbox(photos, index) {
+  lightboxPhotos = photos || [];
+  lightboxIndex = Math.max(0, Math.min(index || 0, lightboxPhotos.length - 1));
+  document.getElementById('lightbox-overlay').style.display = 'flex';
+  renderLightbox();
+}
+function closeLightbox() {
+  document.getElementById('lightbox-overlay').style.display = 'none';
+  lightboxPhotos = [];
+}
+function lightboxShow(delta) {
+  if (!lightboxPhotos.length) return;
+  lightboxIndex = (lightboxIndex + delta + lightboxPhotos.length) % lightboxPhotos.length;
+  renderLightbox();
+}
+function renderLightbox() {
+  const photo = lightboxPhotos[lightboxIndex];
+  if (!photo) return;
+  const imgEl = document.getElementById('lightbox-img');
+  imgEl.src = photo.url;
+  imgEl.alt = photo.name || '';
+  const multi = lightboxPhotos.length > 1;
+  document.getElementById('lightbox-prev').style.display = multi ? 'flex' : 'none';
+  document.getElementById('lightbox-next').style.display = multi ? 'flex' : 'none';
+  document.getElementById('lightbox-counter').textContent = multi ? `${lightboxIndex + 1} / ${lightboxPhotos.length}` : '';
+}
+
+/**
+ * Жест на лайтбоксе совмещает два направления: горизонтальный свайп
+ * листает фото (влево — следующее, вправо — предыдущее), вертикальный —
+ * закрывает баннер (как вверх, так и вниз). Побеждает то направление, по
+ * которому смещение больше на отпускании пальца.
+ */
+function wireLightboxSwipe() {
+  const stage = document.getElementById('lightbox-stage');
+  if (!stage || stage.dataset.swipeWired) return;
+  stage.dataset.swipeWired = '1';
+  const DISMISS_THRESHOLD = 70;
+  const SWIPE_THRESHOLD = 50;
+  let startX = null;
+  let startY = null;
+  let dragging = false;
+
+  const onPointerDown = (e) => {
+    if (e.target.closest('button, [data-action]')) return;
+    startX = e.clientX;
+    startY = e.clientY;
+    dragging = true;
+    stage.style.transition = 'none';
+    stage.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!dragging || startX === null) return;
+    stage.style.transform = `translate(${e.clientX - startX}px, ${e.clientY - startY}px)`;
+  };
+  const onPointerEnd = (e) => {
+    if (!dragging || startX === null) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    dragging = false;
+    startX = null;
+    startY = null;
+    stage.style.transition = 'transform 0.2s ease';
+    stage.style.transform = 'translate(0, 0)';
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > DISMISS_THRESHOLD) {
+      closeLightbox();
+    } else if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > SWIPE_THRESHOLD) {
+      lightboxShow(dx < 0 ? 1 : -1);
+    }
+  };
+
+  stage.addEventListener('pointerdown', onPointerDown);
+  stage.addEventListener('pointermove', onPointerMove);
+  stage.addEventListener('pointerup', onPointerEnd);
+  stage.addEventListener('pointercancel', onPointerEnd);
+}
+
 function renderMapSortModal() {
   document.getElementById('map-sort-audience').value = mapFilterAudience;
   document.getElementById('map-sort-categories-wrap').style.display = mapFilterAudience === 'orders' ? 'none' : '';
@@ -2246,6 +2433,21 @@ function showApp() {
   document.getElementById('map-sort-overlay').addEventListener('click', (e) => {
     if (e.target.dataset.action === 'close-map-sort') closeMapSortModal();
   });
+  wireModalSwipeToClose(document.querySelector('#map-sort-overlay .admin-modal-card'), closeMapSortModal);
+
+  document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+  document.getElementById('lightbox-prev').addEventListener('click', () => lightboxShow(-1));
+  document.getElementById('lightbox-next').addEventListener('click', () => lightboxShow(1));
+  document.getElementById('lightbox-overlay').addEventListener('click', (e) => {
+    if (e.target.dataset.action === 'close-lightbox') closeLightbox();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (document.getElementById('lightbox-overlay').style.display === 'none') return;
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowLeft') lightboxShow(-1);
+    else if (e.key === 'ArrowRight') lightboxShow(1);
+  });
+  wireLightboxSwipe();
   document.getElementById('map-sort-audience').addEventListener('change', (e) => {
     mapFilterAudience = e.target.value;
     if (mapFilterAudience === 'orders') mapFilterCategories.clear();
