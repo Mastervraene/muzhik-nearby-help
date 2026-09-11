@@ -163,6 +163,19 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
 .empty-state { text-align: center; color: var(--gray-500); padding: 40px 20px; font-size: 14px; }
 
+/* ---------- Переписка в Telegram (карточка пользователя) ---------- */
+.chat-thread {
+  max-height: 260px; overflow-y: auto; background: var(--gray-50); border-radius: var(--radius-sm);
+  padding: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px;
+}
+.chat-bubble { max-width: 80%; padding: 7px 11px; border-radius: 14px; font-size: 13px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+.chat-bubble.in { align-self: flex-start; background: var(--gray-0); box-shadow: var(--shadow-sm); border-bottom-left-radius: 4px; }
+.chat-bubble.out { align-self: flex-end; background: var(--accent-soft); color: var(--accent-strong); border-bottom-right-radius: 4px; }
+.chat-bubble-time { display: block; font-size: 10.5px; color: var(--gray-400); margin-top: 3px; }
+.chat-bubble.out .chat-bubble-time { color: var(--accent); opacity: 0.7; }
+.chat-empty { color: var(--gray-500); font-size: 12.5px; text-align: center; padding: 10px 0; }
+.pill.chat-count { background: #fff7ed; color: #c2410c; }
+
 /* ---------- Карта ---------- */
 #map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
 .map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
@@ -467,6 +480,33 @@ async function sendAdminNotification(chatIds, text) {
   return data || { configured: true, sent: 0, failed: [] };
 }
 
+// Добавление строки (используется для записи исходящих сообщений в
+// telegram_messages — входящие пишет сама Edge Function telegram-webhook
+// сервисным ключом, это для симметрии видно в истории переписки).
+async function insertRow(table, data) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: sbHeaders({ Prefer: 'return=representation' }),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`POST ${table} failed: ${res.status} ${await res.text()}`);
+  const result = await res.json();
+  return Array.isArray(result) ? result[0] : result;
+}
+
+// Массовая вставка (для рассылки — одно исходящее сообщение на каждого
+// успешного получателя за один запрос вместо N).
+async function insertRows(table, rows) {
+  if (!rows.length) return [];
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: sbHeaders({ Prefer: 'return=representation' }),
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) throw new Error(`POST ${table} (bulk) failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
 async function deleteRow(table, id, byField) {
   const field = byField || 'id';
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${field}=eq.${encodeURIComponent(id)}`, {
@@ -520,6 +560,17 @@ function dbUserToUser(row) {
     customerRating: Number(row.customer_rating ?? 0),
     customerRatingCount: Number(row.customer_rating_count ?? 0),
     blocked: Boolean(row.blocked),
+    createdAt: row.created_at,
+  };
+}
+
+function dbMessageToMessage(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    telegramId: row.telegram_id,
+    direction: row.direction, // 'in' | 'out'
+    text: row.text || '',
     createdAt: row.created_at,
   };
 }
@@ -612,6 +663,7 @@ let allOrders = [];
 let allUsers = [];
 let allStats = [];
 let allSkills = [];
+let allMessages = [];
 let ordersStatusFilter = '';
 let ordersSearchQuery = '';
 let mastersFilter = 'workers';
@@ -629,6 +681,17 @@ function userName(id) {
 
 function skillsForUser(userId) {
   return allSkills.filter((s) => s.userId === userId);
+}
+
+// Переписка привязана к telegram_id, а не к user_id — так проще: не
+// зависит от того, был ли user_id известен в момент входящего сообщения
+// (см. telegram-webhook.ts), и это тот же ключ, что уже используется для
+// отправки (u.telegramId).
+function messagesForTelegramId(telegramId) {
+  if (!telegramId) return [];
+  return allMessages
+    .filter((m) => m.telegramId === telegramId)
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 }
 
 // Поиск «по любому полю» — просто склеиваем всё, что может быть интересно
@@ -866,6 +929,7 @@ function renderMasters() {
 
 function masterCardHtml(u) {
   const open = openMasterId === u.id;
+  const chatCount = u.telegramId ? messagesForTelegramId(u.telegramId).length : 0;
   return `
     <div class="card">
       <div class="card-head" id="master-head-${u.id}">
@@ -877,6 +941,7 @@ function masterCardHtml(u) {
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>${!u.avatarUrl ? '<span class="pill warn">без фото</span>' : ''}` : '<span class="pill muted">клиент</span>'}
+            ${chatCount ? `<span class="pill chat-count">💬 ${chatCount}</span>` : ''}
             <span>${u.location.lat ? `${u.location.lat.toFixed(4)}, ${u.location.lng.toFixed(4)}` : 'без геоточки'}</span>
           </div>
         </div>
@@ -885,6 +950,25 @@ function masterCardHtml(u) {
       ${open ? masterFormHtml(u) : ''}
     </div>
   `;
+}
+
+// Пузыри переписки для карточки пользователя — входящие слева (сообщения
+// от человека), исходящие справа (то, что ему отправили из админки).
+function chatThreadHtml(telegramId) {
+  const messages = messagesForTelegramId(telegramId);
+  if (!messages.length) {
+    return '<div class="chat-empty">Сообщений пока нет</div>';
+  }
+  return messages
+    .map(
+      (m) => `
+        <div class="chat-bubble ${m.direction === 'out' ? 'out' : 'in'}">
+          ${escapeHtml(m.text)}
+          <span class="chat-bubble-time">${fmtDate(m.createdAt)}</span>
+        </div>
+      `
+    )
+    .join('');
 }
 
 function masterFormHtml(u) {
@@ -979,18 +1063,19 @@ function masterFormHtml(u) {
           : '<span class="skills-empty">Навыки не указаны</span>'}
       </div>
 
-      <p class="form-section-label">Уведомление в Telegram</p>
+      <p class="form-section-label">Переписка в Telegram</p>
       ${u.telegramId
         ? `
+          <div class="chat-thread" id="mf-chat-${u.id}">${chatThreadHtml(u.telegramId)}</div>
           <div class="field-sm dense">
-            <textarea id="mf-notify-text-${u.id}" style="min-height:60px;" placeholder="Текст сообщения этому пользователю…"></textarea>
+            <textarea id="mf-notify-text-${u.id}" style="min-height:60px;" placeholder="Ответить в Telegram…"></textarea>
           </div>
           <div class="row-actions">
-            <button class="btn-sm primary" id="mf-notify-send-${u.id}">Отправить в Telegram</button>
+            <button class="btn-sm primary" id="mf-notify-send-${u.id}">Отправить</button>
             <span class="save-hint" id="mf-notify-hint-${u.id}" style="color:var(--gray-500);"></span>
           </div>
         `
-        : '<span class="skills-empty">Telegram не привязан — отправить нельзя.</span>'}
+        : '<span class="skills-empty">Telegram не привязан — переписки нет.</span>'}
 
       <div class="row-actions" style="margin-top:14px;">
         <button class="btn-sm primary" id="save-master-${u.id}">Сохранить</button>
@@ -1083,6 +1168,20 @@ function wireMasterForm(u) {
         if (!res.configured) {
           alert('Рассылка ещё не настроена на сервере — нужно задеплоить Edge Function admin-notify (см. README).');
         } else if (res.sent > 0) {
+          // Сообщение реально ушло в Telegram — если запись в историю
+          // переписки почему-то не удастся (например, таблица
+          // telegram_messages ещё не создана), это не повод показывать
+          // ошибку отправки: сама отправка уже состоялась.
+          try {
+            await insertRow('telegram_messages', {
+              user_id: u.id,
+              telegram_id: u.telegramId,
+              direction: 'out',
+              text,
+            });
+          } catch (logErr) {
+            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
+          }
           textEl.value = '';
           if (hint) {
             hint.textContent = 'Отправлено ✓';
@@ -1090,17 +1189,24 @@ function wireMasterForm(u) {
             hint.style.display = 'inline';
             setTimeout(() => { hint.style.display = 'none'; }, 2500);
           }
+          await loadData({ keepOpen: true });
+          const threadEl = document.getElementById(`mf-chat-${u.id}`);
+          if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
         } else {
           alert('Не удалось отправить — возможно, пользователь ещё не запускал бота (/start) или заблокировал его.');
         }
       } catch (err) {
         alert('Не удалось отправить: ' + err.message);
       } finally {
-        notifySendBtn.disabled = false;
-        notifySendBtn.textContent = 'Отправить в Telegram';
+        const freshBtn = document.getElementById(`mf-notify-send-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Отправить'; }
       }
     });
   }
+
+  // Прокрутить переписку к последнему сообщению при открытии карточки.
+  const chatThreadEl = document.getElementById(`mf-chat-${u.id}`);
+  if (chatThreadEl) chatThreadEl.scrollTop = chatThreadEl.scrollHeight;
 
   document.getElementById(`delete-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -1331,16 +1437,22 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
     getRows('skills').catch(() => []),
+    // .catch(() => []) — таблица telegram_messages появилась позже остальных
+    // и может быть ещё не создана в базе; тогда переписка просто не
+    // показывается, а не ломает всю страницу (тот же принцип, что и у
+    // daily_stats/skills выше).
+    getRows('telegram_messages', 'select=*&order=created_at.asc').catch(() => []),
   ]);
   allUsers = userRows.map(dbUserToUser);
   allOrders = orderRows.map(dbOrderToOrder);
   allStats = statRows.map(dbDailyStatToStat);
   allSkills = skillRows.map(dbSkillToSkill);
+  allMessages = messageRows.map(dbMessageToMessage);
   renderOrders();
   renderMasters();
   renderNotify();
@@ -1415,6 +1527,24 @@ function showApp() {
           ? `Отправлено: ${res.sent}. Не удалось доставить: ${res.failed.length} (скорее всего, эти люди ещё не запускали бота или заблокировали его).`
           : `Отправлено всем: ${res.sent}.`;
         document.getElementById('notify-text').value = '';
+
+        // Записываем каждое реально доставленное сообщение в историю
+        // переписки — чтобы рассылка тоже была видна в карточке каждого
+        // получателя, а не только отправка один-на-один. failed содержит
+        // тех, кому НЕ доставилось (chatId — это как раз telegramId).
+        const failedIds = new Set((res.failed || []).map((f) => String(f.chatId)));
+        const delivered = recipients.filter((u) => !failedIds.has(String(u.telegramId)));
+        if (delivered.length) {
+          try {
+            await insertRows(
+              'telegram_messages',
+              delivered.map((u) => ({ user_id: u.id, telegram_id: u.telegramId, direction: 'out', text }))
+            );
+          } catch (logErr) {
+            console.warn('Не удалось сохранить рассылку в историю переписки:', logErr);
+          }
+          await loadData();
+        }
       }
     } catch (err) {
       resultEl.style.color = 'var(--red)';
