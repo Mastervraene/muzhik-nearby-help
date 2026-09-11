@@ -1205,15 +1205,21 @@ body {
       // Ключ Геокодера (выше) для этого НЕ подходит — в кабинете Яндекса
       // это разные продукты с разными ключами.
       YANDEX_MAPS_JS_API_KEY: 'a286e6c9-cbc9-42ef-9bd6-a923d0c7e227',
-      // Ключ API Геосаджеста Яндекса (suggest-maps.yandex.ru) — отдельный
-      // продукт от HTTP-Геокодера выше, честное автодополнение адреса по
-      // мере набора (а не подбор ближайшего похожего через Геокодер, как
-      // было раньше в searchAddressSuggestionsYandex). Получен пользователем
-      // в кабинете разработчика Яндекса.
-      YANDEX_GEOSUGGEST_API_KEY: '35c1d47e-8ab7-4540-b9db-6bca7def534f',
-      // Базовый URL Supabase Edge Function с расшифровкой голоса (/transcribe)
-      // и уточняющими вопросами по тексту заявки (/interpret). Пусто —
-      // ассистент выключен, сайт работает как раньше (ручной ввод).
+      // Ключ API Геосаджеста Яндекса (suggest-maps.yandex.ru) сюда НЕ
+      // кладём — в отличие от Геокодера/JS Maps API выше, этот продукт не
+      // отдаёт CORS-заголовки на запросы из браузера с произвольного
+      // origin (проверено вживую: прямой fetch с сайта падает с "Failed to
+      // fetch", хотя тот же ключ прекрасно работает через curl/сервер).
+      // Поэтому ключ живёт только как секрет YANDEX_GEOSUGGEST_API_KEY у
+      // Supabase Edge Function /suggest (см. supabase/functions/suggest в
+      // архиве ассистента) — сайт обращается к ней самой, а не к Яндексу
+      // напрямую (см. searchAddressSuggestionsYandex ниже). Подсказки
+      // адреса включены, когда настроен ASSISTANT_FUNCTION_URL ниже — тот
+      // же переключатель, что и у голоса/классификации категории.
+      // Базовый URL Supabase Edge Function с расшифровкой голоса (/transcribe),
+      // уточняющими вопросами по тексту заявки (/interpret) и подсказками
+      // адреса (/suggest). Пусто — ассистент и подсказки выключены, сайт
+      // работает как раньше (ручной ввод).
       ASSISTANT_FUNCTION_URL: 'https://youyvbqdxuigvjciklfk.supabase.co/functions/v1',
     };
   </script>
@@ -3822,12 +3828,13 @@ function isGeocoderConfigured() {
   return Boolean(env.YANDEX_GEOCODER_API_KEY);
 }
 
-/** Ключ API Геосаджеста (suggest-maps.yandex.ru) — отдельный продукт от
- * HTTP-Геокодера выше, используется только для выпадающих подсказок адреса
- * (см. searchAddressSuggestionsYandex/wireAddressSuggestions ниже). */
+/** Подсказки адреса (см. searchAddressSuggestionsYandex/wireAddressSuggestions
+ * ниже) идут через Supabase-прокси /suggest, а не напрямую к Яндексу (у
+ * Геосаджеста нет CORS для браузера, см. комментарий у ASSISTANT_FUNCTION_URL
+ * в window.__ENV__) — поэтому доступность подсказок определяется тем же
+ * ASSISTANT_FUNCTION_URL, что и у голоса/категорий, а не отдельным ключом. */
 function isGeosuggestConfigured() {
-  const env = (typeof window !== 'undefined' && window.__ENV__) || {};
-  return Boolean(env.YANDEX_GEOSUGGEST_API_KEY);
+  return isAssistantConfigured();
 }
 
 /** @returns {Promise<string|null>} человекочитаемый адрес либо null, если ключ не подключён */
@@ -3890,36 +3897,43 @@ async function geocodeAddressYandex(addressText) {
 /**
  * Подсказки реального адреса по мере ввода — честное автодополнение по базе
  * Яндекса (а не «подбор ближайшего похожего» через Геокодер, как было
- * раньше, до получения отдельного ключа Геосаджеста). Сам ответ Геосаджеста
- * координат не содержит — только текст и uri объекта (attrs=uri); чтобы
- * получить координаты, uri нужно передать отдельным запросом в Геокодер
- * вместо текста (см. resolveGeosuggestUri ниже) — это делается уже при
- * выборе конкретной подсказки, а не на каждый символ ввода.
+ * раньше, до получения отдельного ключа Геосаджеста). Идёт не напрямую к
+ * suggest-maps.yandex.ru, а через Supabase Edge Function /suggest — у
+ * Геосаджеста нет CORS для запросов из браузера (см. комментарий у
+ * ASSISTANT_FUNCTION_URL в window.__ENV__), напрямую с сайта это падает с
+ * "Failed to fetch", хотя ключ рабочий. Сам ответ Геосаджеста координат не
+ * содержит — только текст и uri объекта; чтобы получить координаты, uri
+ * нужно передать отдельным запросом в Геокодер вместо текста (см.
+ * resolveGeosuggestUri ниже, он ходит к Геокодеру напрямую — тот CORS
+ * отдаёт) — это делается уже при выборе конкретной подсказки, а не на
+ * каждый символ ввода.
  * @returns {Promise<Array<{text:string, uri:string}>>}
  */
 async function searchAddressSuggestionsYandex(query) {
   const env = (typeof window !== 'undefined' && window.__ENV__) || {};
-  const apiKey = env.YANDEX_GEOSUGGEST_API_KEY;
-  if (!apiKey) return [];
-  const url = `https://suggest-maps.yandex.ru/v1/suggest?apikey=${encodeURIComponent(apiKey)}&text=${encodeURIComponent(query)}&results=5&lang=ru_RU&attrs=uri`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Yandex suggest ${res.status}`);
+  if (!isAssistantConfigured()) return [];
+  const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/suggest`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // Supabase Edge Functions по умолчанию проверяют JWT — публичный
+      // anon-ключ сайта (тот же паттерн, что у /transcribe и /interpret).
+      Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+      apikey: env.SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ text: query }),
+  });
+  if (!res.ok) throw new Error(`suggest proxy ${res.status}`);
   const data = await res.json();
-  const results = data?.results || [];
-  const seen = new Set();
+  const results = Array.isArray(data?.results) ? data.results : [];
   const out = [];
   for (const item of results) {
-    const uri = item?.uri;
-    // Без uri не получится узнать координаты этого варианта (см.
-    // resolveGeosuggestUri) — такие подсказки (например, общие категории)
-    // в списке бесполезны, пропускаем.
-    if (!uri) continue;
-    const titleText = item?.title?.text || '';
-    const subtitleText = item?.subtitle?.text || '';
-    const text = subtitleText ? `${titleText}, ${subtitleText}` : titleText;
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
-    out.push({ text, uri });
+    // Прокси уже отфильтровал/дедуплицировал варианты без uri или текста
+    // (см. supabase/functions/suggest) — здесь просто на всякий случай
+    // проверяем форму ответа.
+    if (item && typeof item.text === 'string' && typeof item.uri === 'string') {
+      out.push({ text: item.text, uri: item.uri });
+    }
   }
   return out;
 }
@@ -4118,8 +4132,9 @@ async function initQuickReviewMap() {
  * сам Геосаджест координат не отдаёт). Работает через прямые
  * DOM-манипуляции, а не через полный render() — иначе поле теряло бы фокус
  * на каждую подсказку (см. общий паттерн composer-assistant-hint). Если
- * ключ Геосаджеста не настроен (YANDEX_GEOSUGGEST_API_KEY пуст) — подсказки
- * просто не показываются, поле остаётся обычным текстовым.
+ * прокси-функция не настроена (ASSISTANT_FUNCTION_URL пуст, см.
+ * isGeosuggestConfigured) — подсказки просто не показываются, поле
+ * остаётся обычным текстовым.
  * @param {HTMLInputElement} input
  * @param {HTMLElement} listEl
  * @param {(item: {text:string, lat:number|null, lng:number|null}) => void} onSelect
