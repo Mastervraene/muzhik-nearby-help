@@ -679,6 +679,7 @@ body {
 .field-card input[type="text"],
 .field-card input[type="date"],
 .field-card input[type="number"],
+.field-card input[type="password"],
 .field-card select,
 .field-card textarea {
   width: 100%;
@@ -1878,9 +1879,12 @@ function clearSession() {
  * (available-orders), и приём заказа (accept-order) требуют этот токен —
  * иначе просто зная/подставив чужой id пользователя в localStorage,
  * поведение мастера этого пользователя не подделать через эти два запроса.
- * Это не полноценная защита от входа по чужому телефону (SMS-подтверждения
- * пока нет — см. README), а защита от подмены на уровне уже открытого в
- * браузере запроса.
+ * ОБНОВЛЕНО: теперь этот токен выдаётся ТОЛЬКО через set-password/
+ * login-with-password (после реальной проверки пароля), а не по одному
+ * лишь id — см. enterPasswordStep/submitPasswordStep и boot() ниже. Раньше
+ * (issueSessionToken без пароля) это было чисто защитой от подмены на
+ * уровне уже открытого запроса, а не от входа по чужому телефону/id —
+ * теперь это полноценная авторизация.
  */
 const SESSION_TOKEN_KEY = 'muzhik_session_token_v1';
 
@@ -2231,6 +2235,11 @@ function dbUserToUser(row, skillsByUser) {
     customerRatingCount: Number(row.customer_rating_count ?? 0),
     blocked: Boolean(row.blocked),
     createdAt: row.created_at,
+    // Безопасный денормализованный флаг (см. public.user_auth в
+    // README/памятке по паролям) — сам хеш пароля никогда не приходит
+    // клиенту, но по этому булеву клиент понимает, какой экран показать:
+    // «Придумайте пароль» или «Введите пароль» (см. enterPasswordStep).
+    hasPassword: Boolean(row.has_password),
   };
 }
 
@@ -3302,13 +3311,127 @@ async function checkPhoneCallVerification(phoneE164, since) {
   }
 }
 
-/** Завершает вход независимо от того, было подтверждение звонком или нет. */
-async function finishPhoneGateLogin(user) {
+// ---------------------------------------------------------------------
+// Обязательный пароль (см. README/памятку про уязвимость входа по одному
+// лишь номеру телефона). Раньше finishPhoneGateLogin сразу же выдавал
+// сессию (issueSessionToken) — теперь он лишь открывает экран пароля
+// (renderPasswordStepOverlay), а сессия/токен появляются только после
+// успешного запроса к Edge Function set-password (для аккаунта без
+// пароля — «Придумайте пароль») или login-with-password (пароль уже
+// есть — «Введите пароль»). Токен, который эти функции выдают, кладётся
+// в тот же localStorage (SESSION_TOKEN_KEY), что и раньше — это и есть
+// «запомнить это устройство», см. boot(): пока токен есть, пароль на
+// этом устройстве заново не спрашивается.
+// ---------------------------------------------------------------------
+
+/** null | { userId, phone, mode: 'create'|'login', error: string, submitting: boolean, onComplete: (()=>void)|null } */
+let passwordStepState = null;
+
+/**
+ * Открывает экран пароля вместо немедленного завершения входа. Общая
+ * точка для всех мест, где раньше вход завершался сразу по телефону
+ * (phone-gate, Telegram-код, гостевой чекаут в композере).
+ * @param {{id:string, phone:string, hasPassword?: boolean}} user
+ * @param {(() => void)|null} [onComplete] — что доделать сразу после
+ * успешного пароля/входа (например, доотправить заявку — см. 'publish-draft').
+ */
+function enterPasswordStep(user, onComplete = null) {
   phoneVerifyState = null;
-  state.currentUserId = user.id;
-  saveSession(user.id);
-  await issueSessionToken(user.id);
+  passwordStepState = {
+    userId: user.id,
+    phone: user.phone,
+    mode: user.hasPassword ? 'login' : 'create',
+    error: '',
+    submitting: false,
+    onComplete: onComplete || null,
+  };
   render();
+}
+
+/** Завершает вход независимо от того, было подтверждение звонком или нет — теперь ведёт на экран пароля, а не сразу внутрь. */
+async function finishPhoneGateLogin(user) {
+  enterPasswordStep(user);
+}
+
+/** Вызывается после успешного set-password/login-with-password. */
+function completePasswordLogin(userId, token) {
+  const onComplete = passwordStepState && passwordStepState.onComplete;
+  passwordStepState = null;
+  state.currentUserId = userId;
+  saveSession(userId);
+  saveSessionToken(token);
+  const idx = cache.users.findIndex((u) => u.id === userId);
+  if (idx >= 0) cache.users[idx] = { ...cache.users[idx], hasPassword: true };
+  render();
+  if (typeof onComplete === 'function') onComplete();
+}
+
+/** Закрывает экран пароля без входа — как «Ввести другой номер» у phone-verify. */
+function cancelPasswordStep() {
+  passwordStepState = null;
+  render();
+}
+
+/**
+ * Отправляет пароль на set-password (аккаунт без пароля) или
+ * login-with-password (пароль уже есть) — см. Edge Functions.
+ * @param {string} passwordValue
+ * @param {string} [confirmValue] — только для mode==='create'
+ */
+async function submitPasswordStep(passwordValue, confirmValue) {
+  if (!passwordStepState || passwordStepState.submitting) return;
+  const { phone, mode } = passwordStepState;
+  if (mode === 'create') {
+    if (!passwordValue || passwordValue.length < 6) {
+      passwordStepState.error = 'Пароль должен быть не короче 6 символов';
+      return render();
+    }
+    if (passwordValue !== confirmValue) {
+      passwordStepState.error = 'Пароли не совпадают';
+      return render();
+    }
+  } else if (!passwordValue) {
+    passwordStepState.error = 'Введите пароль';
+    return render();
+  }
+  passwordStepState.submitting = true;
+  passwordStepState.error = '';
+  render();
+  const endpoint = mode === 'create' ? 'set-password' : 'login-with-password';
+  const body = mode === 'create' ? { phone, newPassword: passwordValue } : { phone, password: passwordValue };
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/${endpoint}`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok) {
+      const messages = {
+        password_too_short: 'Пароль должен быть не короче 6 символов',
+        password_already_set: 'Для этого номера пароль уже задан — введите его, а не придумывайте новый',
+        user_not_found: 'Не нашли аккаунт с этим номером — начните заново',
+        invalid_credentials: 'Неверный номер или пароль',
+        no_password_set: 'Для этого номера ещё не задан пароль — обратитесь в поддержку',
+      };
+      if (!passwordStepState) return;
+      passwordStepState.submitting = false;
+      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      // Локальная догадка «пароль уже есть?» устарела (например, его
+      // задали с другого устройства) — переключаем ту же форму на вход,
+      // а не оставляем тупик на экране «Придумайте пароль».
+      if (data && data.error === 'password_already_set') passwordStepState.mode = 'login';
+      return render();
+    }
+    completePasswordLogin(passwordStepState.userId, data.token);
+  } catch (err) {
+    if (!passwordStepState) return;
+    passwordStepState.submitting = false;
+    passwordStepState.error = 'Не получилось соединиться — попробуйте ещё раз';
+    reportError('вход по паролю', err);
+    render();
+  }
 }
 
 /**
@@ -3540,9 +3663,12 @@ async function submitTelegramLinkCode(rawCode) {
     const idx = cache.users.findIndex((u) => u.id === user.id);
     if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: updated.telegram_id || row.telegram_id };
     if (!wasLoggedIn) {
-      state.currentUserId = user.id;
-      saveSession(user.id);
-      await issueSessionToken(user.id);
+      // Как и у phone-gate — вход по Telegram-коду тоже теперь ведёт на
+      // обязательный экран пароля, а не сразу выдаёт сессию.
+      enterPasswordStep(cache.users[idx] || user, () => {
+        showToast('Telegram подключён — будем присылать уведомления');
+      });
+      return;
     }
     showToast('Telegram подключён — будем присылать уведомления');
     render();
@@ -4717,6 +4843,44 @@ function renderMapPickerOverlay() {
           <button type="button" class="secondary-button" data-action="close-map-picker">Закрыть</button>
           <button type="button" class="primary-button" data-action="save-map-picker">Сохранить</button>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Обязательный пароль — всплывающий оверлей поверх ЛЮБОГО экрана (по
+ * тому же принципу, что и .map-picker-overlay выше), а не часть
+ * renderPhoneGate(): гостевой чекаут в композере (см. 'publish-draft')
+ * заводит аккаунт не на экранах, которые гейтит renderPhoneGate, поэтому
+ * общий оверлей — единственный способ спросить пароль везде одинаково.
+ * Сам фон — переиспользованный .map-picker-overlay (просто затемнение +
+ * центрирование), карточка — обычный .field-card, как у renderPhoneGate.
+ */
+function renderPasswordStepOverlay(st) {
+  const isCreate = st.mode === 'create';
+  return `
+    <div class="map-picker-overlay">
+      <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
+        <p><b>${isCreate ? 'Придумайте пароль' : 'Введите пароль'}</b></p>
+        <p class="order-meta">${
+          isCreate
+            ? 'Он понадобится для входа в следующий раз — с этого устройства запоминать пароль заново не придётся.'
+            : `Аккаунт с номером ${escapeHtml(displayPhone(st.phone))} уже защищён паролем.`
+        }</p>
+        ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
+        <label>Пароль</label>
+        <input type="password" id="password-step-input" autocomplete="${isCreate ? 'new-password' : 'current-password'}" ${st.submitting ? 'disabled' : ''} />
+        ${
+          isCreate
+            ? `<label style="margin-top:10px;">Повторите пароль</label><input type="password" id="password-step-confirm" autocomplete="new-password" ${st.submitting ? 'disabled' : ''} />`
+            : ''
+        }
+        <button class="primary-button" id="password-step-submit" style="margin-top:14px;" ${st.submitting ? 'disabled' : ''}>${
+    st.submitting ? 'Проверяем…' : isCreate ? 'Сохранить пароль' : 'Войти'
+  }</button>
+        ${!isCreate ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Забыли пароль? Напишите в поддержку</button>` : ''}
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-cancel">Отмена</button>
       </div>
     </div>
   `;
@@ -5904,6 +6068,7 @@ function render() {
       </div>
       ${renderBottomNav()}
       ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
+      ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     `;
     wireEvents();
     return;
@@ -5932,6 +6097,7 @@ function render() {
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
+    ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -6524,6 +6690,20 @@ function wireEvents() {
     });
   }
 
+  const passwordStepInput = document.getElementById('password-step-input');
+  if (passwordStepInput) {
+    const passwordStepConfirm = document.getElementById('password-step-confirm');
+    const passwordStepSubmit = document.getElementById('password-step-submit');
+    const submit = () => submitPasswordStep(passwordStepInput.value, passwordStepConfirm ? passwordStepConfirm.value : undefined);
+    if (passwordStepSubmit) passwordStepSubmit.addEventListener('click', submit);
+    const onEnter = (e) => {
+      if (e.key === 'Enter') submit();
+    };
+    passwordStepInput.addEventListener('keydown', onEnter);
+    if (passwordStepConfirm) passwordStepConfirm.addEventListener('keydown', onEnter);
+    passwordStepInput.focus();
+  }
+
   const composeName = document.getElementById('compose-name');
   if (composeName) {
     composeName.addEventListener('input', () => {
@@ -6765,6 +6945,9 @@ async function handleAction(action, value) {
     case 'phone-verify-skip':
       return skipPhoneCallVerification();
 
+    case 'password-step-cancel':
+      return cancelPasswordStep();
+
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
       return render();
@@ -6816,6 +6999,21 @@ async function handleAction(action, value) {
         }
       }
 
+      // Собственно отправка — вынесена в замыкание, т.к. для новых
+      // пользователей (см. ниже) она теперь происходит не сразу, а после
+      // обязательного экрана пароля (см. enterPasswordStep/onComplete).
+      const finishPublish = () => {
+        if (needsName && composeNameValue) {
+          const nameUser = currentUser();
+          if (nameUser && nameUser.displayName !== composeNameValue) {
+            saveUser({ ...nameUser, displayName: composeNameValue });
+          }
+        }
+        composeNameFieldValue = '';
+        composePhoneFieldValue = '';
+        return publishDraft();
+      };
+
       // Телефон запрашивается тут, на экране подтверждения заявки, а не в
       // composer'е — учётка (для новых пользователей) создаётся прямо перед
       // публикацией заказа.
@@ -6841,27 +7039,19 @@ async function handleAction(action, value) {
             location: state.draft.exactLocation,
             district: state.draft.district,
           });
-          state.currentUserId = user.id;
-          saveSession(user.id);
-          await issueSessionToken(user.id);
+          // Гостевой чекаут — тоже обязательный пароль (см. README/памятку):
+          // заявка доотправится сама через onComplete сразу после успешного
+          // пароля/входа, а не раньше.
+          enterPasswordStep(user, finishPublish);
         } catch (err) {
           console.error('[compose] phone step failed', err);
           showToast('Не получилось продолжить — попробуйте ещё раз');
           if (sendBtn) sendBtn.disabled = false;
-          return;
         }
+        return;
       }
 
-      if (needsName && composeNameValue) {
-        const nameUser = currentUser();
-        if (nameUser && nameUser.displayName !== composeNameValue) {
-          saveUser({ ...nameUser, displayName: composeNameValue });
-        }
-      }
-
-      composeNameFieldValue = '';
-      composePhoneFieldValue = '';
-      return publishDraft();
+      return finishPublish();
     }
 
     case 'accept-order':
@@ -6962,18 +7152,25 @@ async function boot() {
     // требуем входа для просмотра главной страницы — заявку можно начать
     // без авторизации, номер телефона спросим прямо в форме отправки.
     const saved = loadSession();
+    const savedToken = loadSessionToken();
     let user = null;
     if (saved) {
       user = getUsers().find((u) => u.id === saved) || null;
     }
-    if (user) {
+    if (user && savedToken) {
+      // Токен сессии выдаётся только после успешного пароля/входа (см.
+      // set-password/login-with-password) — раз он есть на этом
+      // устройстве, доверяем ему и не спрашиваем пароль заново при
+      // каждом открытии (это и есть «запомнить устройство», см. README).
       state.currentUserId = user.id;
-      // У сессий, сохранённых до появления сессионного токена (см.
-      // issueSessionToken), токена ещё нет — подгружаем его один раз в
-      // фоне, не блокируя первый рендер главной страницы.
-      if (!loadSessionToken()) {
-        issueSessionToken(user.id);
-      }
+    } else if (user && !savedToken) {
+      // Раньше отсюда тихо выпускался токен по одному лишь сохранённому
+      // id из localStorage — без единой проверки (см. README/памятку про
+      // уязвимость «войти под кем угодно, зная/подставив id»). Теперь
+      // вместо этого просто не восстанавливаем сессию: человек попадёт на
+      // обычный вход по телефону и (обязательно) пароль, как при первом
+      // визите. Разово затронет тех, кто был в сессии ДО этого пароля.
+      clearSession();
     } else if (saved) {
       clearSession();
     }
