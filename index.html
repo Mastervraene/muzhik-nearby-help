@@ -1377,7 +1377,13 @@ body {
 /** @type {Record<string, string[]>} */
 const ALLOWED_TRANSITIONS = {
   draft: ['collecting_details', 'cancelled'],
-  collecting_details: ['estimate_ready', 'draft', 'cancelled'],
+  // collecting_details теперь означает «на проверке» (первичная модерация
+  // администратором, см. STATUS_LABELS и publishDraft) — заказ либо
+  // одобряют (→ searching, минуя estimate_ready — см. admin.html
+  // approveOrder), либо он остаётся здесь/отменяется. estimate_ready
+  // сохранён в графе для обратной совместимости со старыми/демо-заказами,
+  // но новый клиентский путь через него больше не идёт.
+  collecting_details: ['estimate_ready', 'searching', 'draft', 'cancelled'],
   estimate_ready: ['searching', 'collecting_details', 'cancelled'],
   searching: ['assigned', 'cancelled'],
   assigned: ['en_route', 'cancelled', 'issue_reported'],
@@ -2982,7 +2988,7 @@ function renderStars(level) {
 
 const STATUS_LABELS = {
   draft: 'Черновик',
-  collecting_details: 'Уточняем детали',
+  collecting_details: 'На проверке',
   estimate_ready: 'Оценка готова',
   searching: 'Ищем мастера',
   assigned: 'Мастер назначен',
@@ -3703,9 +3709,18 @@ async function publishDraft() {
     createdAt: new Date().toISOString(),
   };
 
+  // Заказ останавливается на «На проверке» (то же значение collecting_details,
+  // что и раньше — просто теперь это реальная точка ожидания, а не мгновенный
+  // проходной статус) и НЕ переводится в estimate_ready/searching здесь.
+  // Раньше следующие два transition() шли сразу же, и заказ был виден
+  // мастерам мгновенно — без единой проверки. Теперь его должен сначала
+  // одобрить администратор (кнопка «Одобрить» в admin.html, см. там же
+  // комментарий) — это и есть первичная модерация. Только после одобрения
+  // заказ переходит в searching и подбор/уведомление мастеров рядом
+  // происходит на сервере (см. supabase/functions/notify-nearby-workers) —
+  // здесь, на публикации, кандидатов больше не ищем и не уведомляем, чтобы
+  // не было уведомлений по заказам, которые модерация потом отклонит.
   order = transition(order, 'collecting_details');
-  order = transition(order, 'estimate_ready');
-  order = transition(order, 'searching');
 
   // Структурированное ТЗ для исполнителя — генерируется сразу при создании
   // заказа (а не по запросу позже), чтобы мастер сразу видел разбор задачи,
@@ -3719,45 +3734,11 @@ async function publishDraft() {
     createNotification(order.customerId, 'customer', order.id, 'order_published')
   );
 
-  // уведомляем подходящих мастеров рядом (событие "новый заказ")
-  let candidates = findCandidateWorkers(getUsers(), order);
-
-  // В обычном радиусе (по умолчанию 3 км) не нашлось ни одного мастера —
-  // не оставляем клиента без единого отклика. Расширяем радиус поиска
-  // заказа и по-доброму предупреждаем баннером (см. renderRadiusNoticeOverlay).
-  let radiusExpanded = false;
-  if (candidates.length === 0) {
-    const expandedRadiusKm = Math.min(Math.round((order.searchRadiusKm || 3) * 3), 25);
-    order = {
-      ...order,
-      searchRadiusKm: expandedRadiusKm,
-      warnings: [
-        ...order.warnings,
-        `В вашем районе пока нет свободных мастеров — радиус поиска автоматически расширен до ${expandedRadiusKm} км.`,
-      ],
-    };
-    order = await saveOrder(order);
-    candidates = findCandidateWorkers(getUsers(), order);
-    radiusExpanded = true;
-  }
-
-  candidates.forEach((c) => {
-    pushNotification(
-      createNotification(c.user.id, 'worker', order.id, 'new_matching_order', {
-        orderTitle: order.title,
-      })
-    );
-  });
-
   // Сначала переключаем экран (иначе showToast() вызовет render() для ещё
   // активного экрана 'compose' с уже обнулённым state.draft — исключение).
   state.draft = null;
   go('orderDetail', { openOrderId: order.id });
-  showToast('Заказ опубликован и виден мастерам рядом');
-  if (radiusExpanded) {
-    state.infoOverlay = 'radius';
-    render();
-  }
+  showToast('Заявка отправлена и проверяется — обычно это быстро. Мастера увидят её сразу после одобрения.');
 }
 
 // ---------------------------------------------------------------------
@@ -6522,8 +6503,6 @@ function wireOnboardingSwipe() {
   let startY = null;
   let dragging = false;
 
-  const bodyIsScrollable = () => Boolean(body && body.scrollHeight > body.clientHeight + 1);
-
   const onPointerDown = (e) => {
     // Тап по кнопке/ссылке (крестик «✕», «Понятно» и т.п.) не должен
     // запускать жест свайпа-закрытия — иначе обычный клик «проглатывается»
@@ -6531,7 +6510,12 @@ function wireOnboardingSwipe() {
     // возврата карточки на место) и кнопки визуально не реагируют. Жест
     // остаётся только для пустых областей карточки.
     if (e.target.closest('button, a, [data-action]')) return;
-    if (bodyIsScrollable() && body.contains(e.target)) return;
+    // Жест, начатый внутри тела карточки, целиком отдаём
+    // wireScrollBoundarySwipe ниже — она сама решает, когда обычный скролл
+    // должен превратиться в свайп-закрытие (см. её комментарий). Здесь
+    // ловим только шапку/иллюстрацию/пустые поля — там свайп закрывает
+    // сразу, без всякого скролла.
+    if (body && body.contains(e.target)) return;
     startY = e.clientY;
     dragging = true;
     card.style.transition = 'none';
@@ -6558,6 +6542,89 @@ function wireOnboardingSwipe() {
   card.addEventListener('pointermove', onPointerMove);
   card.addEventListener('pointerup', onPointerEnd);
   card.addEventListener('pointercancel', onPointerEnd);
+
+  wireScrollBoundarySwipe(body, card, () => handleAction('dismiss-onboarding'));
+}
+
+/**
+ * Скролл, объединённый со свайпом-закрытием: пока тело карточки листается
+ * обычным образом, жест никак не трогает саму карточку. Но как только
+ * скролл упирается в границу (низ — если тащим вверх, верх — если вниз) и
+ * палец продолжает тащить в ту же сторону, дальнейшее движение превращает
+ * жест в перетаскивание карточки на закрытие — совсем как обычная шторка.
+ * Порог закрытия — половина высоты экрана (а не небольшие 70px, как при
+ * свайпе за шапку), чтобы обычное «доскроллили до конца» не закрывало
+ * окно случайно. Применяется ко всем масштабируемым всплывающим окнам с
+ * прокручиваемым телом.
+ */
+function wireScrollBoundarySwipe(bodyEl, cardEl, onDismiss) {
+  if (!bodyEl || !cardEl) return;
+  let startY = null;
+  let lastY = null;
+  let closeStartY = null;
+  let mode = 'scroll'; // 'scroll' — обычный скролл тела, 'close' — уже тащим карточку
+  let pointerId = null;
+
+  const atTop = () => bodyEl.scrollTop <= 0;
+  const atBottom = () => bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 1;
+
+  const onPointerDown = (e) => {
+    if (e.target.closest('button, a, select, input, textarea, [data-action]')) return;
+    startY = e.clientY;
+    lastY = e.clientY;
+    closeStartY = null;
+    mode = 'scroll';
+    pointerId = e.pointerId;
+  };
+  const onPointerMove = (e) => {
+    if (startY === null || e.pointerId !== pointerId) return;
+    const dy = e.clientY - lastY;
+    lastY = e.clientY;
+    if (mode === 'scroll') {
+      // Направление жеста «вниз» (dy>0) конвертируем в закрытие только
+      // если тело уже докручено до самого верха (иначе это просто скролл
+      // назад к началу); «вверх» (dy<0) — только если докручено до низа.
+      // Если тело вовсе не прокручивается (короткий попап), оба условия
+      // истинны сразу — жест закрывает с первого же движения.
+      if (dy > 0 && atTop()) {
+        mode = 'close';
+        closeStartY = e.clientY;
+        cardEl.style.transition = 'none';
+        cardEl.setPointerCapture?.(pointerId);
+      } else if (dy < 0 && atBottom()) {
+        mode = 'close';
+        closeStartY = e.clientY;
+        cardEl.style.transition = 'none';
+        cardEl.setPointerCapture?.(pointerId);
+      } else {
+        return; // обычный скролл — ничего не трогаем, нативное поведение само сработает
+      }
+    }
+    e.preventDefault();
+    cardEl.style.transform = `translateY(${e.clientY - closeStartY}px)`;
+  };
+  const onPointerEnd = (e) => {
+    if (startY === null || e.pointerId !== pointerId) return;
+    const wasClose = mode === 'close';
+    const delta = wasClose ? e.clientY - closeStartY : 0;
+    startY = null;
+    lastY = null;
+    closeStartY = null;
+    mode = 'scroll';
+    pointerId = null;
+    if (!wasClose) return;
+    cardEl.style.transition = 'transform 0.2s ease';
+    if (Math.abs(delta) > window.innerHeight * 0.5) {
+      onDismiss();
+    } else {
+      cardEl.style.transform = 'translateY(0)';
+    }
+  };
+
+  bodyEl.addEventListener('pointerdown', onPointerDown);
+  bodyEl.addEventListener('pointermove', onPointerMove, { passive: false });
+  bodyEl.addEventListener('pointerup', onPointerEnd);
+  bodyEl.addEventListener('pointercancel', onPointerEnd);
 }
 
 async function handleAction(action, value) {

@@ -122,6 +122,17 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 }
 .card-body { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gray-100); }
 .card-body.open { display: block; }
+
+/* Кнопка «Одобрить» — в нижней части СВЁРНУТОЙ карточки заказа (не внутри
+   card-body), чтобы модерировать заказы можно было прямо из списка, не
+   разворачивая каждый. Видна только для заказов на модерации (collecting_details). */
+.card-moderation-bar {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--gray-200);
+  display: flex;
+  justify-content: flex-end;
+}
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
 .field-sm label { display: block; font-size: 11.5px; color: var(--gray-500); margin-bottom: 4px; }
@@ -547,7 +558,7 @@ function renderStars(level) {
 
 const STATUS_LABELS = {
   draft: 'Черновик',
-  collecting_details: 'Уточняем детали',
+  collecting_details: 'На проверке',
   estimate_ready: 'Оценка готова',
   searching: 'Ищем мастера',
   assigned: 'Мастер назначен',
@@ -1028,7 +1039,67 @@ function wireOrderCards(list) {
     if (openOrderId === o.id) {
       wireOrderForm(o);
     }
+    const approveBtn = document.getElementById(`approve-order-${o.id}`);
+    if (approveBtn) {
+      approveBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // кнопка вне card-head, но на всякий случай — не должна открывать/закрывать карточку
+        approveOrder(o);
+      });
+    }
   });
+}
+
+// Первичная модерация: одобрение заказа со статуса «На проверке»
+// (collecting_details) сразу переводит его в searching (минуя
+// estimate_ready — тот статус больше не используется в новом потоке) и
+// проставляет финальную цену вручную (later — автоматизируем). Уведомление
+// мастеров рядом происходит на сервере через notify-nearby-workers —
+// именно поэтому до одобрения заказ никого не уведомляет, а после —
+// ровно один раз и только тех, кто реально подходит.
+async function approveOrder(o) {
+  const suggested = o.finalPrice ?? o.estimate?.min ?? '';
+  const priceRaw = prompt('Финальная цена заказа для клиента (₽):', suggested === '' ? '' : String(suggested));
+  if (priceRaw === null) return; // отменено
+  const finalPrice = Number(String(priceRaw).replace(',', '.').trim());
+  if (!Number.isFinite(finalPrice) || finalPrice < 0) {
+    alert('Введите корректную сумму в рублях');
+    return;
+  }
+
+  const btn = document.getElementById(`approve-order-${o.id}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Одобряем…';
+  }
+
+  try {
+    const timeline = [...(o.timeline || []), { status: 'searching', at: new Date().toISOString() }];
+    await updateRow('orders', o.id, { status: 'searching', final_price: finalPrice, timeline });
+
+    // Best-effort: если функция ещё не задеплоена или упала, заказ всё
+    // равно одобрен и виден мастерам в приложении — просто без пуша.
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/notify-nearby-workers`, {
+        method: 'POST',
+        headers: sbHeaders(),
+        body: JSON.stringify({ orderId: o.id }),
+      });
+      if (!res.ok) {
+        console.warn('[approve] notify-nearby-workers ответила ошибкой', res.status);
+      }
+    } catch (notifyErr) {
+      console.warn('[approve] не удалось уведомить мастеров рядом:', notifyErr);
+    }
+
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось одобрить заказ: ' + err.message);
+    const freshBtn = document.getElementById(`approve-order-${o.id}`);
+    if (freshBtn) {
+      freshBtn.disabled = false;
+      freshBtn.textContent = '✓ Одобрить';
+    }
+  }
 }
 
 function orderCardHtml(o) {
@@ -1048,6 +1119,13 @@ function orderCardHtml(o) {
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
+      ${
+        o.status === 'collecting_details'
+          ? `<div class="card-moderation-bar">
+               <button type="button" class="btn-sm primary" id="approve-order-${o.id}">✓ Одобрить</button>
+             </div>`
+          : ''
+      }
       ${open ? orderFormHtml(o) : ''}
     </div>
   `;
@@ -1809,11 +1887,13 @@ function wireModalSwipeToClose(cardEl, onDismiss) {
   let startY = null;
   let dragging = false;
 
-  const bodyIsScrollable = () => Boolean(scrollableBody && scrollableBody.scrollHeight > scrollableBody.clientHeight + 1);
-
   const onPointerDown = (e) => {
     if (e.target.closest('button, a, select, input, textarea, [data-action]')) return;
-    if (bodyIsScrollable() && scrollableBody.contains(e.target)) return;
+    // Жест, начатый в теле карточки, целиком отдаём wireScrollBoundarySwipe
+    // ниже — она сама переключает обычный скролл на закрытие, когда тело
+    // докручено до границы (см. её комментарий). Здесь остаётся только
+    // шапка/пустые поля карточки — там свайп закрывает сразу.
+    if (scrollableBody && scrollableBody.contains(e.target)) return;
     startY = e.clientY;
     dragging = true;
     cardEl.style.transition = 'none';
@@ -1837,6 +1917,81 @@ function wireModalSwipeToClose(cardEl, onDismiss) {
   cardEl.addEventListener('pointermove', onPointerMove);
   cardEl.addEventListener('pointerup', onPointerEnd);
   cardEl.addEventListener('pointercancel', onPointerEnd);
+
+  wireScrollBoundarySwipe(scrollableBody, cardEl, onDismiss);
+}
+
+/**
+ * Скролл, объединённый со свайпом-закрытием (см. тот же приём в
+ * index.html → wireScrollBoundarySwipe, здесь продублировано — общего
+ * модуля между файлами нет). Пока тело карточки листается — жест не
+ * трогает карточку; как только скролл упирается в границу и палец тащит
+ * дальше в ту же сторону, жест превращается в перетаскивание карточки на
+ * закрытие. Порог — половина высоты экрана.
+ */
+function wireScrollBoundarySwipe(bodyEl, cardEl, onDismiss) {
+  if (!bodyEl || !cardEl) return;
+  let startY = null;
+  let lastY = null;
+  let closeStartY = null;
+  let mode = 'scroll';
+  let pointerId = null;
+
+  const atTop = () => bodyEl.scrollTop <= 0;
+  const atBottom = () => bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 1;
+
+  const onPointerDown = (e) => {
+    if (e.target.closest('button, a, select, input, textarea, [data-action]')) return;
+    startY = e.clientY;
+    lastY = e.clientY;
+    closeStartY = null;
+    mode = 'scroll';
+    pointerId = e.pointerId;
+  };
+  const onPointerMove = (e) => {
+    if (startY === null || e.pointerId !== pointerId) return;
+    const dy = e.clientY - lastY;
+    lastY = e.clientY;
+    if (mode === 'scroll') {
+      if (dy > 0 && atTop()) {
+        mode = 'close';
+        closeStartY = e.clientY;
+        cardEl.style.transition = 'none';
+        cardEl.setPointerCapture?.(pointerId);
+      } else if (dy < 0 && atBottom()) {
+        mode = 'close';
+        closeStartY = e.clientY;
+        cardEl.style.transition = 'none';
+        cardEl.setPointerCapture?.(pointerId);
+      } else {
+        return;
+      }
+    }
+    e.preventDefault();
+    cardEl.style.transform = `translateY(${e.clientY - closeStartY}px)`;
+  };
+  const onPointerEnd = (e) => {
+    if (startY === null || e.pointerId !== pointerId) return;
+    const wasClose = mode === 'close';
+    const delta = wasClose ? e.clientY - closeStartY : 0;
+    startY = null;
+    lastY = null;
+    closeStartY = null;
+    mode = 'scroll';
+    pointerId = null;
+    if (!wasClose) return;
+    cardEl.style.transition = 'transform 0.2s ease';
+    if (Math.abs(delta) > window.innerHeight * 0.5) {
+      onDismiss();
+    } else {
+      cardEl.style.transform = 'translateY(0)';
+    }
+  };
+
+  bodyEl.addEventListener('pointerdown', onPointerDown);
+  bodyEl.addEventListener('pointermove', onPointerMove, { passive: false });
+  bodyEl.addEventListener('pointerup', onPointerEnd);
+  bodyEl.addEventListener('pointercancel', onPointerEnd);
 }
 
 // -----------------------------------------------------------------------
