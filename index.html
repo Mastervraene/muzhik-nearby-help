@@ -821,6 +821,145 @@ body {
   font-weight: 500;
 }
 
+/* Ссылка «Указать на карте» под строкой ввода адреса (и в профиле, и при
+   оформлении заказа) — открывает .map-picker-overlay ниже. */
+.map-pick-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+.map-pick-link:active {
+  opacity: 0.7;
+}
+
+/* ---------- Всплывающий выбор точки на карте (map-picker) ---------- */
+/* Открывается кнопкой «Указать на карте» — из профиля (адрес мастера) и
+   из адреса заявки при оформлении. Центрированное модальное окно, а не
+   нижняя шторка (как онбординг) — карте нужна предсказуемая высота, а не
+   высота, «съезжающая» при свайпе. Высота считается в vh с потолком в px,
+   чтобы окно гарантированно помещалось целиком даже на очень маленьком
+   экране телефона и не обрезало кнопки «Сохранить»/«Закрыть» снизу. */
+.map-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 18, 18, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+  padding: 16px;
+}
+
+.map-picker-card {
+  width: 100%;
+  max-width: 480px;
+  max-height: min(560px, 92vh);
+  background: var(--gray-0);
+  border-radius: var(--radius, 16px);
+  box-shadow: var(--shadow-md, 0 8px 40px rgba(15, 23, 42, 0.18));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: onboarding-rise 0.2s ease-out;
+}
+
+.map-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+
+.map-picker-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.map-picker-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* flex:1 + min-height:0 — карта занимает всё, что осталось от окна после
+   шапки/подсказки/кнопок, и на совсем маленьком экране сжимается вплоть до
+   нуля, а не наоборот: шапка и кнопки «Сохранить»/«Закрыть» (у них
+   flex-shrink:0) не должны обрезаться или пропадать ни при каком размере
+   экрана — это единственный способ закрыть попап и сохранить результат. */
+.map-picker-map {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--gray-100);
+}
+
+.map-picker-address {
+  font-size: 13px;
+  color: var(--gray-700);
+  font-weight: 500;
+  margin: 0;
+  padding: 8px 16px;
+  border-top: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+
+.map-picker-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  flex-shrink: 0;
+}
+
+.map-picker-actions button {
+  flex: 1;
+  margin-top: 0;
+}
+
+/* ---------- Адрес мастера подтверждён (профиль) ---------- */
+.profile-address-confirmed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--gray-900);
+}
+
+.profile-address-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft, #e0f2ea);
+  color: var(--accent-strong, #1a7f4e);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
 .empty-state {
   text-align: center;
   color: var(--gray-400);
@@ -2894,6 +3033,12 @@ function showToast(text) {
 function go(screen, extra = {}) {
   state.screen = screen;
   Object.assign(state, extra);
+  if (screen === 'profile') {
+    // Свежий заход на экран профиля всегда начинается со свёрнутого
+    // (подтверждённого) вида адреса, если он уже есть — а не с середины
+    // редактирования, оставшейся с прошлого визита.
+    profileAddressEditing = false;
+  }
   render();
   if (screen === 'orders') {
     // Не блокируем сам переход на экран — список кандидатов дорисуется
@@ -3973,6 +4118,9 @@ async function saveProfileDistrict() {
   saveUser({ ...user, district, location });
   profileDistrictValue = district;
   profileDistrictSelectedLocation = null;
+  // Успешное сохранение сворачивает поле обратно в подтверждённый вид
+  // (галочка + кнопка «Изменить») — см. renderProfile.
+  profileAddressEditing = false;
   showToast('Район сохранён');
   render();
 }
@@ -4325,6 +4473,177 @@ async function initQuickReviewMap() {
       applyPoint(coords[0], coords[1]);
     });
   });
+}
+
+// ---------------------------------------------------------------------
+// Всплывающий выбор точки на карте (кнопка «Указать на карте») — общий
+// попап для профиля (адрес мастера/заказчика) и для адреса заявки при
+// оформлении. В отличие от инлайн-карты на шаге «Проверьте заявку» выше
+// (initQuickReviewMap) — это модальное окно со своими кнопками
+// «Сохранить»/«Закрыть», результат применяется к полю-получателю только
+// по явному «Сохранить». Логика самой карты намеренно повторяет
+// initQuickReviewMap, а не переиспользует её один в один — разные
+// контейнеры и разный «получатель» результата.
+//
+// Управление зумом/геолокацией отдано контролам самой карты
+// (zoomControl + geolocationControl «найти меня»), чтобы на маленьком
+// экране телефона не приходилось долго и неточно двигать карту пальцем в
+// поисках нужного места — можно сразу приблизиться к своей геопозиции.
+// ---------------------------------------------------------------------
+
+function openMapPicker(target) {
+  let initial = null;
+  let addressText = '';
+  if (target === 'profile') {
+    const user = currentUser();
+    if (hasValidLocation(user?.location)) initial = user.location;
+    addressText = profileDistrictValue || user?.district || '';
+  } else if (target === 'composer') {
+    if (hasValidLocation(composerExactLocation)) initial = composerExactLocation;
+    addressText = composerAddressValue || '';
+  } else {
+    return;
+  }
+  mapPickerOpenFor = target;
+  mapPickerLocation = initial || { ...CENTER };
+  mapPickerHasRealLocation = Boolean(initial);
+  mapPickerAddressText = addressText;
+  render();
+}
+
+function destroyMapPickerMap() {
+  if (mapPickerInstance) {
+    try { mapPickerInstance.destroy(); } catch (err) { /* контейнер уже мог исчезнуть — не критично */ }
+    mapPickerInstance = null;
+  }
+}
+
+function closeMapPicker() {
+  destroyMapPickerMap();
+  mapPickerOpenFor = null;
+  mapPickerLocation = null;
+  render();
+}
+
+/** Применяет выбранную в попапе точку к полю-получателю и закрывает попап. */
+function saveMapPicker() {
+  const target = mapPickerOpenFor;
+  const location = mapPickerLocation;
+  const addressText = mapPickerAddressText;
+  destroyMapPickerMap();
+  mapPickerOpenFor = null;
+  mapPickerLocation = null;
+  if (!location) { render(); return; }
+
+  if (target === 'profile') {
+    profileDistrictValue = addressText || profileDistrictValue;
+    profileDistrictSelectedLocation = location;
+    render();
+    // Сохраняем сразу тем же путём, что и кнопка «Сохранить» в профиле —
+    // человек уже подтвердил точку в попапе, лишний клик не нужен.
+    saveProfileDistrict();
+  } else if (target === 'composer') {
+    composerAddressValue = addressText || composerAddressValue;
+    composerExactLocation = location;
+    render();
+  } else {
+    render();
+  }
+}
+
+async function initMapPickerMap() {
+  const container = document.getElementById('map-picker-map');
+  if (!container) return; // попап сейчас закрыт — ничего делать не нужно
+
+  const myToken = ++mapPickerInitToken;
+  destroyMapPickerMap();
+  container.innerHTML = '';
+
+  if (!isMapsJsConfigured()) return;
+
+  try {
+    await loadYmapsScriptForCompose();
+  } catch (err) {
+    console.warn('[geo] карта выбора точки не загрузилась', err);
+    return;
+  }
+  if (myToken !== mapPickerInitToken) return;
+
+  window.ymaps.ready(() => {
+    if (myToken !== mapPickerInitToken) return;
+    const containerNow = document.getElementById('map-picker-map');
+    if (!containerNow || !mapPickerLocation) return;
+    containerNow.innerHTML = '';
+
+    const startCoords = [mapPickerLocation.lat, mapPickerLocation.lng];
+    const map = new window.ymaps.Map('map-picker-map', {
+      center: startCoords,
+      zoom: mapPickerHasRealLocation ? 16 : 11,
+      controls: ['zoomControl', 'geolocationControl'],
+    });
+    mapPickerInstance = map;
+
+    const placemark = new window.ymaps.Placemark(
+      startCoords,
+      {},
+      {
+        iconLayout: 'default#image',
+        iconImageHref: 'red-dot.png',
+        iconImageSize: [22, 22],
+        iconImageOffset: [-11, -11],
+        draggable: true,
+      }
+    );
+    map.geoObjects.add(placemark);
+
+    const applyPickerPoint = async (lat, lng) => {
+      mapPickerLocation = { lat, lng };
+      const hint = document.getElementById('map-picker-address');
+      if (hint) hint.textContent = 'Определяем адрес…';
+      try {
+        const text = await reverseGeocodeYandex(lat, lng);
+        if (text) mapPickerAddressText = text;
+      } catch (err) {
+        console.warn('[geo] обратное геокодирование точки на карте не удалось', err);
+      }
+      if (hint) {
+        hint.textContent = mapPickerAddressText
+          ? `📍 ${mapPickerAddressText}`
+          : 'Адрес не определён — можно уточнить его текстом';
+      }
+    };
+
+    placemark.events.add('dragend', () => {
+      const coords = placemark.geometry.getCoordinates();
+      applyPickerPoint(coords[0], coords[1]);
+    });
+    map.events.add('click', (e) => {
+      const coords = e.get('coords');
+      placemark.geometry.setCoordinates(coords);
+      applyPickerPoint(coords[0], coords[1]);
+    });
+  });
+}
+
+function renderMapPickerOverlay() {
+  return `
+    <div class="map-picker-overlay" id="map-picker-overlay" data-action="close-map-picker">
+      <div class="map-picker-card" onclick="event.stopPropagation()">
+        <div class="map-picker-head">
+          <h2>Укажите точку на карте</h2>
+          <button type="button" class="map-picker-close" data-action="close-map-picker" aria-label="Закрыть">✕</button>
+        </div>
+        <div class="map-picker-map" id="map-picker-map"></div>
+        <p class="map-picker-address" id="map-picker-address">${
+          mapPickerAddressText ? `📍 ${escapeHtml(mapPickerAddressText)}` : 'Перетащите метку или нажмите на карте'
+        }</p>
+        <div class="map-picker-actions">
+          <button type="button" class="secondary-button" data-action="close-map-picker">Закрыть</button>
+          <button type="button" class="primary-button" data-action="save-map-picker">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -4859,6 +5178,7 @@ function renderHome() {
         <div class="composer-field-inline">
           <input type="text" id="composer-address" placeholder="Адрес, например: г. Москва, ул. Красная Пресня, д. 44" value="${escapeHtml(composerAddressValue)}" autocomplete="off" />
           <div id="composer-address-suggestions" class="address-suggest-list"></div>
+          <button type="button" class="map-pick-link" data-action="open-map-picker" data-value="composer">📍 Указать на карте</button>
           <button type="button" class="secondary-button composer-geo-button" id="composer-geo-btn" data-action="capture-composer-geo" style="margin-top:0;">${ICON_PIN}<span>Определить автоматически</span></button>
           <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
         </div>
@@ -5268,14 +5588,28 @@ function renderProfile() {
         <p><b>${escapeHtml(user.displayName)}</b></p>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
+        ${
+          hasValidLocation(user.location) && !profileAddressEditing
+            ? `
+        <p class="profile-address-confirmed">
+          <span class="profile-address-check" title="Адрес зафиксирован">✓</span>
+          <span>${escapeHtml(user.district || profileDistrictValue)}</span>
+        </p>
+        <button type="button" class="secondary-button" data-action="edit-profile-address" style="margin-top:8px;">Изменить</button>
+        `
+            : `
         <input type="text" id="field-profile-district" placeholder="Например: г. Москва, район Аэропорт" value="${escapeHtml(profileDistrictValue)}" autocomplete="off" />
         <div id="profile-district-suggestions" class="address-suggest-list"></div>
+        <button type="button" class="map-pick-link" data-action="open-map-picker" data-value="profile">📍 Указать на карте</button>
         <div class="composer-field-inline" style="margin-top:8px;">
           <button class="secondary-button" id="profile-district-save-btn" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
           <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Обновить геопозицию</span></button>
+          ${hasValidLocation(user.location) ? `<button type="button" class="secondary-button" data-action="cancel-edit-profile-address" style="margin-top:0;">Отмена</button>` : ''}
         </div>
-        <p class="order-meta" style="margin-top:8px;">Можно вписать район вручную и сохранить, либо определить его автоматически по геолокации браузера.</p>
-        ${!hasValidLocation(user.location) ? `<div class="order-warning" style="margin-top:8px;">⚠ Точная точка на карте не определена — заказы рядом могут находиться неточно. Нажмите «Обновить геопозицию» или сохраните адрес ещё раз.</div>` : ''}
+        <p class="order-meta" style="margin-top:8px;">Можно вписать район вручную и сохранить, указать точку на карте, либо определить её автоматически по геолокации браузера.</p>
+        ${!hasValidLocation(user.location) ? `<div class="order-warning" style="margin-top:8px;">⚠ Точная точка на карте не определена — заказы рядом могут находиться неточно. Нажмите «Обновить геопозицию», укажите точку на карте, или сохраните адрес ещё раз.</div>` : ''}
+        `
+        }
         <label style="margin-top:14px;">Радиус поиска заказов рядом (км)</label>
         <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
         <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
@@ -5512,6 +5846,7 @@ function render() {
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
+    ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -5563,6 +5898,24 @@ let composerTimeTo = ''; // HH:MM из <input type="time">
 // местоположения профиля (см. startQuickDraft). Сбрасываются при ручном
 // редактировании адреса — текст и координаты не должны разъезжаться.
 let composerExactLocation = null;
+// Развёрнут ли адрес в профиле для редактирования (кнопка «Изменить»).
+// Пока адрес не подтверждён (нет валидной точки — см. hasValidLocation) —
+// поле всегда редактируемое, независимо от этого флага; он важен только
+// после того, как точка уже есть, чтобы не показывать текстовое поле
+// поверх уже сохранённого и подтверждённого адреса без явного намерения
+// человека его поменять.
+let profileAddressEditing = false;
+
+// Всплывающий выбор точки на карте (см. renderMapPickerOverlay) — общий
+// для профиля (адрес мастера/заказчика) и для адреса заявки при
+// оформлении. mapPickerOpenFor хранит, КУДА применить результат по
+// «Сохранить»: 'profile' | 'composer' | null (закрыт).
+let mapPickerOpenFor = null; // 'profile' | 'composer' | null
+let mapPickerLocation = null; // {lat, lng} — рабочая копия, применяется только по «Сохранить»
+let mapPickerHasRealLocation = false; // была ли точка известна ДО открытия попапа (влияет на стартовый зум)
+let mapPickerAddressText = '';
+let mapPickerInstance = null;
+let mapPickerInitToken = 0;
 
 const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
@@ -6130,6 +6483,18 @@ function wireEvents() {
   // полного render() — иначе каждый клик пересоздавал бы саму карту.
   initQuickReviewMap();
 
+  // Всплывающий выбор точки на карте (см. renderMapPickerOverlay) — та же
+  // логика: initMapPickerMap сама проверяет наличие #map-picker-map и
+  // ничего не делает, если попап сейчас закрыт.
+  initMapPickerMap();
+
+  // Esc закрывает попап выбора точки — присваиванием, а не addEventListener,
+  // чтобы не плодить по обработчику на каждый render() (см. тот же приём
+  // чуть ниже для document.body.onclick).
+  document.onkeydown = (e) => {
+    if (e.key === 'Escape' && mapPickerOpenFor) closeMapPicker();
+  };
+
   document.body.onclick = null;
   document.querySelectorAll('[data-action]').forEach((node) => {
     node.addEventListener('click', (e) => {
@@ -6351,6 +6716,20 @@ async function handleAction(action, value) {
       return captureGeolocation();
     case 'save-profile-district':
       return saveProfileDistrict();
+    case 'edit-profile-address':
+      profileAddressEditing = true;
+      render();
+      document.getElementById('field-profile-district')?.focus();
+      return;
+    case 'cancel-edit-profile-address':
+      profileAddressEditing = false;
+      return render();
+    case 'open-map-picker':
+      return openMapPicker(value);
+    case 'close-map-picker':
+      return closeMapPicker();
+    case 'save-map-picker':
+      return saveMapPicker();
     case 'pick-avatar':
       document.getElementById('profile-avatar-file')?.click();
       return;
