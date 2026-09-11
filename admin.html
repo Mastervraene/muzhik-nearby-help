@@ -176,6 +176,16 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .chat-empty { color: var(--gray-500); font-size: 12.5px; text-align: center; padding: 10px 0; }
 .pill.chat-count { background: #fff7ed; color: #c2410c; }
 
+/* ---------- Мультивыбор кнопками (фильтры рассылки) ---------- */
+.toggle-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.toggle-pill {
+  font-family: inherit; font-size: 12.5px; font-weight: 700; padding: 7px 13px; border-radius: 999px;
+  background: var(--gray-100); color: var(--gray-600); border: 1px solid transparent; cursor: pointer;
+}
+.toggle-pill:hover { background: var(--gray-200); }
+.toggle-pill.active { background: var(--accent); color: #fff; }
+.toggle-pill.active:hover { background: var(--accent-strong); }
+
 /* ---------- Карта ---------- */
 #map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
 .map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
@@ -283,9 +293,14 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="workers">Только мастера</option>
         <option value="clients">Только клиенты</option>
       </select>
-      <select id="notify-category">
-        <option value="">Любая специализация</option>
-      </select>
+    </div>
+    <div id="notify-categories-wrap" style="margin-bottom:14px;">
+      <p class="form-section-label" style="margin-top:0;">Специализация мастеров (можно несколько; ничего не выбрано — любая)</p>
+      <div class="toggle-pills" id="notify-categories"></div>
+    </div>
+    <div id="notify-statuses-wrap" style="margin-bottom:14px;">
+      <p class="form-section-label" style="margin-top:0;">Статус заказа у клиента (можно несколько; ничего не выбрано — любой)</p>
+      <div class="toggle-pills" id="notify-statuses"></div>
     </div>
     <div class="field-sm">
       <label>Текст сообщения</label>
@@ -672,7 +687,8 @@ let openOrderId = null;
 let openMasterId = null;
 let mapLoaded = false;
 let notifyAudience = 'all';
-let notifyCategory = '';
+let notifyCategories = new Set(); // специализации мастеров, можно несколько — пусто значит «любая»
+let notifyStatuses = new Set(); // статусы заказа клиента, можно несколько — пусто значит «любой»
 
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
@@ -1263,35 +1279,80 @@ function wireMasterForm(u) {
 // Вкладка «Рассылка» (уведомления в Telegram-бот)
 // -----------------------------------------------------------------------
 // «Параметры» рассылки — это аудитория (все/только мастера/только
-// клиенты) и, для мастеров, специализация (см. просьбу «только
-// сантехникам»). Заблокированных пользователей рассылка не трогает
-// никогда — им и так не должны приходить сообщения от сервиса.
+// клиенты), для мастеров — специализации (можно несколько, см. просьбу
+// «только сантехникам», а потом «и электрикам тоже»), для клиентов —
+// статусы их заказа (можно несколько, например «только создал заказ» +
+// «ищут мастера»). Внутри каждого набора — ИЛИ (любая из отмеченных
+// специализаций/статусов подходит), пустой набор — фильтр не применяется.
+// Заблокированных пользователей рассылка не трогает никогда — им и так
+// не должны приходить сообщения от сервиса.
 function notifyMatchingUsers() {
   let list = allUsers.filter((u) => !u.blocked);
   if (notifyAudience === 'workers') list = list.filter((u) => u.availableAsWorker);
   else if (notifyAudience === 'clients') list = list.filter((u) => !u.availableAsWorker);
-  if (notifyCategory) {
-    const idsWithSkill = new Set(
-      allSkills.filter((s) => s.categoryId === notifyCategory).map((s) => s.userId)
+
+  if (notifyCategories.size) {
+    const idsWithAnySkill = new Set(
+      allSkills.filter((s) => notifyCategories.has(s.categoryId)).map((s) => s.userId)
     );
-    list = list.filter((u) => idsWithSkill.has(u.id));
+    list = list.filter((u) => idsWithAnySkill.has(u.id));
   }
+
+  if (notifyStatuses.size) {
+    const idsWithAnyStatus = new Set(
+      allOrders.filter((o) => notifyStatuses.has(o.status)).map((o) => o.customerId)
+    );
+    list = list.filter((u) => idsWithAnyStatus.has(u.id));
+  }
+
   return list;
 }
 
+// Кнопки-пилюли вместо выпадающего списка — кликом отмечаешь нужные,
+// повторный клик снимает отметку; выбор виден сразу по подсветке.
+function toggleSetValue(set, value) {
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+}
+
 function renderNotifyToolbar() {
-  const sel = document.getElementById('notify-category');
-  if (sel.options.length <= 1) {
-    Object.entries(CATEGORY_TITLES).forEach(([key, title]) => {
-      const opt = document.createElement('option');
-      opt.value = key;
-      opt.textContent = title;
-      sel.appendChild(opt);
-    });
-  }
-  sel.value = notifyCategory;
-  sel.disabled = notifyAudience === 'clients';
   document.getElementById('notify-audience').value = notifyAudience;
+
+  // Специализации осмысленны только для мастеров, статусы заказа — только
+  // для клиентов; при «все пользователи» показываем оба набора (можно
+  // сочетать, хотя обычно рассылку удобнее целить одной аудиторией).
+  document.getElementById('notify-categories-wrap').style.display = notifyAudience === 'clients' ? 'none' : '';
+  document.getElementById('notify-statuses-wrap').style.display = notifyAudience === 'workers' ? 'none' : '';
+
+  const categoriesEl = document.getElementById('notify-categories');
+  categoriesEl.innerHTML = Object.entries(CATEGORY_TITLES)
+    .map(
+      ([key, title]) =>
+        `<button type="button" class="toggle-pill ${notifyCategories.has(key) ? 'active' : ''}" data-category="${key}">${escapeHtml(title)}</button>`
+    )
+    .join('');
+  categoriesEl.querySelectorAll('[data-category]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(notifyCategories, btn.dataset.category);
+      renderNotifyToolbar();
+      renderNotifyCounts();
+    });
+  });
+
+  const statusesEl = document.getElementById('notify-statuses');
+  statusesEl.innerHTML = STATUS_KEYS
+    .map(
+      (key) =>
+        `<button type="button" class="toggle-pill ${notifyStatuses.has(key) ? 'active' : ''}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}</button>`
+    )
+    .join('');
+  statusesEl.querySelectorAll('[data-status]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(notifyStatuses, btn.dataset.status);
+      renderNotifyToolbar();
+      renderNotifyCounts();
+    });
+  });
 }
 
 function renderNotifyCounts() {
@@ -1492,12 +1553,9 @@ function showApp() {
   });
   document.getElementById('notify-audience').addEventListener('change', (e) => {
     notifyAudience = e.target.value;
-    if (notifyAudience === 'clients') notifyCategory = '';
+    if (notifyAudience === 'clients') notifyCategories.clear();
+    if (notifyAudience === 'workers') notifyStatuses.clear();
     renderNotifyToolbar();
-    renderNotifyCounts();
-  });
-  document.getElementById('notify-category').addEventListener('change', (e) => {
-    notifyCategory = e.target.value;
     renderNotifyCounts();
   });
   document.getElementById('notify-send').addEventListener('click', async () => {
@@ -1506,9 +1564,16 @@ function showApp() {
     const recipients = notifyMatchingUsers().filter((u) => u.telegramId);
     if (!recipients.length) { alert('Нет получателей с привязанным Telegram под текущим фильтром'); return; }
     const audienceLabel = { all: 'всем пользователям', workers: 'мастерам', clients: 'клиентам' }[notifyAudience];
-    const categoryLabel = notifyCategory ? ` (${CATEGORY_TITLES[notifyCategory] || notifyCategory})` : '';
+    const filterParts = [];
+    if (notifyCategories.size) {
+      filterParts.push(`специализация: ${[...notifyCategories].map((k) => CATEGORY_TITLES[k] || k).join(', ')}`);
+    }
+    if (notifyStatuses.size) {
+      filterParts.push(`статус заказа: ${[...notifyStatuses].map((k) => STATUS_LABELS[k] || k).join(', ')}`);
+    }
+    const filterLabel = filterParts.length ? ` (${filterParts.join('; ')})` : '';
     const ok = confirm(
-      `Отправить сообщение в Telegram ${recipients.length} получател(ям) — ${audienceLabel}${categoryLabel}?\n\nЭто реальная рассылка, действие необратимо.`
+      `Отправить сообщение в Telegram ${recipients.length} получател(ям) — ${audienceLabel}${filterLabel}?\n\nЭто реальная рассылка, действие необратимо.`
     );
     if (!ok) return;
     const btn = document.getElementById('notify-send');
