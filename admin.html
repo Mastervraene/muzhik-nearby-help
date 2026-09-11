@@ -225,6 +225,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn active" data-tab="orders">Заказы</button>
     <button class="tab-btn" data-tab="masters">Мастера</button>
     <button class="tab-btn" data-tab="map">Карта</button>
+    <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -259,6 +260,29 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
     <div id="map-note-slot"></div>
     <div id="map-container"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-notify">
+    <div class="stats-note">Сообщение уходит в Telegram-бот «Мужик» только тем, кто уже привязал Telegram (см. поле «Telegram ID» в карточке пользователя) и не заблокирован. Остальные будут пропущены — это видно в результате после отправки.</div>
+    <div class="toolbar">
+      <select id="notify-audience">
+        <option value="all">Все пользователи</option>
+        <option value="workers">Только мастера</option>
+        <option value="clients">Только клиенты</option>
+      </select>
+      <select id="notify-category">
+        <option value="">Любая специализация</option>
+      </select>
+    </div>
+    <div class="field-sm">
+      <label>Текст сообщения</label>
+      <textarea id="notify-text" style="min-height:110px;" placeholder="Например: «В приложении «Мужик» новая функция — фото профиля. Добавьте своё в разделе «Профиль»!»"></textarea>
+    </div>
+    <div class="row-actions" style="align-items:center;">
+      <button class="btn-sm primary" id="notify-send">Отправить рассылку</button>
+      <span class="count-hint" id="notify-count" style="margin-left:0;"></span>
+    </div>
+    <div id="notify-result" style="margin-top:10px; font-size:13px; color:var(--gray-600);"></div>
   </div>
 
   <div class="tab-panel" id="panel-stats">
@@ -300,6 +324,16 @@ const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1';
 // window.__ENV__). Ключ публичный (anon) — так и задумано, см. пояснение выше.
 const SUPABASE_URL = 'https://youyvbqdxuigvjciklfk.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
+
+// Секрет для Edge Function admin-notify (рассылка сообщений в Telegram-бот
+// из вкладки «Рассылка» и из карточки пользователя). Значение здесь
+// ДОЛЖНО совпадать с тем, что задано на сервере через
+// `supabase secrets set ADMIN_NOTIFY_SECRET=...` — иначе рассылка будет
+// отвечать «доступ запрещён». См. README ассистента, раздел про рассылку.
+// Как и весь остальной «секрет» в этом файле (пароль админки, anon-ключ) —
+// это барьер от случайного использования, а не криптографическая защита:
+// смотри честное пояснение про уровень защиты MVP выше по файлу.
+const ADMIN_NOTIFY_SECRET = '907fc13e6b3beb5b42cef4d09ae691cbcd435d2de9c28b4a';
 
 // Ключ JS API Яндекс.Карт — ОТДЕЛЬНЫЙ от YANDEX_GEOCODER_API_KEY в
 // index.html (это разные продукты в одном кабинете разработчика Яндекса,
@@ -405,6 +439,32 @@ async function updateRow(table, id, patch) {
   if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   return Array.isArray(data) ? data[0] : data;
+}
+
+// Рассылка через Edge Function admin-notify (см. supabase/functions/admin-notify —
+// отдельный пакет для деплоя через `supabase functions deploy`, как zvonok-*).
+// chatIds — telegram_id получателей (уже отфильтрованные на этой странице,
+// у кого он вообще есть). Возвращает { configured:false } если на сервере
+// не настроен TELEGRAM_BOT_TOKEN, иначе { configured:true, sent, failed }.
+async function sendAdminNotification(chatIds, text) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-notify`, {
+    method: 'POST',
+    headers: sbHeaders({ 'x-admin-notify-secret': ADMIN_NOTIFY_SECRET }),
+    body: JSON.stringify({ chatIds, text }),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const reason = data?.error === 'forbidden'
+      ? 'секрет ADMIN_NOTIFY_SECRET не совпадает с настройкой сервера'
+      : data?.error || `HTTP ${res.status}`;
+    throw new Error(`не удалось отправить (${reason})`);
+  }
+  return data || { configured: true, sent: 0, failed: [] };
 }
 
 async function deleteRow(table, id, byField) {
@@ -559,6 +619,8 @@ let mastersSearchQuery = '';
 let openOrderId = null;
 let openMasterId = null;
 let mapLoaded = false;
+let notifyAudience = 'all';
+let notifyCategory = '';
 
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
@@ -917,7 +979,20 @@ function masterFormHtml(u) {
           : '<span class="skills-empty">Навыки не указаны</span>'}
       </div>
 
-      <div class="row-actions">
+      <p class="form-section-label">Уведомление в Telegram</p>
+      ${u.telegramId
+        ? `
+          <div class="field-sm dense">
+            <textarea id="mf-notify-text-${u.id}" style="min-height:60px;" placeholder="Текст сообщения этому пользователю…"></textarea>
+          </div>
+          <div class="row-actions">
+            <button class="btn-sm primary" id="mf-notify-send-${u.id}">Отправить в Telegram</button>
+            <span class="save-hint" id="mf-notify-hint-${u.id}" style="color:var(--gray-500);"></span>
+          </div>
+        `
+        : '<span class="skills-empty">Telegram не привязан — отправить нельзя.</span>'}
+
+      <div class="row-actions" style="margin-top:14px;">
         <button class="btn-sm primary" id="save-master-${u.id}">Сохранить</button>
         <span class="save-hint" id="save-master-hint-${u.id}">Сохранено ✓</span>
       </div>
@@ -990,6 +1065,43 @@ function wireMasterForm(u) {
     }
   });
 
+  const notifySendBtn = document.getElementById(`mf-notify-send-${u.id}`);
+  if (notifySendBtn) {
+    notifySendBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const textEl = document.getElementById(`mf-notify-text-${u.id}`);
+      const text = textEl.value.trim();
+      if (!text) { alert('Введите текст сообщения'); return; }
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(`Отправить это сообщение в Telegram пользователю «${label}»?`);
+      if (!ok) return;
+      notifySendBtn.disabled = true;
+      notifySendBtn.textContent = 'Отправляю…';
+      const hint = document.getElementById(`mf-notify-hint-${u.id}`);
+      try {
+        const res = await sendAdminNotification([u.telegramId], text);
+        if (!res.configured) {
+          alert('Рассылка ещё не настроена на сервере — нужно задеплоить Edge Function admin-notify (см. README).');
+        } else if (res.sent > 0) {
+          textEl.value = '';
+          if (hint) {
+            hint.textContent = 'Отправлено ✓';
+            hint.style.color = 'var(--green)';
+            hint.style.display = 'inline';
+            setTimeout(() => { hint.style.display = 'none'; }, 2500);
+          }
+        } else {
+          alert('Не удалось отправить — возможно, пользователь ещё не запускал бота (/start) или заблокировал его.');
+        }
+      } catch (err) {
+        alert('Не удалось отправить: ' + err.message);
+      } finally {
+        notifySendBtn.disabled = false;
+        notifySendBtn.textContent = 'Отправить в Telegram';
+      }
+    });
+  }
+
   document.getElementById(`delete-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
     const label = u.displayName || u.phone || u.id;
@@ -1039,6 +1151,59 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Удалить пользователя'; }
     }
   });
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Рассылка» (уведомления в Telegram-бот)
+// -----------------------------------------------------------------------
+// «Параметры» рассылки — это аудитория (все/только мастера/только
+// клиенты) и, для мастеров, специализация (см. просьбу «только
+// сантехникам»). Заблокированных пользователей рассылка не трогает
+// никогда — им и так не должны приходить сообщения от сервиса.
+function notifyMatchingUsers() {
+  let list = allUsers.filter((u) => !u.blocked);
+  if (notifyAudience === 'workers') list = list.filter((u) => u.availableAsWorker);
+  else if (notifyAudience === 'clients') list = list.filter((u) => !u.availableAsWorker);
+  if (notifyCategory) {
+    const idsWithSkill = new Set(
+      allSkills.filter((s) => s.categoryId === notifyCategory).map((s) => s.userId)
+    );
+    list = list.filter((u) => idsWithSkill.has(u.id));
+  }
+  return list;
+}
+
+function renderNotifyToolbar() {
+  const sel = document.getElementById('notify-category');
+  if (sel.options.length <= 1) {
+    Object.entries(CATEGORY_TITLES).forEach(([key, title]) => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = title;
+      sel.appendChild(opt);
+    });
+  }
+  sel.value = notifyCategory;
+  sel.disabled = notifyAudience === 'clients';
+  document.getElementById('notify-audience').value = notifyAudience;
+}
+
+function renderNotifyCounts() {
+  const list = notifyMatchingUsers();
+  const withTg = list.filter((u) => u.telegramId);
+  const countEl = document.getElementById('notify-count');
+  if (countEl) {
+    countEl.textContent = list.length
+      ? `Подходит под фильтр: ${list.length} чел., из них с привязанным Telegram: ${withTg.length}`
+      : 'Под фильтр никто не подходит';
+  }
+  const sendBtn = document.getElementById('notify-send');
+  if (sendBtn) sendBtn.disabled = !withTg.length;
+}
+
+function renderNotify() {
+  renderNotifyToolbar();
+  renderNotifyCounts();
 }
 
 // -----------------------------------------------------------------------
@@ -1178,6 +1343,7 @@ async function loadData(opts) {
   allSkills = skillRows.map(dbSkillToSkill);
   renderOrders();
   renderMasters();
+  renderNotify();
   renderStats();
   if (!opts || !opts.keepOpen) {
     // ничего дополнительно
@@ -1211,6 +1377,53 @@ function showApp() {
   document.getElementById('masters-search').addEventListener('input', (e) => {
     mastersSearchQuery = e.target.value;
     renderMasters();
+  });
+  document.getElementById('notify-audience').addEventListener('change', (e) => {
+    notifyAudience = e.target.value;
+    if (notifyAudience === 'clients') notifyCategory = '';
+    renderNotifyToolbar();
+    renderNotifyCounts();
+  });
+  document.getElementById('notify-category').addEventListener('change', (e) => {
+    notifyCategory = e.target.value;
+    renderNotifyCounts();
+  });
+  document.getElementById('notify-send').addEventListener('click', async () => {
+    const text = document.getElementById('notify-text').value.trim();
+    if (!text) { alert('Введите текст сообщения'); return; }
+    const recipients = notifyMatchingUsers().filter((u) => u.telegramId);
+    if (!recipients.length) { alert('Нет получателей с привязанным Telegram под текущим фильтром'); return; }
+    const audienceLabel = { all: 'всем пользователям', workers: 'мастерам', clients: 'клиентам' }[notifyAudience];
+    const categoryLabel = notifyCategory ? ` (${CATEGORY_TITLES[notifyCategory] || notifyCategory})` : '';
+    const ok = confirm(
+      `Отправить сообщение в Telegram ${recipients.length} получател(ям) — ${audienceLabel}${categoryLabel}?\n\nЭто реальная рассылка, действие необратимо.`
+    );
+    if (!ok) return;
+    const btn = document.getElementById('notify-send');
+    btn.disabled = true;
+    btn.textContent = 'Отправляю…';
+    const resultEl = document.getElementById('notify-result');
+    resultEl.textContent = '';
+    try {
+      const res = await sendAdminNotification(recipients.map((u) => u.telegramId), text);
+      if (!res.configured) {
+        resultEl.textContent = 'Рассылка ещё не настроена на сервере — нужно задеплоить Edge Function admin-notify и задать секрет TELEGRAM_BOT_TOKEN (см. README).';
+        resultEl.style.color = 'var(--red)';
+      } else {
+        resultEl.style.color = 'var(--gray-600)';
+        resultEl.textContent = res.failed && res.failed.length
+          ? `Отправлено: ${res.sent}. Не удалось доставить: ${res.failed.length} (скорее всего, эти люди ещё не запускали бота или заблокировали его).`
+          : `Отправлено всем: ${res.sent}.`;
+        document.getElementById('notify-text').value = '';
+      }
+    } catch (err) {
+      resultEl.style.color = 'var(--red)';
+      resultEl.textContent = 'Ошибка: ' + err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Отправить рассылку';
+      renderNotifyCounts();
+    }
   });
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
