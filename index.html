@@ -2130,6 +2130,7 @@ function dbOrderToOrder(row) {
     urgency: row.urgency || 'normal',
     customerBudget: row.customer_budget,
     estimate: row.estimate || { min: 0, max: 0, factors: [] },
+    finalPrice: row.final_price ?? null,
     payment: row.payment || { status: 'none', amount: null, method: 'on_site', paidAt: null },
     status: row.status,
     timeline: row.timeline || [],
@@ -2171,6 +2172,7 @@ function orderToDbOrder(order) {
     urgency: order.urgency,
     customer_budget: order.customerBudget,
     estimate: order.estimate,
+    final_price: order.finalPrice ?? null,
     payment: order.payment,
     status: order.status,
     timeline: order.timeline,
@@ -4882,6 +4884,8 @@ function orderCardHtml(order, { viewer }) {
       ${
         order.isPrecedent
           ? `<div class="order-warning">Прецедент: цена согласовывается сторонами</div>`
+          : typeof order.finalPrice === 'number'
+          ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
       }
       ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
@@ -5094,7 +5098,18 @@ function renderOrderDetail() {
             : ''
         }
         ${order.isPrecedent ? `<p>Прецедент — предложение клиента: ${order.negotiation.customerOffer ?? '—'} ₽</p>` : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`}
+        ${typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
         <p class="order-meta"><span>Оплата: ${order.payment.method === 'on_site' ? 'на месте' : 'предоплата (демо)'}, статус — ${order.payment.status}</span></p>
+        ${
+          order.attachments && order.attachments.length
+            ? `<div class="attachment-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${order.attachments
+                .map(
+                  (a) =>
+                    `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;" loading="lazy" />`
+                )
+                .join('')}</div>`
+            : ''
+        }
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
         <div class="timeline">
           ${order.timeline

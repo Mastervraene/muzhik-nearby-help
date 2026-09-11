@@ -542,6 +542,7 @@ function dbOrderToOrder(row) {
     title: row.title,
     categoryId: row.category_id,
     description: row.description || '',
+    attachments: row.attachments || [],
     exactLocation: { lat: row.exact_lat, lng: row.exact_lng },
     district: row.district || '',
     fullAddress: row.full_address || '',
@@ -550,6 +551,7 @@ function dbOrderToOrder(row) {
     urgency: row.urgency || 'normal',
     customerBudget: row.customer_budget,
     estimate: row.estimate || { min: 0, max: 0, factors: [] },
+    finalPrice: row.final_price ?? null,
     status: row.status,
     timeline: row.timeline || [],
     warnings: row.warnings || [],
@@ -825,7 +827,7 @@ function orderFormHtml(o) {
           <select id="f-status-${o.id}">${statusOptions}</select>
         </div>
         <div class="field-sm">
-          <label>Назначенный мастер</label>
+          <label>Назначенный мастер (принудительное назначение)</label>
           <select id="f-worker-${o.id}">${workerOptions}</select>
         </div>
         <div class="field-sm">
@@ -853,6 +855,10 @@ function orderFormHtml(o) {
           <input type="number" id="f-est-max-${o.id}" value="${o.estimate?.max ?? 0}" />
         </div>
         <div class="field-sm">
+          <label>Финальная стоимость (₽)</label>
+          <input type="number" id="f-final-price-${o.id}" placeholder="не выставлена" value="${o.finalPrice ?? ''}" />
+        </div>
+        <div class="field-sm">
           <label>Радиус поиска (км)</label>
           <input type="number" id="f-radius-${o.id}" value="${o.searchRadiusKm ?? 3}" />
         </div>
@@ -861,6 +867,14 @@ function orderFormHtml(o) {
         <label>Описание</label>
         <textarea id="f-desc-${o.id}">${escapeHtml(o.description || '')}</textarea>
       </div>
+      ${o.attachments && o.attachments.length
+        ? `<div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${o.attachments
+            .map(
+              (a) =>
+                `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);" loading="lazy" /></a>`
+            )
+            .join('')}</div>`
+        : ''}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
       <div class="row-actions">
         <button class="btn-sm primary" id="save-order-${o.id}">Сохранить</button>
@@ -874,11 +888,14 @@ function wireOrderForm(o) {
   document.getElementById(`save-order-${o.id}`).addEventListener('click', async () => {
     const newStatus = document.getElementById(`f-status-${o.id}`).value;
     const statusChanged = newStatus !== o.status;
+    const newWorkerId = document.getElementById(`f-worker-${o.id}`).value || null;
+    const workerChanged = newWorkerId !== (o.assignedWorkerId || null);
+    const finalPriceRaw = document.getElementById(`f-final-price-${o.id}`).value.trim();
     const patch = {
       title: document.getElementById(`f-title-${o.id}`).value.trim(),
       category_id: document.getElementById(`f-category-${o.id}`).value,
       status: newStatus,
-      assigned_worker_id: document.getElementById(`f-worker-${o.id}`).value || null,
+      assigned_worker_id: newWorkerId,
       full_address: document.getElementById(`f-address-${o.id}`).value.trim() || null,
       district: document.getElementById(`f-district-${o.id}`).value.trim(),
       desired_date: document.getElementById(`f-date-${o.id}`).value.trim() || null,
@@ -890,15 +907,58 @@ function wireOrderForm(o) {
         max: Number(document.getElementById(`f-est-max-${o.id}`).value || 0),
         factors: o.estimate?.factors || [],
       },
+      final_price: finalPriceRaw === '' ? null : Number(finalPriceRaw),
     };
     if (statusChanged) {
       patch.timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
     }
+
+    // Принудительное назначение мастера — отдельное подтверждение, т.к. это
+    // единственное изменение в этой форме, которое уходит третьему лицу
+    // (мастеру придёт сообщение в Telegram), а не просто меняет запись.
+    let newWorker = null;
+    if (workerChanged && newWorkerId) {
+      newWorker = allUsers.find((u) => u.id === newWorkerId);
+      const label = newWorker ? (newWorker.displayName || newWorker.phone || newWorker.id) : newWorkerId;
+      const ok = confirm(`Принудительно назначить этот заказ мастеру «${label}»?\n\nЕсли у него привязан Telegram — придёт уведомление о назначении.`);
+      if (!ok) return;
+    } else if (workerChanged && !newWorkerId) {
+      const ok = confirm('Снять текущего мастера с заказа?');
+      if (!ok) return;
+    }
+
     const btn = document.getElementById(`save-order-${o.id}`);
     btn.disabled = true;
     btn.textContent = 'Сохраняю…';
     try {
       await updateRow('orders', o.id, patch);
+
+      // Уведомление мастеру о принудительном назначении — best-effort: если
+      // рассылка не настроена или у мастера нет Telegram, заказ всё равно
+      // остаётся назначенным, просто без пуша.
+      if (workerChanged && newWorkerId && newWorker && newWorker.telegramId) {
+        const orderLabel = patch.title || o.title || 'Заказ';
+        const districtLabel = patch.district || o.district || '';
+        const text = `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`;
+        try {
+          const res = await sendAdminNotification([newWorker.telegramId], text);
+          if (res.configured && res.sent > 0) {
+            try {
+              await insertRow('telegram_messages', {
+                user_id: newWorker.id,
+                telegram_id: newWorker.telegramId,
+                direction: 'out',
+                text,
+              });
+            } catch (logErr) {
+              console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
+            }
+          }
+        } catch (notifyErr) {
+          console.warn('Не удалось отправить уведомление о назначении:', notifyErr);
+        }
+      }
+
       await loadData({ keepOpen: true });
       const hint = document.getElementById(`save-hint-${o.id}`);
       if (hint) {
@@ -1436,7 +1496,7 @@ function fillMapPoints() {
         coords,
         {
           balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
-          balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км`,
+          balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км<br/><a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Открыть карточку мастера →</a>`,
         },
         {
           iconLayout: 'default#image',
@@ -1465,7 +1525,7 @@ function fillMapPoints() {
         coords,
         {
           balloonContentHeader: escapeHtml(o.title || 'Заказ'),
-          balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}`,
+          balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}<br/><a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть карточку заказа →</a>`,
         },
         {
           iconLayout: 'default#image',
@@ -1528,6 +1588,43 @@ function activateTab(tab) {
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
 }
+
+// Переход по клику на точку карты — из балуна метки мастера/заказа сразу
+// в его карточку на соответствующей вкладке (сбрасываем фильтры/поиск,
+// иначе карточка может быть скрыта текущим фильтром, и раскрываем её).
+// window.* — балун Яндекс.Карт вставляет HTML как есть, onclick-обработчик
+// должен быть виден в глобальной области видимости.
+window.goToOrderCard = function (orderId) {
+  ordersStatusFilter = '';
+  ordersSearchQuery = '';
+  const statusSel = document.getElementById('orders-status-filter');
+  const searchInput = document.getElementById('orders-search');
+  if (statusSel) statusSel.value = '';
+  if (searchInput) searchInput.value = '';
+  openOrderId = orderId;
+  activateTab('orders');
+  renderOrders();
+  setTimeout(() => {
+    const el = document.getElementById(`order-head-${orderId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 60);
+};
+
+window.goToMasterCard = function (userId) {
+  mastersFilter = 'all';
+  mastersSearchQuery = '';
+  const filterSel = document.getElementById('masters-filter');
+  const searchInput = document.getElementById('masters-search');
+  if (filterSel) filterSel.value = 'all';
+  if (searchInput) searchInput.value = '';
+  openMasterId = userId;
+  activateTab('masters');
+  renderMasters();
+  setTimeout(() => {
+    const el = document.getElementById(`master-head-${userId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 60);
+};
 
 // -----------------------------------------------------------------------
 // Вход / выход
