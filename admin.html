@@ -109,6 +109,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .pill.muted { background: var(--gray-100); color: var(--gray-600); }
 .pill.warn { background: #fef2f2; color: var(--red); }
 .pill.ok { background: #f0fdf4; color: var(--green); }
+.status-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: middle; position: relative; top: -1px;
+}
+.timeline-list .status-dot { width: 6px; height: 6px; margin-right: 6px; }
 .chevron { color: var(--gray-400); font-size: 13px; margin-top: 2px; }
 
 .card-line-desc {
@@ -413,6 +418,40 @@ const STATUS_LABELS = {
   issue_reported: 'Есть проблема',
 };
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
+
+// Цвет статуса — «радуга» от красного (заявка только создана) до зелёного
+// (заказ выполнен и оценён), чтобы стадию заказа было видно по цвету с
+// одного взгляда, не читая текст. Основной путь заказа (10 статусов ниже)
+// красится линейной интерполяцией оттенка HSL 0°→120° (красный → оранжевый
+// → жёлтый → салатовый → зелёный) по номеру шага. «Отменено» и «Есть
+// проблема» — не часть прогресса (заказ может свернуть туда с любого шага),
+// поэтому у них свои цвета вне радуги: серый (отменено — нейтрально,
+// «ничего не происходит») и малиновый (проблема — должно бросаться в глаза,
+// не путаться с «почти готово» на зелёном конце шкалы).
+const STATUS_FLOW_ORDER = [
+  'draft', 'collecting_details', 'estimate_ready', 'searching', 'assigned',
+  'en_route', 'in_progress', 'completed', 'confirmed', 'rated',
+];
+const STATUS_COLORS = {};
+STATUS_FLOW_ORDER.forEach((key, i) => {
+  const hue = Math.round((i / (STATUS_FLOW_ORDER.length - 1)) * 120);
+  STATUS_COLORS[key] = {
+    bg: `hsl(${hue}, 72%, 94%)`,
+    fg: `hsl(${hue}, 68%, 30%)`,
+    dot: `hsl(${hue}, 70%, 45%)`,
+  };
+});
+STATUS_COLORS.cancelled = { bg: '#f1f5f9', fg: '#64748b', dot: '#94a3b8' };
+STATUS_COLORS.issue_reported = { bg: '#fce7f3', fg: '#be185d', dot: '#ec4899' };
+
+function statusColor(status) {
+  return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
+}
+function statusPillHtml(status) {
+  const c = statusColor(status);
+  const label = STATUS_LABELS[status] || status;
+  return `<span class="pill" style="background:${c.bg};color:${c.fg};"><span class="status-dot" style="background:${c.dot};"></span>${escapeHtml(label)}</span>`;
+}
 
 // -----------------------------------------------------------------------
 // Утилиты
@@ -741,6 +780,7 @@ function renderOrdersToolbar() {
       const opt = document.createElement('option');
       opt.value = key;
       opt.textContent = STATUS_LABELS[key];
+      opt.style.color = statusColor(key).fg;
       sel.appendChild(opt);
     });
   }
@@ -785,7 +825,7 @@ function orderCardHtml(o) {
           <p class="card-title">${escapeHtml(nameDistrict)}</p>
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           <div class="card-meta">
-            <span class="pill">${escapeHtml(STATUS_LABELS[o.status] || o.status)}</span>
+            ${statusPillHtml(o.status)}
             <span>${fmtDate(o.createdAt)}</span>
           </div>
         </div>
@@ -798,7 +838,7 @@ function orderCardHtml(o) {
 
 function orderFormHtml(o) {
   const statusOptions = STATUS_KEYS.map(
-    (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[k])}</option>`
+    (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''} style="color:${statusColor(k).fg};">${escapeHtml(STATUS_LABELS[k])}</option>`
   ).join('');
   const workerOptions = ['<option value="">— не назначен —</option>']
     .concat(
@@ -824,7 +864,7 @@ function orderFormHtml(o) {
         </div>
         <div class="field-sm">
           <label>Статус</label>
-          <select id="f-status-${o.id}">${statusOptions}</select>
+          <select id="f-status-${o.id}" style="border-left:4px solid ${statusColor(o.status).dot};">${statusOptions}</select>
         </div>
         <div class="field-sm">
           <label>Назначенный мастер (принудительное назначение)</label>
@@ -875,7 +915,7 @@ function orderFormHtml(o) {
             )
             .join('')}</div>`
         : ''}
-      ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
+      ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
       <div class="row-actions">
         <button class="btn-sm primary" id="save-order-${o.id}">Сохранить</button>
         <span class="save-hint" id="save-hint-${o.id}">Сохранено ✓</span>
@@ -885,6 +925,10 @@ function orderFormHtml(o) {
 }
 
 function wireOrderForm(o) {
+  const statusSelectEl = document.getElementById(`f-status-${o.id}`);
+  statusSelectEl.addEventListener('change', () => {
+    statusSelectEl.style.borderLeft = `4px solid ${statusColor(statusSelectEl.value).dot}`;
+  });
   document.getElementById(`save-order-${o.id}`).addEventListener('click', async () => {
     const newStatus = document.getElementById(`f-status-${o.id}`).value;
     const statusChanged = newStatus !== o.status;
@@ -1525,7 +1569,7 @@ function fillMapPoints() {
         coords,
         {
           balloonContentHeader: escapeHtml(o.title || 'Заказ'),
-          balloonContentBody: `${escapeHtml(STATUS_LABELS[o.status] || o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}<br/><a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть карточку заказа →</a>`,
+          balloonContentBody: `${statusPillHtml(o.status)}<br/>${escapeHtml(o.fullAddress || o.district || '')}<br/><a href="javascript:void(0)" onclick="goToOrderCard('${o.id}')">Открыть карточку заказа →</a>`,
         },
         {
           iconLayout: 'default#image',
