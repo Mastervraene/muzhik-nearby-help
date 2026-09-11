@@ -1379,12 +1379,17 @@ const ALLOWED_TRANSITIONS = {
   draft: ['collecting_details', 'cancelled'],
   // collecting_details теперь означает «на проверке» (первичная модерация
   // администратором, см. STATUS_LABELS и publishDraft) — заказ либо
-  // одобряют (→ searching, минуя estimate_ready — см. admin.html
-  // approveOrder), либо он остаётся здесь/отменяется. estimate_ready
-  // сохранён в графе для обратной совместимости со старыми/демо-заказами,
-  // но новый клиентский путь через него больше не идёт.
-  collecting_details: ['estimate_ready', 'searching', 'draft', 'cancelled'],
-  estimate_ready: ['searching', 'collecting_details', 'cancelled'],
+  // одобряют (→ estimate_ready — см. admin.html approveOrder), либо он
+  // остаётся здесь/отменяется.
+  collecting_details: ['estimate_ready', 'draft', 'cancelled'],
+  // estimate_ready теперь означает «ожидает оплаты»: цена уже выставлена
+  // модератором, и заказчик видит экран оплаты-имитации (кнопки
+  // «Оплатить»/«Отказаться», см. payOrder/declineOrder) — реального
+  // эквайринга нет, см. paymentAdapter. «Оплатить» переводит заказ сразу
+  // в paid и следом в searching (см. payOrder) — «оплачено» видно как шаг
+  // в истории заказа, а искать мастеров начинаем с того же клика.
+  estimate_ready: ['paid', 'cancelled'],
+  paid: ['searching', 'cancelled'],
   searching: ['assigned', 'cancelled'],
   assigned: ['en_route', 'cancelled', 'issue_reported'],
   en_route: ['in_progress', 'issue_reported', 'cancelled'],
@@ -2989,7 +2994,8 @@ function renderStars(level) {
 const STATUS_LABELS = {
   draft: 'Черновик',
   collecting_details: 'На проверке',
-  estimate_ready: 'Оценка готова',
+  estimate_ready: 'Ожидает оплаты',
+  paid: 'Оплачено',
   searching: 'Ищем мастера',
   assigned: 'Мастер назначен',
   en_route: 'Мастер в пути',
@@ -3709,17 +3715,16 @@ async function publishDraft() {
     createdAt: new Date().toISOString(),
   };
 
-  // Заказ останавливается на «На проверке» (то же значение collecting_details,
-  // что и раньше — просто теперь это реальная точка ожидания, а не мгновенный
-  // проходной статус) и НЕ переводится в estimate_ready/searching здесь.
-  // Раньше следующие два transition() шли сразу же, и заказ был виден
-  // мастерам мгновенно — без единой проверки. Теперь его должен сначала
-  // одобрить администратор (кнопка «Одобрить» в admin.html, см. там же
-  // комментарий) — это и есть первичная модерация. Только после одобрения
-  // заказ переходит в searching и подбор/уведомление мастеров рядом
-  // происходит на сервере (см. supabase/functions/notify-nearby-workers) —
-  // здесь, на публикации, кандидатов больше не ищем и не уведомляем, чтобы
-  // не было уведомлений по заказам, которые модерация потом отклонит.
+  // Заказ останавливается на «На проверке» (collecting_details) и НЕ
+  // переводится дальше здесь. Путь заказа теперь: На проверке (модерация
+  // администратором, см. admin.html approveOrder) → Ожидает оплаты
+  // (estimate_ready, администратор выставил финальную цену) → заказчик
+  // жмёт «Оплатить»/«Отказаться» на экране заказа (см. payOrder/
+  // declineOrder ниже) → Оплачено (paid) → Ищем мастера (searching), и
+  // только тогда подбор/уведомление мастеров рядом происходит на сервере
+  // (см. supabase/functions/notify-nearby-workers). Здесь, на публикации,
+  // кандидатов не ищем и не уведомляем — ни модерация, ни оплата ещё не
+  // пройдены, а лишнее уведомление означало бы ложное срабатывание.
   order = transition(order, 'collecting_details');
 
   // Структурированное ТЗ для исполнителя — генерируется сразу при создании
@@ -3890,6 +3895,55 @@ function advanceWorkerStatus(orderId, nextStatus) {
     pushNotification(createNotification(order.customerId, 'customer', order.id, eventMap[nextStatus]));
   }
   render();
+}
+
+// Оплата — имитация (см. paymentAdapter вверху файла): реального
+// эквайринга нет, ввода карты нет, только «Оплатить»/«Отказаться».
+// Доступна заказчику, когда администратор уже одобрил заказ и выставил
+// цену (status === 'estimate_ready', см. admin.html approveOrder).
+// «Оплатить» сразу проводит обе следующие ступени — paid и searching —
+// одним saveOrder (как раньше делал publishDraft для нескольких статусов
+// подряд): «оплачено» остаётся видно шагом в истории заказа, а поиск
+// мастеров стартует тем же кликом, без дополнительного ожидания.
+async function payOrder(orderId) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.status !== 'estimate_ready') return;
+  const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
+  order.payment = confirmMockPayment(initiatePayment('online_stub', amount));
+  order = transition(order, 'paid');
+  order = transition(order, 'searching');
+  order = await saveOrder(order);
+  notifyNearbyWorkers(order.id); // best-effort, см. approveOrder в admin.html — та же функция
+  showToast('Оплата прошла (демо) — мастера рядом уже видят заказ');
+  render();
+}
+
+function declineOrder(orderId) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.status !== 'estimate_ready') return;
+  order = transition(order, 'cancelled');
+  saveOrder(order);
+  showToast('Заказ отменён');
+  render();
+}
+
+// Best-effort вызов той же безопасной Edge Function, что и admin.html
+// (см. её комментарий) — сбой здесь не должен мешать заказчику увидеть,
+// что оплата прошла: заказ уже в searching и виден мастерам в приложении
+// даже без пуша.
+async function notifyNearbyWorkers(orderId) {
+  if (!isSupabaseConfigured()) return;
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/notify-nearby-workers`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ orderId }),
+    });
+    if (!res.ok) console.warn('[payOrder] notify-nearby-workers ответила ошибкой', res.status);
+  } catch (err) {
+    console.warn('[payOrder] не удалось уведомить мастеров рядом:', err);
+  }
 }
 
 function reportIssue(orderId) {
@@ -5445,7 +5499,16 @@ function renderOrderDetail() {
       `;
     }
   } else if (isCustomer) {
-    if (order.status === 'completed') {
+    if (order.status === 'estimate_ready') {
+      // Оплата — имитация платёжного шлюза: сумма и две кнопки, без
+      // ввода карты и реального списания (см. payOrder/paymentAdapter).
+      const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
+      actions = `
+        <p class="order-meta">Оплата — демо-режим: реального списания нет, форма ввода карты не нужна.</p>
+        <button class="primary-button" data-action="pay-order" data-value="${order.id}">Оплатить ${amount} ₽</button>
+        <button class="secondary-button" data-action="decline-order" data-value="${order.id}">Отказаться</button>
+      `;
+    } else if (order.status === 'completed') {
       actions = `
         <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение</button>
         <button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>
@@ -6762,6 +6825,10 @@ async function handleAction(action, value) {
 
     case 'accept-order':
       return acceptOrder(value);
+    case 'pay-order':
+      return payOrder(value);
+    case 'decline-order':
+      return declineOrder(value);
     case 'advance-order': {
       const [orderId, next] = value.split(':');
       return advanceWorkerStatus(orderId, next);

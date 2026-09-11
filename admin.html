@@ -559,7 +559,8 @@ function renderStars(level) {
 const STATUS_LABELS = {
   draft: 'Черновик',
   collecting_details: 'На проверке',
-  estimate_ready: 'Оценка готова',
+  estimate_ready: 'Ожидает оплаты',
+  paid: 'Оплачено',
   searching: 'Ищем мастера',
   assigned: 'Мастер назначен',
   en_route: 'Мастер в пути',
@@ -574,7 +575,7 @@ const STATUS_KEYS = Object.keys(STATUS_LABELS);
 
 // Цвет статуса — «радуга» от красного (заявка только создана) до зелёного
 // (заказ выполнен и оценён), чтобы стадию заказа было видно по цвету с
-// одного взгляда, не читая текст. Основной путь заказа (10 статусов ниже)
+// одного взгляда, не читая текст. Основной путь заказа (11 статусов ниже)
 // красится линейной интерполяцией оттенка HSL 0°→120° (красный → оранжевый
 // → жёлтый → салатовый → зелёный) по номеру шага. «Отменено» и «Есть
 // проблема» — не часть прогресса (заказ может свернуть туда с любого шага),
@@ -582,7 +583,7 @@ const STATUS_KEYS = Object.keys(STATUS_LABELS);
 // «ничего не происходит») и малиновый (проблема — должно бросаться в глаза,
 // не путаться с «почти готово» на зелёном конце шкалы).
 const STATUS_FLOW_ORDER = [
-  'draft', 'collecting_details', 'estimate_ready', 'searching', 'assigned',
+  'draft', 'collecting_details', 'estimate_ready', 'paid', 'searching', 'assigned',
   'en_route', 'in_progress', 'completed', 'confirmed', 'rated',
 ];
 const STATUS_COLORS = {};
@@ -1050,12 +1051,15 @@ function wireOrderCards(list) {
 }
 
 // Первичная модерация: одобрение заказа со статуса «На проверке»
-// (collecting_details) сразу переводит его в searching (минуя
-// estimate_ready — тот статус больше не используется в новом потоке) и
-// проставляет финальную цену вручную (later — автоматизируем). Уведомление
-// мастеров рядом происходит на сервере через notify-nearby-workers —
-// именно поэтому до одобрения заказ никого не уведомляет, а после —
-// ровно один раз и только тех, кто реально подходит.
+// (collecting_details) переводит его в estimate_ready — этот статус
+// теперь означает «Ожидает оплаты», а не мгновенный проходной пункт, как
+// раньше. Финальная цена проставляется здесь вручную (later —
+// автоматизируем). Мастеров рядом мы здесь НЕ уведомляем и в searching
+// заказ не переводим — заказчик должен сначала «оплатить» на своей
+// стороне (кнопка «Оплатить» в index.html → payOrder(), имитация без
+// ввода карты); именно оттуда заказ переходит в paid → searching и летит
+// notify-nearby-workers. Так мы не тратим уведомление на заказ, который
+// клиент в итоге не оплатит/отклонит.
 async function approveOrder(o) {
   const suggested = o.finalPrice ?? o.estimate?.min ?? '';
   const priceRaw = prompt('Финальная цена заказа для клиента (₽):', suggested === '' ? '' : String(suggested));
@@ -1073,24 +1077,8 @@ async function approveOrder(o) {
   }
 
   try {
-    const timeline = [...(o.timeline || []), { status: 'searching', at: new Date().toISOString() }];
-    await updateRow('orders', o.id, { status: 'searching', final_price: finalPrice, timeline });
-
-    // Best-effort: если функция ещё не задеплоена или упала, заказ всё
-    // равно одобрен и виден мастерам в приложении — просто без пуша.
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/notify-nearby-workers`, {
-        method: 'POST',
-        headers: sbHeaders(),
-        body: JSON.stringify({ orderId: o.id }),
-      });
-      if (!res.ok) {
-        console.warn('[approve] notify-nearby-workers ответила ошибкой', res.status);
-      }
-    } catch (notifyErr) {
-      console.warn('[approve] не удалось уведомить мастеров рядом:', notifyErr);
-    }
-
+    const timeline = [...(o.timeline || []), { status: 'estimate_ready', at: new Date().toISOString() }];
+    await updateRow('orders', o.id, { status: 'estimate_ready', final_price: finalPrice, timeline });
     await loadData({ keepOpen: true });
   } catch (err) {
     alert('Не удалось одобрить заказ: ' + err.message);
