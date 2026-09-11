@@ -791,25 +791,10 @@ function renderMasters() {
   container.innerHTML = list.map((u) => masterCardHtml(u)).join('');
 
   list.forEach((u) => {
-    document.getElementById(`master-head-${u.id}`).addEventListener('click', (e) => {
-      if (e.target.closest('[data-toggle-block]')) return;
+    document.getElementById(`master-head-${u.id}`).addEventListener('click', () => {
       openMasterId = openMasterId === u.id ? null : u.id;
       renderMasters();
     });
-    const blockBtn = container.querySelector(`[data-toggle-block="${u.id}"]`);
-    if (blockBtn) {
-      blockBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        blockBtn.disabled = true;
-        try {
-          await updateRow('users', u.id, { blocked: !u.blocked });
-          await loadData({ keepOpen: true });
-        } catch (err) {
-          alert('Не удалось сохранить: ' + err.message);
-          blockBtn.disabled = false;
-        }
-      });
-    }
     if (openMasterId === u.id) {
       wireMasterForm(u);
     }
@@ -829,7 +814,6 @@ function masterCardHtml(u) {
             <span>${u.location.lat ? `${u.location.lat.toFixed(4)}, ${u.location.lng.toFixed(4)}` : 'без геоточки'}</span>
           </div>
         </div>
-        <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" data-toggle-block="${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
       ${open ? masterFormHtml(u) : ''}
@@ -935,6 +919,11 @@ function masterFormHtml(u) {
       </div>
 
       <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
+        <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" id="toggle-block-master-${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
+        <span class="save-hint" id="toggle-block-master-hint-${u.id}" style="color:var(--gray-500);"></span>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
         <button class="btn-sm danger-solid" id="delete-master-${u.id}">Удалить пользователя</button>
         <span class="save-hint" id="delete-master-hint-${u.id}" style="color:var(--gray-500);"></span>
       </div>
@@ -973,6 +962,27 @@ function wireMasterForm(u) {
     } finally {
       const freshBtn = document.getElementById(`save-master-${u.id}`);
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
+    }
+  });
+
+  document.getElementById(`toggle-block-master-${u.id}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const label = u.displayName || u.phone || u.id;
+    const willBlock = !u.blocked;
+    // Подтверждение — специально та же защита, что и у удаления: кнопку
+    // унесли из шапки карточки именно затем, чтобы не давить на неё
+    // случайно рядом с раскрытием профиля, лишнее «точно?» здесь не
+    // помешает.
+    const ok = confirm(willBlock ? `Заблокировать пользователя «${label}»?` : `Разблокировать пользователя «${label}»?`);
+    if (!ok) return;
+    const btn = document.getElementById(`toggle-block-master-${u.id}`);
+    btn.disabled = true;
+    try {
+      await updateRow('users', u.id, { blocked: willBlock });
+      await loadData({ keepOpen: true });
+    } catch (err) {
+      alert('Не удалось сохранить: ' + err.message);
+      btn.disabled = false;
     }
   });
 

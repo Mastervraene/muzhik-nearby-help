@@ -3346,7 +3346,11 @@ async function submitTelegramLinkCode(rawCode) {
     return;
   }
   if (!row || !row.telegram_id) {
-    showToast('Код не найден — проверьте, что скопировали его из бота правильно');
+    // Одна и та же ошибка и для опечатки, и для просроченного кода (бот
+    // выдаёт код на 10 минут) — отличить их на сайте нечем (см.
+    // getLoginCodeStatus: истёкшая строка просто не попадает в выборку),
+    // поэтому подсказываем оба варианта явно, а не только «неверный код».
+    showToast('Код не найден — проверьте, что ввели его без ошибок, либо запросите новый (старый мог истечь через 10 минут)');
     return;
   }
 
@@ -3926,7 +3930,12 @@ async function saveProfileDistrict() {
   } else if (isGeocoderConfigured()) {
     let coords = null;
     try {
-      coords = await geocodeAddressYandex(district);
+      // allowCoarse: район/город — это по своей природе крупный масштаб,
+      // Яндекс закономерно вернёт precision:"other" даже для правильного
+      // совпадения (см. комментарий в geocodeAddressYandex) — обычный
+      // строгий фильтр, рассчитанный на полный адрес с домом, здесь бы
+      // отбрасывал верные результаты.
+      coords = await geocodeAddressYandex(district, { allowCoarse: true });
     } catch (err) {
       console.warn('[geo] прямое геокодирование адреса не удалось', err);
     }
@@ -4006,9 +4015,22 @@ const GEOCODER_JUNK_PRECISION = new Set(['other']);
  * явно мусорные совпадения (см. GEOCODER_JUNK_PRECISION выше); итоговая
  * точка в любом случае перепроверяется человеком на карте на шаге
  * подтверждения заявки.
- * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён, адрес не распознан или совпадение похоже на мусорное
+ * Фильтр по precision («other» — мусор) по умолчанию включён — это нужно
+ * для полного адреса заявки (там ожидается точность до дома/улицы, а
+ * дальше человек всё равно поправит точку на карте — см. quickReview).
+ * Но для РАЙОНА (см. saveProfileDistrict) это ломает даже нормальные
+ * ответы: Яндекс отдаёт precision:"other" для ЛЮБОГО совпадения уровня
+ * района/города — это не «не нашли», а корректный ответ для такого
+ * масштаба запроса (у precision просто нет отдельной ступени «район»,
+ * см. пример в комментарии у GEOCODER_JUNK_PRECISION). Профиль при этом
+ * не проходит через карту-подтверждение, поэтому отбрасывать такой
+ * результат нельзя — вызывающий код передаёт allowCoarse:true, чтобы
+ * пропустить этот фильтр.
+ * @param {string} addressText
+ * @param {{allowCoarse?: boolean}} [opts]
+ * @returns {Promise<{lat:number,lng:number}|null>} координаты либо null, если ключ не подключён, адрес не распознан или (без allowCoarse) совпадение похоже на мусорное
  */
-async function geocodeAddressYandex(addressText) {
+async function geocodeAddressYandex(addressText, opts = {}) {
   const env = (typeof window !== 'undefined' && window.__ENV__) || {};
   const apiKey = env.YANDEX_GEOCODER_API_KEY;
   if (!apiKey) return null;
@@ -4023,7 +4045,7 @@ async function geocodeAddressYandex(addressText) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
   const precision = found?.metaDataProperty?.GeocoderMetaData?.precision;
-  if (precision && GEOCODER_JUNK_PRECISION.has(precision)) return null;
+  if (!opts.allowCoarse && precision && GEOCODER_JUNK_PRECISION.has(precision)) return null;
 
   return { lat, lng };
 }
