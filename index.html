@@ -6493,14 +6493,7 @@ function renderProfile() {
             <span class="profile-avatar-edit-badge" aria-hidden="true">${ICON_PENCIL}</span>
           </div>
           <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
-          <div>
-            <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
-            ${
-              user.availableAsWorker && !user.avatarUrl
-                ? `<p class="order-meta" style="margin-top:6px;">Мастерам скоро понадобится фото, чтобы брать заказы, — добавьте заранее.</p>`
-                : ''
-            }
-          </div>
+          <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
         </div>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
