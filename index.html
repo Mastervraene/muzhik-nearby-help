@@ -885,6 +885,31 @@ body {
   border-radius: 6px;
 }
 
+/* ---------- Блок заработка мастера в карточке заказа (см. renderWorkerPayoutBlock) ---------- */
+.worker-payout {
+  margin-top: 10px;
+}
+
+.worker-payout-price {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin: 0;
+}
+
+.worker-payout-earn-label {
+  font-size: 14px;
+  color: var(--gray-800);
+  margin: 4px 0 0;
+}
+
+.worker-payout-earn-amount {
+  font-size: 27px;
+  font-weight: 800;
+  color: var(--accent);
+  margin: 0;
+  line-height: 1.25;
+}
+
 .location-confirm {
   margin-top: 10px;
 }
@@ -1551,6 +1576,20 @@ const MODIFIERS = {
   hard_access: (price) => price * 1.15,
   needs_materials: (price) => price * 1.1,
 };
+
+/**
+ * Доля мастера от суммы, которую платит заказчик, — комиссия площадки
+ * (сейчас 30%) удерживается автоматически, остальное получает мастер.
+ * Пока единая ставка для всех заказов; появится дифференциация по
+ * категориям/мастерам — выносить в каталог/профиль, а не хардкодить здесь.
+ */
+const WORKER_PAYOUT_RATE = 0.7;
+
+/** Сколько мастер получит на руки с суммы, которую платит заказчик. Округляем
+ * до рубля — копейки в демо-режиме ни к чему. */
+function workerPayout(customerAmount) {
+  return Math.round(customerAmount * WORKER_PAYOUT_RATE);
+}
 
 /**
  * @param {import('./types.js').ServiceCatalogItem[]} catalog
@@ -3168,6 +3207,9 @@ function go(screen, extra = {}) {
     // Не блокируем сам переход на экран — список кандидатов дорисуется
     // повторным render() внутри refreshAvailableOrders(), когда придёт ответ.
     refreshAvailableOrders();
+    startAvailableOrdersPolling();
+  } else {
+    stopAvailableOrdersPolling();
   }
 }
 
@@ -3605,6 +3647,7 @@ async function skipPhoneCallVerification() {
 }
 
 function logout() {
+  stopAvailableOrdersPolling();
   clearSession();
   state.currentUserId = null;
   state.screen = 'home';
@@ -4086,6 +4129,33 @@ async function acceptOrder(orderId) {
  * @param {boolean} [isRetry] — внутренний флаг, чтобы не зациклиться, если
  * даже свежевыданный токен почему-то не подходит.
  */
+// ---------------------------------------------------------------------
+// Автообновление списка «Подходит вам рядом». Раньше refreshAvailableOrders()
+// вызывалась только один раз — при заходе на экран «Заказы» — поэтому если
+// мастер оставался на этом экране (или сворачивал вкладку/браузер и
+// возвращался обратно), новые заказы, появившиеся тем временем у других
+// пользователей, не появлялись без повторного ухода с экрана и возврата на
+// него. Настоящего realtime-пуша с сервера нет (Supabase Realtime не
+// подключен) — вместо этого лёгкий поллинг той же Edge Function, пока
+// активен экран «Заказы», плюс досрочный разовый refresh, когда вкладка
+// снова становится видимой (см. visibilitychange ниже, в самом низу файла).
+// ---------------------------------------------------------------------
+const AVAILABLE_ORDERS_POLL_MS = 20000;
+let availableOrdersPollTimer = null;
+
+function startAvailableOrdersPolling() {
+  if (availableOrdersPollTimer) return;
+  availableOrdersPollTimer = setInterval(() => {
+    if (state.screen === 'orders' && !document.hidden) refreshAvailableOrders();
+  }, AVAILABLE_ORDERS_POLL_MS);
+}
+
+function stopAvailableOrdersPolling() {
+  if (!availableOrdersPollTimer) return;
+  clearInterval(availableOrdersPollTimer);
+  availableOrdersPollTimer = null;
+}
+
 async function refreshAvailableOrders(isRetry) {
   const user = currentUser();
   if (!isSupabaseConfigured() || !user || !user.availableAsWorker || !user.skills.length) {
@@ -5880,6 +5950,47 @@ function formattedBriefHtml(brief) {
   `;
 }
 
+/**
+ * Блок «сколько мастер получит на руки» в карточке заказа — рядом со
+ * стоимостью, которую видит заказчик, но заработок мастера подан крупнее и
+ * акцентирован цветом (см. .worker-payout-* в CSS), похоже на то, как
+ * акцентирована сумма в форме оплаты у заказчика. Комиссия площадки — см.
+ * WORKER_PAYOUT_RATE/workerPayout().
+ */
+function renderWorkerPayoutBlock(order) {
+  if (order.isPrecedent) {
+    const offer = order.negotiation && order.negotiation.customerOffer;
+    if (!offer) {
+      return `<p class="order-meta">Прецедент — сумма ещё не согласована с заказчиком, заработок будет известен после согласования цены</p>`;
+    }
+    return `
+      <div class="worker-payout">
+        <p class="worker-payout-price">Стоимость заказа ${offer} ₽</p>
+        <p class="worker-payout-earn-label">Вы заработаете</p>
+        <p class="worker-payout-earn-amount">${workerPayout(offer)} ₽</p>
+      </div>
+    `;
+  }
+  if (typeof order.finalPrice === 'number') {
+    return `
+      <div class="worker-payout">
+        <p class="worker-payout-price">Стоимость заказа ${order.finalPrice} ₽</p>
+        <p class="worker-payout-earn-label">Вы заработаете</p>
+        <p class="worker-payout-earn-amount">${workerPayout(order.finalPrice)} ₽</p>
+      </div>
+    `;
+  }
+  const earnMin = workerPayout(order.estimate.min);
+  const earnMax = workerPayout(order.estimate.max);
+  return `
+    <div class="worker-payout">
+      <p class="worker-payout-price">Стоимость заказа ${order.estimate.min}–${order.estimate.max} ₽</p>
+      <p class="worker-payout-earn-label">Вы заработаете</p>
+      <p class="worker-payout-earn-amount">${earnMin === earnMax ? `${earnMin} ₽` : `${earnMin}–${earnMax} ₽`}</p>
+    </div>
+  `;
+}
+
 function renderOrderDetail() {
   const order = getOrders().find((o) => o.id === state.openOrderId);
   if (!order) return `<div class="screen"><div class="empty-state">Заказ не найден</div></div>`;
@@ -5962,8 +6073,14 @@ function renderOrderDetail() {
             ? `<p class="order-meta"><span>${escapeHtml(formatOrderDateLabel(order.desiredDate))} ${escapeHtml(order.timeWindow)}</span></p>`
             : ''
         }
-        ${order.isPrecedent ? `<p>Прецедент — предложение клиента: ${order.negotiation.customerOffer ?? '—'} ₽</p>` : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`}
-        ${typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
+        ${
+          isCustomer
+            ? order.isPrecedent
+              ? `<p>Прецедент — предложение клиента: ${order.negotiation.customerOffer ?? '—'} ₽</p>`
+              : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`
+            : renderWorkerPayoutBlock(order)
+        }
+        ${isCustomer && typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
         <p class="order-meta"><span>Оплата: ${order.payment.method === 'on_site' ? 'на месте' : 'предоплата (демо)'}, статус — ${order.payment.status}</span></p>
         ${
           order.attachments && order.attachments.length
@@ -7423,6 +7540,13 @@ async function boot() {
 }
 
 boot();
+
+// Вкладку свернули или браузер закрыли и вернулись обратно, пока были на
+// экране «Заказы», — сразу подтягиваем актуальный список кандидатов, не
+// дожидаясь следующего тика поллинга (см. startAvailableOrdersPolling выше).
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.screen === 'orders') refreshAvailableOrders();
+});
 
 // Регистрация service worker для PWA/офлайн app-шелла (см. sw.js —
 // намеренно network-first, чтобы новый деплой всегда был виден). Только
