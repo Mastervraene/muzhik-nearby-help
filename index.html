@@ -2759,7 +2759,19 @@ function saveOrder(order) {
         const i = cache.orders.findIndex((o) => o === order);
         if (i >= 0) cache.orders[i] = created; return created;
       })
-      .catch((err) => { reportError('сохранение заказа', err); return order; });
+      .catch((err) => {
+        reportError('сохранение заказа', err);
+        // Раньше здесь тихо возвращался локальный `order`, как будто вставка
+        // прошла — вызывающий код (publishDraft) считал заказ опубликованным,
+        // хотя в БД его не было (QA-отчёт от 12.09, BUG 05: заказ пропадал
+        // после обновления страницы). Теперь явно сигналим о провале (null) и
+        // убираем «заказ-призрак», которого добавили в кэш оптимистично выше,
+        // до того как узнали результат вставки — иначе он мог бы всплыть в
+        // списках («Мои заказы»), не будучи реально сохранён.
+        const i = cache.orders.findIndex((o) => o === order);
+        if (i >= 0) cache.orders.splice(i, 1);
+        return null;
+      });
   } else {
     return updateRow('orders', order.id, payload).then(() => order).catch((err) => { reportError('сохранение заказа', err); return order; });
   }
@@ -2815,6 +2827,12 @@ const CATEGORIES = [
   { id: 'minor_repair', title: 'Мелкий ремонт' },
   { id: 'household_help', title: 'Уборка и бытовая помощь' },
   { id: 'moving_help', title: 'Вынос и перемещение вещей' },
+  // Категория-заглушка для случаев, когда офлайн-классификатор
+  // (interpretCustomerMessage) не нашёл совпадений по ключевым словам —
+  // orders.category_id в базе NOT NULL, поэтому заказ без категории иначе
+  // не сохранится (QA-отчёт от 12.09, BUG 05, одна из причин отказа INSERT).
+  // См. фолбэк в startQuickDraft().
+  { id: 'other', title: 'Другое' },
 ];
 
 /**
@@ -3225,6 +3243,8 @@ const state = {
   // Какое из двух всплывающих окон открыто: null — ни одно; 'short' —
   // краткая карточка «Локация — самое важное» (авто при старте без
   // входа); 'long' — подробное «Как это работает» (по кнопке «?»).
+  // (см. ONBOARDING_DISMISSED_KEY ниже — при повторном визите после закрытия
+  // карточки на старте её больше не показываем)
   infoOverlay: null,
   // Навыки на экране профиля — теперь просто кнопки-переключатели (см.
   // renderProfile → «Мои навыки»): клик по навыку открывает звёздный
@@ -3245,6 +3265,24 @@ function showToast(text) {
     state.toast = null;
     render();
   }, 2200);
+}
+
+// Ключ localStorage, которым запоминаем, что человек уже закрыл краткую
+// карточку-подсказку «Локация — самое важное» (см. renderOnboardingOverlay,
+// infoOverlay: 'short') — иначе она всплывала заново при каждой перезагрузке
+// страницы, даже если её только что закрыли (QA-отчёт от 12.09).
+const ONBOARDING_DISMISSED_KEY = 'muzhik_onboarding_dismissed';
+function wasOnboardingDismissed() {
+  try {
+    return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
+  } catch (err) {
+    return false; // приватный режим браузера и т.п. — просто показываем карточку как раньше
+  }
+}
+function markOnboardingDismissed() {
+  try {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+  } catch (err) { /* не критично — просто не запомнится между визитами */ }
 }
 
 function go(screen, extra = {}) {
@@ -3705,17 +3743,33 @@ async function skipPhoneCallVerification() {
   await finishPhoneGateLogin(user);
 }
 
-function logout() {
-  stopAvailableOrdersPolling();
-  clearSession();
-  state.currentUserId = null;
-  state.screen = 'home';
+/**
+ * Полный сброс черновика заявки: обнуляет и state.draft, и все
+ * module-level composer*-переменные, которые пережили бы выход на главную
+ * иначе (см. их объявление ниже, у composerExpandedField). Без этого после
+ * «Отменить» на экране проверки заявки следующий заход в композер начинал
+ * новую заявку со старым адресом/датой/временем от отменённой (QA-отчёт от
+ * 12.09: «при повторном заходе видны старые данные»).
+ */
+function resetComposerDraft() {
+  state.draft = null;
+  composerDescriptionValue = '';
   composerAddressValue = '';
   composerDesiredDate = '';
   composerTimeFrom = '';
   composerTimeTo = '';
   composerExpandedField = null;
   composerExactLocation = null;
+  composerTimeError = '';
+  pendingAttachments = [];
+}
+
+function logout() {
+  stopAvailableOrdersPolling();
+  clearSession();
+  state.currentUserId = null;
+  state.screen = 'home';
+  resetComposerDraft();
   render();
 }
 
@@ -3944,7 +3998,10 @@ function startQuickDraft(rawMessage, attachments, address, desiredDate, desiredT
     step: 'quickReview',
     rawMessage,
     attachments,
-    categoryId: freshAssistantMatch ? freshAssistantMatch.categoryId : interpretation.categoryId,
+    // 'other' — если ни ассистент, ни офлайн-классификатор не определили
+    // категорию: категория обязательна в БД (см. комментарий у CATEGORIES),
+    // а «угадывать» неверную категорию хуже, чем явное «Другое».
+    categoryId: (freshAssistantMatch ? freshAssistantMatch.categoryId : interpretation.categoryId) || 'other',
     // riskWarning — по-прежнему офлайн-проверка на опасные ключевые слова:
     // это не зависит от того, ответил ли ассистент, и работает даже без него.
     riskWarning: interpretation.riskWarning,
@@ -4064,7 +4121,21 @@ async function publishDraft() {
   // order.formattedBrief остаётся null, и сайт ведёт себя как раньше.
   order.formattedBrief = await requestFormattedBrief(order, d);
 
-  order = await saveOrder(order);
+  const saved = await saveOrder(order);
+
+  // saveOrder() вернёт null, если вставка в БД реально не удалась (см. её
+  // комментарий) — раньше в этом случае код всё равно шёл дальше с локальным
+  // объектом заказа, показывал «Заявка отправлена» и открывал карточку
+  // заказа, которого на сервере не существовало (QA-отчёт от 12.09, BUG 05:
+  // после обновления страницы заказ пропадал). Теперь при провале остаёмся
+  // на экране проверки — черновик не теряется, кнопка «Отправить» снова
+  // доступна для повторной попытки.
+  if (!saved) {
+    showToast('Не получилось отправить заявку — попробуйте ещё раз через минуту.');
+    render();
+    return;
+  }
+  order = saved;
 
   pushNotification(
     createNotification(order.customerId, 'customer', order.id, 'order_published')
@@ -5810,13 +5881,14 @@ function renderHome() {
           <div class="composer-field-row">
             <div style="flex:1;min-width:0;">
               <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">С</label>
-              <input type="time" id="composer-time-from" value="${escapeHtml(composerTimeFrom)}" />
+              <input type="time" id="composer-time-from" value="${escapeHtml(composerTimeFrom)}" style="${composerTimeError ? 'border-color:var(--danger,#dc2626);' : ''}" />
             </div>
             <div style="flex:1;min-width:0;">
               <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">До</label>
-              <input type="time" id="composer-time-to" value="${escapeHtml(composerTimeTo)}" />
+              <input type="time" id="composer-time-to" value="${escapeHtml(composerTimeTo)}" style="${composerTimeError ? 'border-color:var(--danger,#dc2626);' : ''}" />
             </div>
           </div>
+          ${composerTimeError ? `<div class="order-warning" id="composer-time-error">${escapeHtml(composerTimeError)}</div>` : ''}
           <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
         </div>
         `
@@ -5836,7 +5908,7 @@ function renderHome() {
           </div>
           <div class="composer-tools">
             <button class="tool-button" data-action="voice-toggle" title="Голосовое сообщение">${ICON_MIC}</button>
-            <button type="button" class="send-button" id="composer-send">${ICON_ARROW_UP}</button>
+            <button type="button" class="send-button" id="composer-send" aria-label="Отправить">${ICON_ARROW_UP}</button>
           </div>
         </div>
       </div>
@@ -5964,6 +6036,15 @@ function renderCompose() {
           <span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || 'Категория уточняется')}</span>
           ${d.district ? `<span>${escapeHtml(d.district)}</span>` : ''}
         </p>
+        <p class="order-meta">
+          <span>📅 ${d.desiredDate ? escapeHtml(formatOrderDateLabel(d.desiredDate)) : 'Дата не указана'}</span>
+          ${d.timeWindow ? `<span>🕐 ${escapeHtml(d.timeWindow)}</span>` : ''}
+        </p>
+        ${
+          !d.desiredDate
+            ? `<div class="order-warning">Дата не указана — так сложнее подобрать мастера на конкретный день. Заявку можно отправить и без неё.</div>`
+            : ''
+        }
         ${
           d.isPrecedent
             ? `<p>Похожей позиции нет в каталоге — точную цену согласуете с мастером напрямую.</p>`
@@ -6193,6 +6274,20 @@ function renderOrderDetail() {
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
             : showExact
             ? `<div class="order-warning">⚠ Точная точка на карте не определена — адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) : escapeHtml(order.district) || 'не указан'}. На карте в админке эта заявка не отобразится.</div>`
+            : ''
+        }
+        ${
+          // Контакт заказчика показываем мастеру только после того, как он
+          // взял заказ в работу (isAssignedWorker) — до этого в списке
+          // кандидатов и на карточке видно только район и номер дома
+          // (см. orderCardHtml). Пока заказ не принят, ни имени, ни телефона
+          // заказчика мастер не видит. Подъезд/домофон/квартиру мастер
+          // уточнит по телефону сам — это не критично для отображения.
+          isAssignedWorker
+            ? (() => {
+                const customer = getUsers().find((u) => u.id === order.customerId);
+                return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(customer?.displayName || 'без имени')} · ${escapeHtml(displayPhone(customer?.phone) || 'телефон не указан')}</span></p>`;
+              })()
             : ''
         }
         ${
@@ -6570,6 +6665,10 @@ let pendingAttachments = [];
 // не данные заказа/пользователя.
 // ---------------------------------------------------------------------
 let composerExpandedField = null; // 'address' | 'date' | null
+// Текст ошибки интервала времени («с» позже или равно «до») — раньше такой
+// интервал молча сохранялся (QA-отчёт от 12.09, BUG 01: «сегодня, 18:00–10:00»
+// принималось без предупреждения). См. collapse-composer-field/timeWindowError().
+let composerTimeError = '';
 // Текст заявки, набранный в composer-input. Как и composerAddressValue
 // ниже, живёт вне state и восстанавливается в шаблон при каждом render() —
 // иначе полный перерендер (клик по чипу «Адрес»/«Дата», всплывающий toast,
@@ -6627,6 +6726,21 @@ const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'ию
  * orders_desired_date_range на таблице orders (защита от подмены даты в
  * обход интерфейса — client-side min/max тут только для UX).
  */
+/**
+ * Проверка интервала «с/до»: «до» должно быть строго позже «с». Строки
+ * HH:MM сравниваются как обычные строки — при одинаковой длине это
+ * эквивалентно сравнению времени. Пустые значения (одно из полей ещё не
+ * заполнено) считаются валидными — ошибка показывается, только когда
+ * интервал уже указан целиком и он действительно обратный.
+ * @param {string} from — HH:MM
+ * @param {string} to — HH:MM
+ * @returns {string} — текст ошибки или '', если всё в порядке
+ */
+function timeWindowError(from, to) {
+  if (!from || !to) return '';
+  return to <= from ? 'Время «до» должно быть позже времени «с»' : '';
+}
+
 function composerDateBounds() {
   const pad = (n) => String(n).padStart(2, '0');
   const toIso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -7019,11 +7133,15 @@ function wireEvents() {
   if (composerTimeFromInput) {
     composerTimeFromInput.addEventListener('change', () => {
       composerTimeFrom = composerTimeFromInput.value;
+      composerTimeError = timeWindowError(composerTimeFrom, composerTimeTo);
+      render();
     });
   }
   if (composerTimeToInput) {
     composerTimeToInput.addEventListener('change', () => {
       composerTimeTo = composerTimeToInput.value;
+      composerTimeError = timeWindowError(composerTimeFrom, composerTimeTo);
+      render();
     });
   }
   if (composerInput) {
@@ -7072,6 +7190,16 @@ function wireEvents() {
       }
       if (!address) {
         showToast('Укажите адрес, чтобы отправить заявку');
+        return;
+      }
+      // Финальная защита от обратного интервала времени — на случай, если
+      // поле даты/времени так и осталось открытым с ошибкой (собственно
+      // «Готово» это уже не пропускает, см. collapse-composer-field).
+      if (timeWindowError(composerTimeFrom, composerTimeTo)) {
+        showToast('Время «до» должно быть позже времени «с» — поправьте интервал');
+        composerExpandedField = 'date';
+        composerTimeError = timeWindowError(composerTimeFrom, composerTimeTo);
+        render();
         return;
       }
       // Дата — необязательна (в отличие от адреса): без неё заявку всё
@@ -7387,7 +7515,12 @@ async function handleAction(action, value) {
     case 'toggle-avatar-menu':
       avatarMenuOpen = !avatarMenuOpen;
       return render();
-    case 'go-home': return go('home');
+    case 'go-home':
+      // Сброс черновика при уходе на главную — в т.ч. по кнопке «Отменить»
+      // на экране проверки заявки (см. resetComposerDraft). Клик по логотипу
+      // с других экранов (где активного черновика уже нет) это не портит.
+      resetComposerDraft();
+      return go('home');
     case 'go-orders': return go('orders');
     case 'go-notifications': return go('notifications');
     case 'go-profile': return go('profile');
@@ -7450,9 +7583,16 @@ async function handleAction(action, value) {
       return;
     }
     case 'collapse-composer-field':
+      // Не даём закрыть карточку даты/времени, пока интервал обратный —
+      // иначе ошибка (см. timeWindowError) исчезает из виду вместе с полями
+      // и невозможно понять, что не так (QA-отчёт от 12.09, BUG 01/02).
+      if (composerExpandedField === 'date' && composerTimeError) {
+        return render();
+      }
       composerExpandedField = null;
       return render();
     case 'dismiss-onboarding':
+      if (state.infoOverlay === 'short') markOnboardingDismissed();
       state.infoOverlay = null;
       return render();
     case 'show-help':
@@ -7671,7 +7811,7 @@ async function boot() {
   // работы сайта в любой момент открывается кнопкой «?» в шапке. Картинка
   // в этой карточке — реальная карта зоны покрытия мастеров (см.
   // renderOnboardingOverlay).
-  state.infoOverlay = currentUser() ? null : 'short';
+  state.infoOverlay = currentUser() || wasOnboardingDismissed() ? null : 'short';
 
   state.booting = false;
   console.info(assistantDemoNotice());
