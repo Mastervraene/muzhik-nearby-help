@@ -2659,8 +2659,16 @@ async function initDb(localSeed) {
   }
 
   try {
+    // users_public — представление без чувствительных полей (phone, lat/lng,
+    // telegram_id, phone_verified, has_password), см. памятку по безопасности
+    // БД. Раньше здесь был getRows('users') — каждый посетитель при обычной
+    // загрузке страницы получал в кэш (а значит, и в Network-вкладку браузера)
+    // телефоны, точные координаты и telegram_id ВСЕХ пользователей сервиса.
+    // Полную свою строку подтягиваем отдельно чуть ниже; полные строки чужих
+    // пользователей (например, для «Контакт заказчика») — через
+    // ensureCustomerContact() по требованию.
     const [userRows, skillRows, orderRows, serviceRows, notificationRows] = await Promise.all([
-      getRows('users'),
+      getRows('users_public'),
       getRows('skills'),
       getRows('orders'),
       getRows('services'),
@@ -2678,6 +2686,27 @@ async function initDb(localSeed) {
     cache.orders = orderRows.map(dbOrderToOrder);
     cache.services = serviceRows.map(dbServiceToService);
     cache.notifications = notificationRows.map(dbNotificationToNotification);
+
+    // Если на этом устройстве уже есть сохранённая сессия (см. SESSION_KEY/
+    // loadSession), догружаем ПОЛНУЮ строку именно этого пользователя из
+    // настоящей таблицы users — иначе у собственного профиля пропали бы
+    // телефон, telegram_id и координаты (users_public их не содержит).
+    const savedSessionUserId = loadSession();
+    if (savedSessionUserId) {
+      try {
+        const selfRows = await getRows('users', `id=eq.${encodeURIComponent(savedSessionUserId)}&select=*`);
+        if (selfRows && selfRows[0]) {
+          const selfUser = dbUserToUser(selfRows[0], skillsByUser);
+          const i = cache.users.findIndex((u) => u.id === selfUser.id);
+          if (i >= 0) cache.users[i] = selfUser;
+          else cache.users.push(selfUser);
+        }
+      } catch (err) {
+        // Не критично для загрузки страницы — просто останется урезанная
+        // (users_public) версия собственного профиля до следующей попытки.
+        console.error('[dataStore] не удалось догрузить полный профиль текущего пользователя', err);
+      }
+    }
   } catch (err) {
     reportError('загрузка данных при старте', err);
     // не блокируем интерфейс — работаем с тем, что успели получить (может быть пусто)
@@ -2711,6 +2740,51 @@ function getNotificationsFor(userId) {
 }
 
 // ---------------------------------------------------------------------
+// Точечная подгрузка контакта конкретного пользователя (например, для
+// «Контакт заказчика» на карточке заказа мастеру, см. renderOrderDetail) —
+// bulk-кэш (см. initDb) теперь не содержит phone/telegram_id других людей
+// (только users_public), так что для показа чужого телефона нужен
+// отдельный целевой запрос к настоящей таблице users по конкретному id
+// (по аналогии с уже существующим available-orders/accept-order).
+// ---------------------------------------------------------------------
+const contactCache = {}; // userId -> { displayName, phone } | 'loading' | 'error'
+
+/**
+ * Синхронно возвращает то, что уже известно о контакте пользователя
+ * (или null, если запрос ещё не запускали) и в фоне запускает загрузку,
+ * если её ещё не было — по завершении вызывает render() ещё раз.
+ * @param {string} userId
+ * @returns {{displayName: string, phone: string} | 'loading' | 'error' | null}
+ */
+function ensureCustomerContact(userId) {
+  if (!userId) return null;
+  const existing = contactCache[userId];
+  if (existing) return existing;
+
+  if (!isSupabaseConfigured()) {
+    // Локальный режим без Supabase — контакт и так уже есть в общем кэше.
+    const u = cache.users.find((x) => x.id === userId);
+    contactCache[userId] = u ? { displayName: u.displayName, phone: u.phone } : 'error';
+    return contactCache[userId];
+  }
+
+  contactCache[userId] = 'loading';
+  getRows('users', `id=eq.${encodeURIComponent(userId)}&select=display_name,phone`)
+    .then((rows) => {
+      contactCache[userId] = rows && rows[0]
+        ? { displayName: rows[0].display_name || '', phone: rows[0].phone || '' }
+        : 'error';
+      render();
+    })
+    .catch((err) => {
+      reportError('загрузка контакта заказчика', err);
+      contactCache[userId] = 'error';
+      render();
+    });
+  return contactCache[userId];
+}
+
+// ---------------------------------------------------------------------
 // Запись: обновляем кэш сразу, в Supabase — в фоне
 // ---------------------------------------------------------------------
 
@@ -2740,6 +2814,45 @@ function saveUser(user) {
     updateRow('users', user.id, payload).catch((err) => reportError('сохранение пользователя', err));
   }
   return user;
+}
+
+/**
+ * Точечное обновление НЕСКОЛЬКИХ полей чужого пользователя (сейчас — только
+ * рейтинги, см. rateOrder/rateCustomer) — в отличие от saveUser() НЕ
+ * отправляет и не подставляет в кэш весь объект пользователя целиком.
+ *
+ * Это важно: после перехода bulk-кэша (см. initDb) на users_public у
+ * объекта чужого пользователя в cache.users нет phone/telegram_id/lat/lng —
+ * saveUser({ ...worker, rating: ... }) отправил бы это в PATCH users и
+ * затёр бы эти поля пустыми/нулевыми в реальной таблице. patchUserFields
+ * обновляет в БД и в кэше только переданные поля, не трогая остальные.
+ *
+ * @param {string} userId
+ * @param {Object} domainPatch — поля в доменной (camelCase) модели, те же
+ *   имена, что понимает userToDbUser (см. dbFieldMap ниже)
+ */
+const USER_DOMAIN_TO_DB_FIELD = {
+  rating: 'rating',
+  ratingCount: 'rating_count',
+  customerRating: 'customer_rating',
+  customerRatingCount: 'customer_rating_count',
+};
+function patchUserFields(userId, domainPatch) {
+  const user = cache.users.find((u) => u.id === userId);
+  if (user) Object.assign(user, domainPatch);
+
+  if (!isSupabaseConfigured()) {
+    if (user) local.saveUser(user);
+    return;
+  }
+
+  const dbPatch = {};
+  Object.keys(domainPatch).forEach((key) => {
+    const dbField = USER_DOMAIN_TO_DB_FIELD[key];
+    if (dbField) dbPatch[dbField] = domainPatch[key];
+  });
+  if (Object.keys(dbPatch).length === 0) return;
+  updateRow('users', userId, dbPatch).catch((err) => reportError('обновление рейтинга пользователя', err));
 }
 
 function addSkillForUser(userId, skill) {
@@ -4567,7 +4680,10 @@ function rateOrder(orderId, rating) {
     if (worker) {
       const newCount = worker.ratingCount + 1;
       const newRating = (worker.rating * worker.ratingCount + rating) / newCount;
-      saveUser({ ...worker, rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
+      // Точечно (см. patchUserFields) — worker в кэше теперь может быть
+      // урезанной users_public-версией чужого пользователя, и полный
+      // saveUser() затёр бы его phone/telegram_id/координаты.
+      patchUserFields(worker.id, { rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
     }
   }
   showToast('Спасибо за оценку!');
@@ -4587,7 +4703,10 @@ function rateCustomer(orderId, rating) {
   if (customer) {
     const newCount = (customer.customerRatingCount || 0) + 1;
     const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
-    saveUser({ ...customer, customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
+    // Точечно (см. patchUserFields) — customer в кэше теперь может быть
+    // урезанной users_public-версией чужого пользователя, и полный
+    // saveUser() затёр бы его phone/telegram_id/координаты.
+    patchUserFields(customer.id, { customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
   }
   showToast('Спасибо за оценку заказчика!');
   render();
@@ -6404,8 +6523,19 @@ function renderOrderDetail() {
           // уточнит по телефону сам — это не критично для отображения.
           isAssignedWorker
             ? (() => {
-                const customer = getUsers().find((u) => u.id === order.customerId);
-                return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(customer?.displayName || 'без имени')} · ${escapeHtml(displayPhone(customer?.phone) || 'телефон не указан')}</span></p>`;
+                // Полного профиля заказчика (с телефоном) в общем кэше теперь
+                // может не быть — bulk-загрузка отдаёт только users_public
+                // (см. initDb). Запрашиваем контакт отдельно и по требованию
+                // (см. ensureCustomerContact) — как только ответ придёт,
+                // ensureCustomerContact сам вызовет render().
+                const contact = ensureCustomerContact(order.customerId);
+                if (contact === 'loading' || contact === null) {
+                  return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
+                }
+                if (contact === 'error') {
+                  return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
+                }
+                return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
               })()
             : ''
         }
