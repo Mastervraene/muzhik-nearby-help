@@ -1841,10 +1841,21 @@ function getFilteredMapWorkers() {
   }
   return list;
 }
+// Заказы в этих статусах по умолчанию не показываем на карте — они не
+// требуют внимания (завершены/отменены) или уже разбираются отдельно
+// (проблема). Появляются на карте, только если явно включить нужный
+// статус кнопкой в модалке «Сортировка» (тогда список ниже переходит
+// на обычную логику «показывать только выбранные статусы»).
+const DEFAULT_HIDDEN_MAP_STATUSES = ['completed', 'cancelled', 'issue_reported'];
+
 function getFilteredMapOrders() {
   if (mapFilterAudience === 'workers') return [];
   let list = allOrders.filter((o) => o.exactLocation.lat && o.exactLocation.lng);
-  if (mapFilterStatuses.size) list = list.filter((o) => mapFilterStatuses.has(o.status));
+  if (mapFilterStatuses.size) {
+    list = list.filter((o) => mapFilterStatuses.has(o.status));
+  } else {
+    list = list.filter((o) => !DEFAULT_HIDDEN_MAP_STATUSES.includes(o.status));
+  }
   return list;
 }
 
