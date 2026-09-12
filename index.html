@@ -751,6 +751,83 @@ body {
   margin-bottom: 6px;
 }
 
+/* Кнопки справа от заголовка секции (кнопка «Обновить» + кнопка сортировки,
+   см. section-title-row-actions ниже) — раньше в этом месте была только
+   одна кнопка, поэтому обёртка не требовалась. */
+.section-title-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* Маленькая кнопка сортировки рядом с заголовком блока заказов (см.
+   renderOrdersSectionHeader/ordersSortSettings рядом с renderOrders) —
+   вместо полноэкранного попапа, как «Сортировка на карте» в админке,
+   здесь компактный попап на несколько маленьких кнопок-переключателей
+   (см. .sort-popover/.sort-pill ниже), открывающийся прямо под кнопкой. */
+.sort-btn-anchor {
+  position: relative;
+}
+.sort-btn {
+  flex: none;
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.sort-btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* Синим — когда хотя бы один пункт сортировки в этом блоке включён;
+   в остальное время кнопка нейтрального цвета панели (var(--gray-100), как
+   и все прочие маленькие кнопки рядом с заголовками). */
+.sort-btn.active {
+  background: var(--accent);
+  color: var(--gray-0);
+}
+.sort-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 168px;
+  background: var(--gray-0);
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.12);
+  padding: 10px;
+  z-index: 30;
+}
+.sort-popover-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sort-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-0);
+  color: var(--gray-700);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sort-pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--gray-0);
+}
+
 /* ---------- Chat dialog (уточнение деталей) ---------- */
 
 .chat-thread {
@@ -3386,6 +3463,12 @@ const STATUS_LABELS = {
   cancelled: 'Отменено',
   issue_reported: 'Есть проблема',
 };
+
+// Порядок статусов для сортировки списков заказов «по статусу» (см.
+// ordersSortSettings/sortOrdersForBlock рядом с renderOrders) — тот же
+// порядок стадий жизненного цикла, что и в STATUS_LABELS/admin.html.
+const STATUS_KEYS = Object.keys(STATUS_LABELS);
+const ORDER_STATUS_SORT_INDEX = Object.fromEntries(STATUS_KEYS.map((k, i) => [k, i]));
 
 const state = {
   screen: 'home',
@@ -6201,6 +6284,91 @@ function orderCardHtml(order, { viewer }) {
   `;
 }
 
+// ---------------------------------------------------------------------
+// Сортировка списков заказов на экране «Заказы» (см. renderOrders) —
+// маленькая кнопка рядом с заголовком каждого из трёх блоков («Мои
+// заказы», «Заказы, которые я выполняю», «Подходит вам рядом») открывает
+// компактный попап-переключатель под кнопкой (не на весь экран, в отличие
+// от «Сортировки на карте» в админке — см. renderMapSortModal в
+// admin.html, откуда взят сам приём с кнопками-переключателями).
+//
+// Единственный критерий сейчас — «По статусу»; ORDER_SORT_OPTIONS сделан
+// списком специально, чтобы позже добавить ещё критерии одной записью,
+// не трогая остальной код попапа.
+// ---------------------------------------------------------------------
+const ORDER_SORT_OPTIONS = [{ key: 'byStatus', label: 'По статусу' }];
+
+// Состояние сортировки по каждому из трёх блоков — независимо друг от
+// друга (переключатель в «Моих заказах» не должен включать сортировку в
+// «Заказы, которые я выполняю»).
+const ordersSortSettings = {
+  my: { byStatus: false },
+  assigned: { byStatus: false },
+  candidates: { byStatus: false },
+};
+
+// Какой из трёх попапов сейчас открыт ('my' | 'assigned' | 'candidates')
+// или null — как avatarMenuOpen, живёт вне state и закрывается кликом мимо,
+// клавишей Esc или любым другим действием (см. handleAction/wireEvents).
+let ordersSortPopoverOpen = null;
+
+function isOrderSortActive(blockKey) {
+  const settings = ordersSortSettings[blockKey];
+  return Boolean(settings) && Object.values(settings).some(Boolean);
+}
+
+function sortOrdersForBlock(list, blockKey) {
+  const settings = ordersSortSettings[blockKey];
+  if (!settings || !settings.byStatus) return list;
+  // Сортировка стабильна (Array#sort в современных движках), поэтому
+  // заказы с одинаковым статусом сохраняют исходный взаимный порядок.
+  return [...list].sort(
+    (a, b) => (ORDER_STATUS_SORT_INDEX[a.status] ?? 99) - (ORDER_STATUS_SORT_INDEX[b.status] ?? 99)
+  );
+}
+
+const ICON_SORT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6.5 7.5v5.5l-3 1.5v-7L4 5z"/></svg>';
+
+function renderOrdersSortPopover(blockKey) {
+  const settings = ordersSortSettings[blockKey];
+  return `
+    <div class="sort-popover">
+      <div class="sort-popover-pills">
+        ${ORDER_SORT_OPTIONS.map(
+          (opt) => `
+          <button type="button" class="sort-pill ${settings[opt.key] ? 'active' : ''}" data-action="toggle-order-sort" data-value="${blockKey}:${opt.key}">${escapeHtml(opt.label)}</button>
+        `
+        ).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Заголовок блока заказов с маленькой кнопкой сортировки (и, для «Подходит
+ * вам рядом», ещё и кнопкой «Обновить» — extraButtonHtml). Кнопка
+ * сортировки светится синим (см. .sort-btn.active), когда в этом блоке
+ * включён хотя бы один пункт сортировки, и остаётся нейтральной (цвет
+ * панели, var(--gray-100)), когда сортировка выключена.
+ */
+function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '' } = {}) {
+  const active = isOrderSortActive(blockKey);
+  const isOpen = ordersSortPopoverOpen === blockKey;
+  return `
+    <div class="section-title-row">
+      <div class="section-title">${escapeHtml(title)}</div>
+      <div class="section-title-row-actions">
+        ${extraButtonHtml}
+        <div class="sort-btn-anchor">
+          <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="toggle-order-sort-popover" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка">${ICON_SORT}</button>
+          ${isOpen ? renderOrdersSortPopover(blockKey) : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderOrders() {
   const user = currentUser();
   const myOrders = getOrders().filter((o) => o.customerId === state.currentUserId);
@@ -6230,31 +6398,35 @@ function renderOrders() {
   // ошибок сети там не бывает.
   const showsServerList = hasSkills && isSupabaseConfigured();
 
+  // Сортировка (см. ordersSortSettings рядом с renderOrdersSectionHeader) —
+  // применяется только к отображению, исходные массивы (myOrders/
+  // assignedToMe/candidateOrders) не меняются.
+  const myOrdersSorted = sortOrdersForBlock(myOrders, 'my');
+  const assignedSorted = sortOrdersForBlock(assignedToMe, 'assigned');
+  const candidatesSorted = sortOrdersForBlock(candidateOrders, 'candidates');
+
   return `
     <div class="screen">
-      <div class="section-title">Мои заказы</div>
-      ${myOrders.length ? myOrders.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('') : `<div class="empty-state">Вы ещё не публиковали заказы</div>`}
+      ${renderOrdersSectionHeader('Мои заказы', 'my')}
+      ${myOrdersSorted.length ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('') : `<div class="empty-state">Вы ещё не публиковали заказы</div>`}
 
-      <div class="section-title">Заказы, которые я выполняю</div>
-      ${assignedToMe.length ? assignedToMe.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('') : `<div class="empty-state">Пока нет назначенных вам заказов</div>`}
+      ${renderOrdersSectionHeader('Заказы, которые я выполняю', 'assigned')}
+      ${assignedSorted.length ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('') : `<div class="empty-state">Пока нет назначенных вам заказов</div>`}
 
-      ${
-        showsServerList
-          ? `<div class="section-title-row">
-               <div class="section-title">Подходит вам рядом</div>
-               <button class="section-refresh-btn" type="button" data-action="refresh-available-orders" ${
-                 cache.availableOrdersLoading ? 'disabled' : ''
-               }>${cache.availableOrdersLoading ? 'Обновляем…' : 'Обновить'}</button>
-             </div>`
-          : `<div class="section-title">Подходит вам рядом</div>`
-      }
+      ${renderOrdersSectionHeader('Подходит вам рядом', 'candidates', {
+        extraButtonHtml: showsServerList
+          ? `<button class="section-refresh-btn" type="button" data-action="refresh-available-orders" ${
+              cache.availableOrdersLoading ? 'disabled' : ''
+            }>${cache.availableOrdersLoading ? 'Обновляем…' : 'Обновить'}</button>`
+          : '',
+      })}
       ${
         !hasSkills
           ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
-          : showsServerList && cache.availableOrdersError && !candidateOrders.length
+          : showsServerList && cache.availableOrdersError && !candidatesSorted.length
           ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
-          : candidateOrders.length
-          ? candidateOrders.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
+          : candidatesSorted.length
+          ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
           : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`
       }
     </div>
@@ -7601,19 +7773,30 @@ function wireEvents() {
       avatarMenuOpen = false;
       render();
     }
+    if (e.key === 'Escape' && ordersSortPopoverOpen) {
+      ordersSortPopoverOpen = null;
+      render();
+    }
   };
 
-  // Клик мимо открытого попапа аккаунта закрывает его — сама кнопка-
-  // переключатель и пункты внутри попапа обрабатываются своими
-  // data-action-обработчиками ниже (и там же попап закрывается через
-  // handleAction), так что здесь достаточно проверить, что клик пришёлся
-  // не на них.
+  // Клик мимо открытого попапа аккаунта (или попапа сортировки заказов)
+  // закрывает его — сама кнопка-переключатель и пункты внутри попапа
+  // обрабатываются своими data-action-обработчиками ниже (и там же попап
+  // закрывается через handleAction), так что здесь достаточно проверить,
+  // что клик пришёлся не на них.
   document.body.onclick = (e) => {
-    if (!avatarMenuOpen) return;
-    if (e.target.closest('[data-action="toggle-avatar-menu"]')) return;
-    if (e.target.closest('#avatar-menu')) return;
-    avatarMenuOpen = false;
-    render();
+    if (avatarMenuOpen && !e.target.closest('[data-action="toggle-avatar-menu"]') && !e.target.closest('#avatar-menu')) {
+      avatarMenuOpen = false;
+      render();
+    }
+    if (
+      ordersSortPopoverOpen &&
+      !e.target.closest('[data-action="toggle-order-sort-popover"]') &&
+      !e.target.closest('.sort-popover')
+    ) {
+      ordersSortPopoverOpen = null;
+      render();
+    }
   };
   document.querySelectorAll('[data-action]').forEach((node) => {
     node.addEventListener('click', (e) => {
@@ -7770,11 +7953,32 @@ async function handleAction(action, value) {
   // пункту меню, клик по чему угодно ещё на экране) — сам toggle
   // управляет собой ниже отдельным case'ом.
   if (avatarMenuOpen && action !== 'toggle-avatar-menu') avatarMenuOpen = false;
+  // Попап сортировки заказов (см. renderOrdersSectionHeader) закрывается
+  // при любом действии, кроме собственных toggle'ов (открытие/закрытие
+  // попапа и клик по пункту сортировки внутри него) — иначе, например,
+  // переход на карточку заказа оставлял бы попап открытым на новом экране.
+  if (ordersSortPopoverOpen && !['toggle-order-sort-popover', 'toggle-order-sort'].includes(action)) {
+    ordersSortPopoverOpen = null;
+  }
 
   switch (action) {
     case 'toggle-avatar-menu':
       avatarMenuOpen = !avatarMenuOpen;
       return render();
+    case 'toggle-order-sort-popover':
+      ordersSortPopoverOpen = ordersSortPopoverOpen === value ? null : value;
+      return render();
+    case 'toggle-order-sort': {
+      const [blockKey, optionKey] = value.split(':');
+      if (ordersSortSettings[blockKey]) {
+        ordersSortSettings[blockKey][optionKey] = !ordersSortSettings[blockKey][optionKey];
+      }
+      // Попап намеренно остаётся открытым — как и «Сортировка на карте» в
+      // админке, где переключение одного пункта не закрывает панель, чтобы
+      // можно было включить сразу несколько (сейчас пункт один, но
+      // ORDER_SORT_OPTIONS рассчитан на добавление новых).
+      return render();
+    }
     case 'go-home':
       // Сброс черновика при уходе на главную — в т.ч. по кнопке «Отменить»
       // на экране проверки заявки (см. resetComposerDraft). Клик по логотипу
