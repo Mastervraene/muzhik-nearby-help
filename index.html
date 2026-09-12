@@ -761,14 +761,13 @@ body {
   flex: none;
 }
 
-/* Маленькая кнопка сортировки рядом с заголовком блока заказов (см.
-   renderOrdersSectionHeader/ordersSortSettings рядом с renderOrders) —
-   вместо полноэкранного попапа, как «Сортировка на карте» в админке,
-   здесь компактный попап на несколько маленьких кнопок-переключателей
-   (см. .sort-popover/.sort-pill ниже), открывающийся прямо под кнопкой. */
-.sort-btn-anchor {
-  position: relative;
-}
+/* Маленькая кнопка сортировки/фильтра рядом с заголовком блока заказов
+   (см. renderOrdersSectionHeader/ordersSortSettings рядом с renderOrders) —
+   открывает полноэкранную модалку renderOrdersSortModal, по образцу
+   «Сортировки на карте» в админке (admin.html, renderMapSortModal): там же
+   позаимствован приём с кнопками-переключателями (.sort-pill ниже). Фон
+   модалки — переиспользованный .map-picker-overlay, карточка —
+   .orders-sort-card чуть ниже. */
 .sort-btn {
   flex: none;
   border: none;
@@ -786,25 +785,71 @@ body {
   width: 14px;
   height: 14px;
 }
-/* Синим — когда хотя бы один пункт сортировки в этом блоке включён;
-   в остальное время кнопка нейтрального цвета панели (var(--gray-100), как
-   и все прочие маленькие кнопки рядом с заголовками). */
+/* Синим — когда в этом блоке включена сортировка и/или скрыты какие-то
+   статусы фильтром; в остальное время кнопка нейтрального цвета панели
+   (var(--gray-100), как и все прочие маленькие кнопки рядом с заголовками). */
 .sort-btn.active {
   background: var(--accent);
   color: var(--gray-0);
 }
-.sort-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  min-width: 168px;
+.orders-sort-card {
+  width: 100%;
+  max-width: 420px;
+  max-height: 86vh;
   background: var(--gray-0);
-  border-radius: 14px;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.12);
-  padding: 10px;
-  z-index: 30;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: onboarding-rise 0.2s ease-out;
 }
-.sort-popover-pills {
+.orders-sort-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+.orders-sort-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-900);
+  margin: 0;
+}
+.orders-sort-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.orders-sort-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.orders-sort-section + .orders-sort-section {
+  margin-top: 18px;
+}
+.orders-sort-section-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0 0 8px;
+}
+.orders-sort-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -826,6 +871,17 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--gray-0);
+}
+.orders-sort-actions {
+  display: flex;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+.orders-sort-actions button {
+  flex: 1;
+  margin-top: 0;
 }
 
 /* ---------- Chat dialog (уточнение деталей) ---------- */
@@ -3465,7 +3521,7 @@ const STATUS_LABELS = {
 };
 
 // Порядок статусов для сортировки списков заказов «по статусу» (см.
-// ordersSortSettings/sortOrdersForBlock рядом с renderOrders) — тот же
+// ordersSortSettings/applyOrdersBlockSettings рядом с renderOrders) — тот же
 // порядок стадий жизненного цикла, что и в STATUS_LABELS/admin.html.
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
 const ORDER_STATUS_SORT_INDEX = Object.fromEntries(STATUS_KEYS.map((k, i) => [k, i]));
@@ -6285,85 +6341,141 @@ function orderCardHtml(order, { viewer }) {
 }
 
 // ---------------------------------------------------------------------
-// Сортировка списков заказов на экране «Заказы» (см. renderOrders) —
-// маленькая кнопка рядом с заголовком каждого из трёх блоков («Мои
-// заказы», «Заказы, которые я выполняю», «Подходит вам рядом») открывает
-// компактный попап-переключатель под кнопкой (не на весь экран, в отличие
-// от «Сортировки на карте» в админке — см. renderMapSortModal в
-// admin.html, откуда взят сам приём с кнопками-переключателями).
+// Сортировка и фильтр статусов для списков заказов на экране «Заказы» (см.
+// renderOrders) — маленькая кнопка рядом с заголовком каждого из трёх
+// блоков («Мои заказы», «Заказы, которые я выполняю», «Подходит вам
+// рядом») открывает полноэкранную модалку renderOrdersSortModal, по
+// образцу «Сортировки на карте» в админке (admin.html,
+// renderMapSortModal) — полный список параметров, а не маленький попап:
+// можно и скрыть ненужные статусы из списка (чтобы не загромождали экран),
+// и включить сортировку по статусу.
 //
-// Единственный критерий сейчас — «По статусу»; ORDER_SORT_OPTIONS сделан
-// списком специально, чтобы позже добавить ещё критерии одной записью,
-// не трогая остальной код попапа.
+// Единственный критерий сортировки сейчас — «По статусу»; ORDER_SORT_OPTIONS
+// сделан списком специально, чтобы позже добавить ещё критерии одной
+// записью, не трогая остальной код модалки.
 // ---------------------------------------------------------------------
 const ORDER_SORT_OPTIONS = [{ key: 'byStatus', label: 'По статусу' }];
 
-// Состояние сортировки по каждому из трёх блоков — независимо друг от
-// друга (переключатель в «Моих заказах» не должен включать сортировку в
-// «Заказы, которые я выполняю»).
-const ordersSortSettings = {
-  my: { byStatus: false },
-  assigned: { byStatus: false },
-  candidates: { byStatus: false },
+const ORDERS_BLOCK_TITLES = {
+  my: 'Мои заказы',
+  assigned: 'Заказы, которые я выполняю',
+  candidates: 'Подходит вам рядом',
 };
 
-// Какой из трёх попапов сейчас открыт ('my' | 'assigned' | 'candidates')
-// или null — как avatarMenuOpen, живёт вне state и закрывается кликом мимо,
-// клавишей Esc или любым другим действием (см. handleAction/wireEvents).
-let ordersSortPopoverOpen = null;
-
-function isOrderSortActive(blockKey) {
-  const settings = ordersSortSettings[blockKey];
-  return Boolean(settings) && Object.values(settings).some(Boolean);
+// statuses — Set статусов, которые нужно ПОКАЗЫВАТЬ (пустой Set — как
+// «ничего не выбрано — любой» в админской «Сортировке на карте» — значит
+// показывать все статусы, фильтр не активен). byStatus — включена ли
+// сортировка по статусу.
+function makeOrdersBlockSettings() {
+  return { statuses: new Set(), byStatus: false };
 }
 
-function sortOrdersForBlock(list, blockKey) {
+// Настройки по каждому из трёх блоков — независимо друг от друга (фильтр
+// или сортировка в «Моих заказах» не должны затрагивать «Заказы, которые я
+// выполняю»).
+const ordersSortSettings = {
+  my: makeOrdersBlockSettings(),
+  assigned: makeOrdersBlockSettings(),
+  candidates: makeOrdersBlockSettings(),
+};
+
+// Какая из трёх модалок сейчас открыта ('my' | 'assigned' | 'candidates')
+// или null — как mapPickerOpenFor, окно на весь экран поверх текущего
+// экрана (см. renderOrdersSortModal), закрывается своей кнопкой ✕, кликом
+// по затемнению, клавишей Esc или кнопкой «Готово».
+let ordersSortModalOpenFor = null;
+
+// Кнопка светится синим, если в блоке скрыт хотя бы один статус фильтром
+// и/или включена сортировка — см. .sort-btn.active.
+function isOrderSortActive(blockKey) {
   const settings = ordersSortSettings[blockKey];
-  if (!settings || !settings.byStatus) return list;
-  // Сортировка стабильна (Array#sort в современных движках), поэтому
-  // заказы с одинаковым статусом сохраняют исходный взаимный порядок.
-  return [...list].sort(
-    (a, b) => (ORDER_STATUS_SORT_INDEX[a.status] ?? 99) - (ORDER_STATUS_SORT_INDEX[b.status] ?? 99)
-  );
+  return Boolean(settings) && (settings.statuses.size > 0 || settings.byStatus);
+}
+
+function applyOrdersBlockSettings(list, blockKey) {
+  const settings = ordersSortSettings[blockKey];
+  if (!settings) return list;
+  let result = list;
+  if (settings.statuses.size > 0) {
+    result = result.filter((o) => settings.statuses.has(o.status));
+  }
+  if (settings.byStatus) {
+    // Сортировка стабильна (Array#sort в современных движках), поэтому
+    // заказы с одинаковым статусом сохраняют исходный взаимный порядок.
+    result = [...result].sort(
+      (a, b) => (ORDER_STATUS_SORT_INDEX[a.status] ?? 99) - (ORDER_STATUS_SORT_INDEX[b.status] ?? 99)
+    );
+  }
+  return result;
 }
 
 const ICON_SORT =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6.5 7.5v5.5l-3 1.5v-7L4 5z"/></svg>';
 
-function renderOrdersSortPopover(blockKey) {
+/**
+ * Полноэкранная модалка сортировки/фильтра одного блока заказов — фон
+ * переиспользует .map-picker-overlay (как renderPasswordStepOverlay/
+ * renderEditNameOverlay), карточка — свой .orders-sort-card. Список
+ * статусов для фильтра — полный STATUS_KEYS, как в админской «Сортировке
+ * на карте» (renderMapSortModal), а не только те, что реально встречаются
+ * в этом блоке сейчас.
+ */
+function renderOrdersSortModal(blockKey) {
   const settings = ordersSortSettings[blockKey];
+  if (!settings) return '';
   return `
-    <div class="sort-popover">
-      <div class="sort-popover-pills">
-        ${ORDER_SORT_OPTIONS.map(
-          (opt) => `
-          <button type="button" class="sort-pill ${settings[opt.key] ? 'active' : ''}" data-action="toggle-order-sort" data-value="${blockKey}:${opt.key}">${escapeHtml(opt.label)}</button>
-        `
-        ).join('')}
+    <div class="map-picker-overlay" data-action="close-orders-sort">
+      <div class="orders-sort-card" onclick="event.stopPropagation()">
+        <div class="orders-sort-head">
+          <h2>Сортировка — ${escapeHtml(ORDERS_BLOCK_TITLES[blockKey] || '')}</h2>
+          <button type="button" class="orders-sort-close" data-action="close-orders-sort" aria-label="Закрыть">✕</button>
+        </div>
+        <div class="orders-sort-body">
+          <div class="orders-sort-section">
+            <p class="orders-sort-section-label">Показывать статусы (можно несколько; ничего не выбрано — все)</p>
+            <div class="orders-sort-pills">
+              ${STATUS_KEYS.map(
+                (key) => `
+                <button type="button" class="sort-pill ${settings.statuses.has(key) ? 'active' : ''}" data-action="toggle-order-status-filter" data-value="${blockKey}:${key}">${escapeHtml(STATUS_LABELS[key])}</button>
+              `
+              ).join('')}
+            </div>
+          </div>
+          <div class="orders-sort-section">
+            <p class="orders-sort-section-label">Сортировка</p>
+            <div class="orders-sort-pills">
+              ${ORDER_SORT_OPTIONS.map(
+                (opt) => `
+                <button type="button" class="sort-pill ${settings[opt.key] ? 'active' : ''}" data-action="toggle-order-sort" data-value="${blockKey}:${opt.key}">${escapeHtml(opt.label)}</button>
+              `
+              ).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="orders-sort-actions">
+          <button type="button" class="secondary-button" data-action="reset-order-sort" data-value="${blockKey}">Сбросить всё</button>
+          <button type="button" class="primary-button" data-action="close-orders-sort">Готово</button>
+        </div>
       </div>
     </div>
   `;
 }
 
 /**
- * Заголовок блока заказов с маленькой кнопкой сортировки (и, для «Подходит
- * вам рядом», ещё и кнопкой «Обновить» — extraButtonHtml). Кнопка
- * сортировки светится синим (см. .sort-btn.active), когда в этом блоке
- * включён хотя бы один пункт сортировки, и остаётся нейтральной (цвет
- * панели, var(--gray-100)), когда сортировка выключена.
+ * Заголовок блока заказов с маленькой кнопкой сортировки/фильтра (и, для
+ * «Подходит вам рядом», ещё и кнопкой «Обновить» — extraButtonHtml). Кнопка
+ * светится синим (см. .sort-btn.active), когда в этом блоке скрыт хотя бы
+ * один статус фильтром и/или включена сортировка, и остаётся нейтральной
+ * (цвет панели, var(--gray-100)), когда ни то ни другое не активно.
  */
 function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '' } = {}) {
   const active = isOrderSortActive(blockKey);
-  const isOpen = ordersSortPopoverOpen === blockKey;
   return `
     <div class="section-title-row">
       <div class="section-title">${escapeHtml(title)}</div>
       <div class="section-title-row-actions">
         ${extraButtonHtml}
-        <div class="sort-btn-anchor">
-          <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="toggle-order-sort-popover" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка">${ICON_SORT}</button>
-          ${isOpen ? renderOrdersSortPopover(blockKey) : ''}
-        </div>
+        <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="open-orders-sort" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка">${ICON_SORT}</button>
       </div>
     </div>
   `;
@@ -6398,20 +6510,39 @@ function renderOrders() {
   // ошибок сети там не бывает.
   const showsServerList = hasSkills && isSupabaseConfigured();
 
-  // Сортировка (см. ordersSortSettings рядом с renderOrdersSectionHeader) —
-  // применяется только к отображению, исходные массивы (myOrders/
-  // assignedToMe/candidateOrders) не меняются.
-  const myOrdersSorted = sortOrdersForBlock(myOrders, 'my');
-  const assignedSorted = sortOrdersForBlock(assignedToMe, 'assigned');
-  const candidatesSorted = sortOrdersForBlock(candidateOrders, 'candidates');
+  // Фильтр статусов и сортировка (см. ordersSortSettings рядом с
+  // renderOrdersSectionHeader) — применяются только к отображению, исходные
+  // массивы (myOrders/assignedToMe/candidateOrders) не меняются.
+  const myOrdersSorted = applyOrdersBlockSettings(myOrders, 'my');
+  const assignedSorted = applyOrdersBlockSettings(assignedToMe, 'assigned');
+  const candidatesSorted = applyOrdersBlockSettings(candidateOrders, 'candidates');
+
+  // Если фильтр статусов скрыл все карточки блока (а не «заказов правда
+  // нет») — отдельная подсказка со ссылкой на сброс, а не то же самое
+  // сообщение, что и для честно пустого блока.
+  const hiddenByFilterNote = (blockKey) => `
+    <div class="empty-state">Все заказы скрыты фильтром статусов. <button type="button" style="border:none;background:none;padding:0;font:inherit;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer;" data-action="reset-order-sort" data-value="${blockKey}">Сбросить фильтр</button></div>
+  `;
 
   return `
     <div class="screen">
       ${renderOrdersSectionHeader('Мои заказы', 'my')}
-      ${myOrdersSorted.length ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('') : `<div class="empty-state">Вы ещё не публиковали заказы</div>`}
+      ${
+        myOrdersSorted.length
+          ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
+          : myOrders.length
+          ? hiddenByFilterNote('my')
+          : `<div class="empty-state">Вы ещё не публиковали заказы</div>`
+      }
 
       ${renderOrdersSectionHeader('Заказы, которые я выполняю', 'assigned')}
-      ${assignedSorted.length ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('') : `<div class="empty-state">Пока нет назначенных вам заказов</div>`}
+      ${
+        assignedSorted.length
+          ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
+          : assignedToMe.length
+          ? hiddenByFilterNote('assigned')
+          : `<div class="empty-state">Пока нет назначенных вам заказов</div>`
+      }
 
       ${renderOrdersSectionHeader('Подходит вам рядом', 'candidates', {
         extraButtonHtml: showsServerList
@@ -6427,9 +6558,12 @@ function renderOrders() {
           ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
           : candidatesSorted.length
           ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
+          : candidateOrders.length
+          ? hiddenByFilterNote('candidates')
           : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`
       }
     </div>
+    ${ordersSortModalOpenFor ? renderOrdersSortModal(ordersSortModalOpenFor) : ''}
   `;
 }
 
@@ -7773,28 +7907,25 @@ function wireEvents() {
       avatarMenuOpen = false;
       render();
     }
-    if (e.key === 'Escape' && ordersSortPopoverOpen) {
-      ordersSortPopoverOpen = null;
+    // Модалка сортировки/фильтра заказов (см. renderOrdersSortModal) — окно
+    // на весь экран, как выбор точки на карте, а не маленький попап, поэтому
+    // и закрывается так же: Esc, клик по затемнению (data-action на самом
+    // .map-picker-overlay, обрабатывается ниже общим делегированием) или
+    // кнопкой ✕/«Готово».
+    if (e.key === 'Escape' && ordersSortModalOpenFor) {
+      ordersSortModalOpenFor = null;
       render();
     }
   };
 
-  // Клик мимо открытого попапа аккаунта (или попапа сортировки заказов)
-  // закрывает его — сама кнопка-переключатель и пункты внутри попапа
-  // обрабатываются своими data-action-обработчиками ниже (и там же попап
-  // закрывается через handleAction), так что здесь достаточно проверить,
-  // что клик пришёлся не на них.
+  // Клик мимо открытого попапа аккаунта закрывает его — сама
+  // кнопка-переключатель и пункты внутри попапа обрабатываются своими
+  // data-action-обработчиками ниже (и там же попап закрывается через
+  // handleAction), так что здесь достаточно проверить, что клик пришёлся не
+  // на них.
   document.body.onclick = (e) => {
     if (avatarMenuOpen && !e.target.closest('[data-action="toggle-avatar-menu"]') && !e.target.closest('#avatar-menu')) {
       avatarMenuOpen = false;
-      render();
-    }
-    if (
-      ordersSortPopoverOpen &&
-      !e.target.closest('[data-action="toggle-order-sort-popover"]') &&
-      !e.target.closest('.sort-popover')
-    ) {
-      ordersSortPopoverOpen = null;
       render();
     }
   };
@@ -7953,30 +8084,46 @@ async function handleAction(action, value) {
   // пункту меню, клик по чему угодно ещё на экране) — сам toggle
   // управляет собой ниже отдельным case'ом.
   if (avatarMenuOpen && action !== 'toggle-avatar-menu') avatarMenuOpen = false;
-  // Попап сортировки заказов (см. renderOrdersSectionHeader) закрывается
-  // при любом действии, кроме собственных toggle'ов (открытие/закрытие
-  // попапа и клик по пункту сортировки внутри него) — иначе, например,
-  // переход на карточку заказа оставлял бы попап открытым на новом экране.
-  if (ordersSortPopoverOpen && !['toggle-order-sort-popover', 'toggle-order-sort'].includes(action)) {
-    ordersSortPopoverOpen = null;
-  }
 
   switch (action) {
     case 'toggle-avatar-menu':
       avatarMenuOpen = !avatarMenuOpen;
       return render();
-    case 'toggle-order-sort-popover':
-      ordersSortPopoverOpen = ordersSortPopoverOpen === value ? null : value;
+    // Модалка сортировки/фильтра заказов (см. renderOrdersSortModal) — окно
+    // на весь экран, по образцу «Сортировки на карте» в админке. В отличие
+    // от прежнего маленького попапа НЕ закрывается автоматически при любом
+    // другом действии — только своими явными действиями (✕/«Готово»/Esc/
+    // клик по затемнению), как и остальные полноэкранные оверлеи
+    // (mapPickerOpenFor, editNameState).
+    case 'open-orders-sort':
+      ordersSortModalOpenFor = value;
       return render();
+    case 'close-orders-sort':
+      ordersSortModalOpenFor = null;
+      return render();
+    case 'toggle-order-status-filter': {
+      const [blockKey, statusKey] = value.split(':');
+      const settings = ordersSortSettings[blockKey];
+      if (settings) {
+        if (settings.statuses.has(statusKey)) settings.statuses.delete(statusKey);
+        else settings.statuses.add(statusKey);
+      }
+      // Модалка намеренно остаётся открытой — как и «Сортировка на карте» в
+      // админке, где переключение одного пункта не закрывает панель, чтобы
+      // можно было включить сразу несколько статусов подряд.
+      return render();
+    }
     case 'toggle-order-sort': {
       const [blockKey, optionKey] = value.split(':');
       if (ordersSortSettings[blockKey]) {
         ordersSortSettings[blockKey][optionKey] = !ordersSortSettings[blockKey][optionKey];
       }
-      // Попап намеренно остаётся открытым — как и «Сортировка на карте» в
-      // админке, где переключение одного пункта не закрывает панель, чтобы
-      // можно было включить сразу несколько (сейчас пункт один, но
-      // ORDER_SORT_OPTIONS рассчитан на добавление новых).
+      return render();
+    }
+    case 'reset-order-sort': {
+      if (ordersSortSettings[value]) {
+        ordersSortSettings[value] = makeOrdersBlockSettings();
+      }
       return render();
     }
     case 'go-home':
