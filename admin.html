@@ -132,7 +132,20 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   border-top: 1px dashed var(--gray-200);
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
+/* Блок вопроса администратора клиенту и (когда есть) ответа клиента —
+   виден в развёрнутой карточке заказа, пока идёт статус clarification_requested
+   или пока заказ снова на модерации после ответа (см. STATUS_LABELS). */
+.card-clarification-block {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.card-clarification-block p { margin: 4px 0; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
 .field-sm label { display: block; font-size: 11.5px; color: var(--gray-500); margin-bottom: 4px; }
@@ -559,6 +572,7 @@ function renderStars(level) {
 const STATUS_LABELS = {
   draft: 'Черновик',
   collecting_details: 'На проверке',
+  clarification_requested: 'Нужно уточнение',
   estimate_ready: 'Ожидает оплаты',
   paid: 'Оплачено',
   searching: 'Ищем мастера',
@@ -597,6 +611,11 @@ STATUS_FLOW_ORDER.forEach((key, i) => {
 });
 STATUS_COLORS.cancelled = { bg: '#f1f5f9', fg: '#64748b', dot: '#94a3b8' };
 STATUS_COLORS.issue_reported = { bg: '#fce7f3', fg: '#be185d', dot: '#ec4899' };
+// «Нужно уточнение» — не часть прогресса (боковая ветка из collecting_details,
+// пока не придёт ответ клиента), поэтому тоже вне радуги: янтарный — «ждём
+// действия», но не тревожный малиновый issue_reported (это не проблема, а
+// обычный рабочий момент модерации).
+STATUS_COLORS.clarification_requested = { bg: '#fef3c7', fg: '#92400e', dot: '#f59e0b' };
 
 function statusColor(status) {
   return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
@@ -750,6 +769,10 @@ function dbOrderToOrder(row) {
     warnings: row.warnings || [],
     searchRadiusKm: Number(row.search_radius_km ?? 3),
     createdAt: row.created_at,
+    // Вопрос администратора клиенту на модерации и (когда есть) ответ —
+    // { question, askedAt, answer, answeredAt } или null, если уточнений
+    // не было. См. requestClarification()/STATUS_LABELS.clarification_requested.
+    clarification: row.clarification || null,
     // Структурированное ТЗ для исполнителя, сформированное ассистентом при
     // создании заказа (см. requestFormattedBrief() в index.html). Может
     // быть null — ассистент не настроен, сбой запроса, или заказ создан
@@ -1047,6 +1070,13 @@ function wireOrderCards(list) {
         approveOrder(o);
       });
     }
+    const clarifyBtn = document.getElementById(`clarify-order-${o.id}`);
+    if (clarifyBtn) {
+      clarifyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        requestClarification(o);
+      });
+    }
   });
 }
 
@@ -1090,6 +1120,72 @@ async function approveOrder(o) {
   }
 }
 
+// Запрос уточнения у клиента прямо с модерации — для случаев, когда цену
+// нельзя посчитать без дополнительных данных (пример: навеска на стену —
+// цена зависит от материала стены, гипсокартон/гипсолит/бетон). Заказ
+// остаётся «в подвешенном» статусе clarification_requested (виден в списке
+// отдельным цветом — не потеряется среди обычных «На проверке»), пока
+// клиент не ответит на сайте (см. submitClarificationAnswer в index.html) —
+// после ответа заказ САМ возвращается в collecting_details, и админ снова
+// видит кнопку «✓ Одобрить», уже с ответом клиента в карточке.
+async function requestClarification(o) {
+  const questionRaw = prompt('Какой вопрос отправить клиенту?', o.clarification?.question || '');
+  if (questionRaw === null) return; // отменено
+  const question = questionRaw.trim();
+  if (!question) {
+    alert('Введите текст вопроса');
+    return;
+  }
+
+  const btn = document.getElementById(`clarify-order-${o.id}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Отправляем…';
+  }
+
+  try {
+    const timeline = [...(o.timeline || []), { status: 'clarification_requested', at: new Date().toISOString() }];
+    const clarification = { question, askedAt: new Date().toISOString(), answer: null, answeredAt: null };
+    await updateRow('orders', o.id, { status: 'clarification_requested', clarification, timeline });
+
+    // Уведомление клиенту в Telegram — best-effort: без него заказ всё
+    // равно ждёт ответа, просто клиент узнает об этом, только зайдя на
+    // сайт сам (см. sendAdminNotification выше — тот же принцип, что и
+    // уведомление о принудительном назначении мастера).
+    const customer = allUsers.find((u) => u.id === o.customerId);
+    if (customer && customer.telegramId) {
+      const orderLabel = o.title || o.description || 'Заказ';
+      const text = `По заказу «${orderLabel}» нужно уточнение:\n\n${question}\n\nОтветьте в разделе «Заказы» на сайте — после ответа мы продолжим оформление.`;
+      try {
+        const res = await sendAdminNotification([customer.telegramId], text);
+        if (res.configured && res.sent > 0) {
+          try {
+            await insertRow('telegram_messages', {
+              user_id: customer.id,
+              telegram_id: customer.telegramId,
+              direction: 'out',
+              text,
+            });
+          } catch (logErr) {
+            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn('Не удалось отправить уведомление об уточнении:', notifyErr);
+      }
+    }
+
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось отправить уточнение: ' + err.message);
+    const freshBtn = document.getElementById(`clarify-order-${o.id}`);
+    if (freshBtn) {
+      freshBtn.disabled = false;
+      freshBtn.textContent = '✏️ Уточнить';
+    }
+  }
+}
+
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
@@ -1108,8 +1204,21 @@ function orderCardHtml(o) {
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
       ${
+        o.clarification
+          ? `<div class="card-clarification-block">
+               <p><b>Вопрос клиенту:</b> ${escapeHtml(o.clarification.question || '')}</p>
+               ${
+                 o.clarification.answer
+                   ? `<p><b>Ответ клиента:</b> ${escapeHtml(o.clarification.answer)}</p>`
+                   : `<p><i>Ждём ответ клиента…</i></p>`
+               }
+             </div>`
+          : ''
+      }
+      ${
         o.status === 'collecting_details'
           ? `<div class="card-moderation-bar">
+               <button type="button" class="btn-sm ghost" id="clarify-order-${o.id}">✏️ Уточнить</button>
                <button type="button" class="btn-sm primary" id="approve-order-${o.id}">✓ Одобрить</button>
              </div>`
           : ''

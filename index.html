@@ -1542,6 +1542,14 @@ const ALLOWED_TRANSITIONS = {
   // одобряют (→ estimate_ready — см. admin.html approveOrder), либо он
   // остаётся здесь/отменяется.
   collecting_details: ['estimate_ready', 'draft', 'cancelled'],
+  // clarification_requested — админ поставил заказ на паузу вопросом
+  // клиенту прямо на модерации (см. admin.html requestClarification), когда
+  // без ответа нельзя посчитать цену (пример: навеска на стену — цена
+  // зависит от материала). В этот статус заказ переводит ТОЛЬКО админ
+  // напрямую в базе (минуя эту машину состояний, как и approveOrder), а
+  // обратно в collecting_details его возвращает уже клиент — отправив ответ
+  // (см. submitClarificationAnswer).
+  clarification_requested: ['collecting_details', 'cancelled'],
   // estimate_ready теперь означает «ожидает оплаты»: цена уже выставлена
   // модератором, и заказчик видит экран оплаты-имитации (кнопки
   // «Оплатить»/«Отказаться», см. payOrder/declineOrder) — реального
@@ -2489,6 +2497,10 @@ function dbOrderToOrder(row) {
     // Может быть null: ассистент не настроен, запрос не удался, или заказ
     // создан до появления этой функции.
     formattedBrief: row.formatted_brief || null,
+    // Вопрос администратора клиенту на модерации и (когда есть) ответ —
+    // { question, askedAt, answer, answeredAt } или null. См. STATUS_LABELS
+    // .clarification_requested и submitClarificationAnswer().
+    clarification: row.clarification || null,
   };
 }
 
@@ -2529,6 +2541,7 @@ function orderToDbOrder(order) {
     customer_rating: order.customerRating ?? null,
     customer_rated_at: order.customerRatedAt || null,
     formatted_brief: order.formattedBrief || null,
+    clarification: order.clarification || null,
   };
 }
 
@@ -3185,6 +3198,7 @@ function renderStars(level) {
 const STATUS_LABELS = {
   draft: 'Черновик',
   collecting_details: 'На проверке',
+  clarification_requested: 'Нужно уточнение',
   estimate_ready: 'Ожидает оплаты',
   paid: 'Оплачено',
   searching: 'Ищем мастера',
@@ -4341,6 +4355,25 @@ async function notifyNearbyWorkers(orderId) {
   } catch (err) {
     console.warn('[payOrder] не удалось уведомить мастеров рядом:', err);
   }
+}
+
+// Ответ на уточнение администратора (см. admin.html requestClarification) —
+// возвращает заказ на модерацию (collecting_details), где админ уже видит
+// вопрос и этот ответ рядом и может одобрить заказ с ценой.
+function submitClarificationAnswer(orderId) {
+  const textarea = document.getElementById(`clarification-answer-${orderId}`);
+  const answer = textarea ? textarea.value.trim() : '';
+  if (!answer) {
+    showToast('Введите ответ перед отправкой');
+    return;
+  }
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.status !== 'clarification_requested') return;
+  order.clarification = { ...(order.clarification || {}), answer, answeredAt: new Date().toISOString() };
+  order = transition(order, 'collecting_details');
+  saveOrder(order);
+  showToast('Ответ отправлен — заказ снова на проверке у администратора');
+  render();
 }
 
 function reportIssue(orderId) {
@@ -6105,7 +6138,18 @@ function renderOrderDetail() {
       `;
     }
   } else if (isCustomer) {
-    if (order.status === 'estimate_ready') {
+    if (order.status === 'clarification_requested') {
+      // Администратору не хватило данных для расчёта цены (см. admin.html
+      // requestClarification) — заказ на паузе до ответа. Ответ возвращает
+      // заказ на модерацию (submitClarificationAnswer), без выбора «принять
+      // /отклонить»: это не решение по заказу, а просто недостающая деталь.
+      actions = `
+        <p class="order-meta"><b>Администратору нужно уточнение:</b></p>
+        <p>${escapeHtml(order.clarification?.question || '')}</p>
+        <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2"></textarea>
+        <button class="primary-button" data-action="submit-clarification" data-value="${order.id}">Отправить ответ</button>
+      `;
+    } else if (order.status === 'estimate_ready') {
       // Оплата — имитация платёжного шлюза: сумма и две кнопки, без
       // ввода карты и реального списания (см. payOrder/paymentAdapter).
       const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
@@ -7496,6 +7540,8 @@ async function handleAction(action, value) {
 
     case 'accept-order':
       return acceptOrder(value);
+    case 'submit-clarification':
+      return submitClarificationAnswer(value);
     case 'pay-order':
       return payOrder(value);
     case 'decline-order':
