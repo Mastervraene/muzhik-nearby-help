@@ -712,6 +712,42 @@ body {
   margin: 22px 0 10px;
 }
 
+/* Заголовок секции с кнопкой ручного обновления рядом (см. «Подходит вам
+   рядом» на экране «Заказы») — сам .section-title остаётся как есть везде,
+   где кнопка не нужна. */
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 22px 0 10px;
+}
+.section-title-row .section-title {
+  margin: 0;
+}
+.section-refresh-btn {
+  flex: none;
+  border: none;
+  background: var(--gray-100);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+.section-refresh-btn:disabled {
+  color: var(--gray-400);
+}
+.available-orders-error {
+  background: #fff7ed;
+  color: #9a5b13;
+  border: 1px solid #fed7aa;
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  font-size: 13.5px;
+  margin-bottom: 6px;
+}
+
 /* ---------- Chat dialog (уточнение деталей) ---------- */
 
 .chat-thread {
@@ -2308,6 +2344,15 @@ const cache = {
   // список без точных координат чужих заказов. См. ADR про available-orders
   // и accept-order рядом с acceptOrder().
   availableOrders: [],
+  // Статус последнего запроса к available-orders — раньше сетевая/серверная
+  // ошибка тихо оседала в console.error, а пользователь видел ровно тот же
+  // текст «нет подходящих заказов», что и при честном нулевом результате:
+  // разницу между «сервер сказал — рядом пусто» и «запрос не доехал» было
+  // невозможно отличить, не залезая в консоль браузера. Теперь renderOrders
+  // показывает отдельное сообщение и кнопку «Обновить», когда последняя
+  // попытка завершилась ошибкой, см. refreshAvailableOrders.
+  availableOrdersLoading: false,
+  availableOrdersError: false,
 };
 
 let onSyncError = () => {};
@@ -4160,14 +4205,25 @@ async function refreshAvailableOrders(isRetry) {
   const user = currentUser();
   if (!isSupabaseConfigured() || !user || !user.availableAsWorker || !user.skills.length) {
     cache.availableOrders = [];
+    cache.availableOrdersError = false;
+    cache.availableOrdersLoading = false;
     return;
+  }
+  if (!isRetry) {
+    cache.availableOrdersLoading = true;
+    if (state.screen === 'orders') render();
   }
   let token = loadSessionToken();
   if (!token) {
     token = await issueSessionToken(user.id);
   }
   if (!token) {
-    cache.availableOrders = [];
+    // Пустой список тут не значит «заказов рядом нет» — значит не удалось
+    // даже получить токен сессии, поэтому не трогаем cache.availableOrders
+    // (пусть останется прошлый успешный результат) и явно помечаем ошибку,
+    // см. комментарий у объявления availableOrdersError.
+    cache.availableOrdersError = true;
+    cache.availableOrdersLoading = false;
     if (state.screen === 'orders') render();
     return;
   }
@@ -4210,9 +4266,20 @@ async function refreshAvailableOrders(isRetry) {
       createdAt: o.createdAt,
       distanceKm: o.distanceKm,
     }));
+    cache.availableOrdersError = false;
   } catch (err) {
     console.error('[available-orders] не удалось обновить список', err);
+    // Раньше на этом и заканчивалось — cache.availableOrders оставался
+    // пустым (или прошлым значением), а «Подходит вам рядом» показывал
+    // ТОЧНО ТУ ЖЕ пустую заглушку, что и при честном «заказов рядом нет».
+    // Из интерфейса нельзя было отличить сбой сети/сервера от настоящего
+    // нуля — человек решал, что заказов действительно нет, и жаловался,
+    // что «заказы рядом есть, а он их не видит» (см. историю переписки).
+    // Явный флаг ошибки ниже подменяет текст на «не удалось загрузить» и
+    // показывает кнопку «Обновить» вместо молчаливой заглушки.
+    cache.availableOrdersError = true;
   }
+  cache.availableOrdersLoading = false;
   if (state.screen === 'orders') render();
 }
 
@@ -5814,6 +5881,11 @@ function renderOrders() {
   const assignedToMe = getOrders().filter(
     (o) => o.assignedWorkerId === state.currentUserId && !['rated', 'cancelled'].includes(o.status)
   );
+  // Кнопка «Обновить» и разделение «ошибка / честный ноль» имеют смысл
+  // только пока список реально считает сервер (см. refreshAvailableOrders) —
+  // в демо-режиме без Supabase candidateOrders считается синхронно тут же,
+  // ошибок сети там не бывает.
+  const showsServerList = hasSkills && isSupabaseConfigured();
 
   return `
     <div class="screen">
@@ -5823,10 +5895,21 @@ function renderOrders() {
       <div class="section-title">Заказы, которые я выполняю</div>
       ${assignedToMe.length ? assignedToMe.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('') : `<div class="empty-state">Пока нет назначенных вам заказов</div>`}
 
-      <div class="section-title">Подходит вам рядом</div>
+      ${
+        showsServerList
+          ? `<div class="section-title-row">
+               <div class="section-title">Подходит вам рядом</div>
+               <button class="section-refresh-btn" type="button" data-action="refresh-available-orders" ${
+                 cache.availableOrdersLoading ? 'disabled' : ''
+               }>${cache.availableOrdersLoading ? 'Обновляем…' : 'Обновить'}</button>
+             </div>`
+          : `<div class="section-title">Подходит вам рядом</div>`
+      }
       ${
         !hasSkills
           ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
+          : showsServerList && cache.availableOrdersError && !candidateOrders.length
+          ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
           : candidateOrders.length
           ? candidateOrders.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
           : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`
@@ -7269,6 +7352,16 @@ async function handleAction(action, value) {
       return toggleVoiceRecording();
     case 'capture-composer-geo':
       return captureComposerAddressGeo();
+
+    // Ручное обновление «Подходит вам рядом» — раньше единственным способом
+    // перезапросить список было уйти с экрана «Заказы» и вернуться (или
+    // ждать автополлинг/сворачивание вкладки, см. startAvailableOrdersPolling).
+    // Кнопка рядом с заголовком снимает зависимость от таймингов полностью:
+    // человек всегда может прямо сейчас перепроверить, не «застрял» ли
+    // список пустым из-за сетевой ошибки (см. cache.availableOrdersError).
+    case 'refresh-available-orders':
+      if (cache.availableOrdersLoading) return;
+      return refreshAvailableOrders();
 
     case 'request-telegram-code': {
       const limit = getTelegramLinkLimitState();
