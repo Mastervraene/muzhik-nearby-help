@@ -92,6 +92,9 @@
   --accent-strong: #1d4ed8;
   --accent-soft: #eff6ff;
   --accent-muted: #a8c8fb;
+  /* Бейджи непрочитанных уведомлений (шапка + попап аккаунта) — намеренно
+     красный, не в тон общей палитре: должны привлекать внимание. */
+  --notify-badge: #e02424;
   --radius: 20px;
   --radius-sm: 14px;
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
@@ -217,7 +220,7 @@ body {
   position: absolute;
   top: -2px;
   right: -2px;
-  background: var(--gray-800);
+  background: var(--notify-badge);
   color: var(--gray-0);
   font-size: 10px;
   min-width: 16px;
@@ -300,7 +303,7 @@ body {
 }
 
 .avatar-menu-item-badge {
-  background: var(--gray-800);
+  background: var(--notify-badge);
   color: var(--gray-0);
   font-size: 10px;
   min-width: 16px;
@@ -1118,6 +1121,47 @@ body {
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+/* ---------- Значок «карандаш» поверх аватарки и рядом с именем (профиль) ---------- */
+.profile-avatar-edit-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--gray-0, #fff);
+  flex-shrink: 0;
+}
+
+.profile-avatar-edit-badge svg {
+  width: 11px;
+  height: 11px;
+}
+
+.icon-edit-btn {
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.icon-edit-btn svg {
+  width: 13px;
+  height: 13px;
 }
 
 .empty-state {
@@ -3666,6 +3710,44 @@ async function submitPasswordStep(passwordValue, confirmValue) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Изменение имени в профиле — по клику на карандаш рядом с именем или
+// на самой аватарке (см. renderProfile). Тот же паттерн всплывающего
+// окна, что и renderPasswordStepOverlay выше — общий .map-picker-overlay
+// (затемнение фона + карточка по центру), но не обязательный — клик по
+// фону или «Отмена» просто закрывает без сохранения.
+// ---------------------------------------------------------------------
+let editNameState = null;
+
+function openEditName() {
+  const user = currentUser();
+  if (!user) return;
+  editNameState = { value: user.displayName || '', error: '' };
+  render();
+}
+
+function cancelEditName() {
+  editNameState = null;
+  render();
+}
+
+function submitEditName(value) {
+  if (!editNameState) return;
+  const trimmed = (value || '').trim();
+  if (!trimmed) {
+    editNameState.error = 'Введите имя';
+    render();
+    document.getElementById('edit-name-input')?.focus();
+    return;
+  }
+  const user = currentUser();
+  if (user && user.displayName !== trimmed) {
+    saveUser({ ...user, displayName: trimmed });
+  }
+  editNameState = null;
+  render();
+}
+
 /**
  * Запускает подтверждение номера звонком для уже найденного/созданного
  * пользователя. Если функция на сервере не настроена, номер уже
@@ -4671,10 +4753,13 @@ async function saveProfileDistrict() {
 async function changeProfileAvatar(file) {
   const user = currentUser();
   if (!user) return;
-  const btn = document.getElementById('profile-avatar-btn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Загружаем…';
+  // Кнопки с текстом больше нет (см. renderProfile — теперь клик по самой
+  // аватарке), поэтому индикация загрузки — прямо на ней: гасим и
+  // блокируем клик, пока идёт загрузка.
+  const avatarEl = document.querySelector('.profile-avatar');
+  if (avatarEl) {
+    avatarEl.style.opacity = '0.5';
+    avatarEl.style.pointerEvents = 'none';
   }
   try {
     const compact = await compressImageFile(file, { maxBytes: 400_000, maxDim: 800 });
@@ -4683,9 +4768,9 @@ async function changeProfileAvatar(file) {
     render();
   } catch (err) {
     reportError('загрузка фото профиля', err);
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = user.avatarUrl ? 'Изменить фото' : 'Добавить фото';
+    if (avatarEl) {
+      avatarEl.style.opacity = '';
+      avatarEl.style.pointerEvents = '';
     }
   }
 }
@@ -5221,6 +5306,28 @@ function renderPasswordStepOverlay(st) {
 }
 
 /**
+ * Изменение имени в профиле — по клику на карандаш рядом с именем или
+ * на самой аватарке (см. renderProfile, editNameState). В отличие от
+ * renderPasswordStepOverlay это необязательный шаг — клик по затемнению
+ * фона (data-action на самом .map-picker-overlay) закрывает без
+ * сохранения, как у renderMapPickerOverlay.
+ */
+function renderEditNameOverlay(st) {
+  return `
+    <div class="map-picker-overlay" data-action="edit-name-cancel">
+      <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
+        <p><b>Изменить имя</b></p>
+        ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
+        <label>Имя</label>
+        <input type="text" id="edit-name-input" autocomplete="name" value="${escapeHtml(st.value)}" />
+        <button class="primary-button" id="edit-name-submit" style="margin-top:14px;">Сохранить</button>
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="edit-name-cancel">Отмена</button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Подключает выпадающий список подсказок адреса к текстовому полю: с
  * задержкой (дебаунс) ищет реальные адреса по мере ввода (Геосаджест) и по
  * клику на вариант подставляет его текст, а следом — координаты (их
@@ -5648,6 +5755,11 @@ const ICON_ARROW_UP =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_PIN =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-7.58 7-12.5A7 7 0 0 0 5 9.5C5 14.42 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.3"/></svg>';
+// Карандаш — кнопка «изменить имя» рядом с именем в профиле и значок
+// поверх аватарки (см. renderProfile): один и тот же глиф в двух местах,
+// чтобы «нажми, чтобы изменить» читалось однозначно в обоих случаях.
+const ICON_PENCIL =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7 21l-4 1 1-4L17 3z"/></svg>';
 
 // Открыт ли попап аккаунта (клик по аватарке в шапке) — живёт вне state,
 // как mapPickerOpenFor/passwordStepState, чтобы не тянуть его в остальную
@@ -5759,8 +5871,15 @@ function renderTopbar() {
   `;
   }
   const unread = getUnreadNotificationsCount(user.id);
+  // min-width/min-height обязательны: внутри flex-кнопки (.icon-button)
+  // картинка с процентными width/height и собственным intrinsic
+  // aspect-ratio считается браузером не как 38×38, а по своим пропорциям
+  // (реальный баг: аватарка в шапке была сплющена по горизонтали, а
+  // бейдж уведомлений — не строго поверх неё). Без min-width/min-height
+  // на replaced-элементе внутри flex это «плавающее» поведение — сам
+  // width:100%/height:100% его не фиксирует.
   const avatarInner = user.avatarUrl
-    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`
+    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;min-width:38px;min-height:38px;object-fit:cover;border-radius:50%;" />`
     : '👤';
   return `
     <header class="topbar">
@@ -6363,16 +6482,19 @@ function renderProfile() {
       <div class="section-title">Профиль</div>
       <div class="field-card">
         <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
-          <div class="profile-avatar" style="width:64px;height:64px;border-radius:50%;overflow:hidden;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-            ${
-              user.avatarUrl
-                ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />`
-                : `<span style="font-size:26px;">👤</span>`
-            }
+          <div class="profile-avatar" style="width:64px;height:64px;border-radius:50%;overflow:visible;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;cursor:pointer;" data-action="pick-avatar" role="button" aria-label="${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}" title="${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}">
+            <div style="width:100%;height:100%;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+              ${
+                user.avatarUrl
+                  ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;min-width:64px;min-height:64px;object-fit:cover;" />`
+                  : `<span style="font-size:26px;">👤</span>`
+              }
+            </div>
+            <span class="profile-avatar-edit-badge" aria-hidden="true">${ICON_PENCIL}</span>
           </div>
+          <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
           <div>
-            <button type="button" class="secondary-button" id="profile-avatar-btn" data-action="pick-avatar" style="margin-top:0;">${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}</button>
-            <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
+            <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
             ${
               user.availableAsWorker && !user.avatarUrl
                 ? `<p class="order-meta" style="margin-top:6px;">Мастерам скоро понадобится фото, чтобы брать заказы, — добавьте заранее.</p>`
@@ -6380,7 +6502,6 @@ function renderProfile() {
             }
           </div>
         </div>
-        <p><b>${escapeHtml(user.displayName)}</b></p>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
         <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
         ${
@@ -6644,6 +6765,7 @@ function render() {
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
+    ${editNameState ? renderEditNameOverlay(editNameState) : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -7283,6 +7405,21 @@ function wireEvents() {
     passwordStepInput.focus();
   }
 
+  const editNameInput = document.getElementById('edit-name-input');
+  if (editNameInput) {
+    const editNameSubmit = document.getElementById('edit-name-submit');
+    const submit = () => submitEditName(editNameInput.value);
+    if (editNameSubmit) editNameSubmit.addEventListener('click', submit);
+    editNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    editNameInput.focus();
+    // Курсор в конец, а не выделение всего текста — иначе первое нажатие
+    // случайной клавиши стирало бы существующее имя целиком.
+    const len = editNameInput.value.length;
+    editNameInput.setSelectionRange(len, len);
+  }
+
   const composeName = document.getElementById('compose-name');
   if (composeName) {
     composeName.addEventListener('input', () => {
@@ -7564,6 +7701,11 @@ async function handleAction(action, value) {
 
     case 'password-step-cancel':
       return cancelPasswordStep();
+
+    case 'edit-name':
+      return openEditName();
+    case 'edit-name-cancel':
+      return cancelEditName();
 
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
