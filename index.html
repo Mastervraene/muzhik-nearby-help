@@ -3566,11 +3566,11 @@ const state = {
   booting: true,
   bootError: null,
   specialistMode: false, // показать доп. кнопки специалиста над формой заявки
-  // Какое из двух всплывающих окон открыто: null — ни одно; 'short' —
-  // краткая карточка «Локация — самое важное» (авто при старте без
-  // входа); 'long' — подробное «Как это работает» (по кнопке «?»).
-  // (см. ONBOARDING_DISMISSED_KEY ниже — при повторном визите после закрытия
-  // карточки на старте её больше не показываем)
+  // Какое из всплывающих окон открыто: null — ни одно; 'short' — краткая
+  // карточка «Локация — самое важное» (авто при КАЖДОМ старте без входа,
+  // не запоминается между визитами — так и задумано); 'long' — подробное
+  // «Как это работает» (по кнопке «?»); 'payment_success' — баннер после
+  // успешной оплаты (см. boot()).
   infoOverlay: null,
   // Навыки на экране профиля — теперь просто кнопки-переключатели (см.
   // renderProfile → «Мои навыки»): клик по навыку открывает звёздный
@@ -3591,24 +3591,6 @@ function showToast(text) {
     state.toast = null;
     render();
   }, 2200);
-}
-
-// Ключ localStorage, которым запоминаем, что человек уже закрыл краткую
-// карточку-подсказку «Локация — самое важное» (см. renderOnboardingOverlay,
-// infoOverlay: 'short') — иначе она всплывала заново при каждой перезагрузке
-// страницы, даже если её только что закрыли (QA-отчёт от 12.09).
-const ONBOARDING_DISMISSED_KEY = 'muzhik_onboarding_dismissed';
-function wasOnboardingDismissed() {
-  try {
-    return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
-  } catch (err) {
-    return false; // приватный режим браузера и т.п. — просто показываем карточку как раньше
-  }
-}
-function markOnboardingDismissed() {
-  try {
-    localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
-  } catch (err) { /* не критично — просто не запомнится между визитами */ }
 }
 
 function go(screen, extra = {}) {
@@ -7299,7 +7281,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : ''}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     `;
     wireEvents();
@@ -7327,7 +7309,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
@@ -7529,6 +7511,26 @@ function renderRadiusNoticeOverlay() {
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Ищем чуть дальше</h2>
           <p>Похоже, в вашем районе сильная нехватка настоящих мужчин. Мы расширили радиус поиска и обязательно кого-нибудь найдём.</p>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Показывается при возврате на сайт сразу после успешной оплаты (T-Bank
+// SuccessURL с ?paid_order=<id>, см. boot() — параметр там же вычищается
+// из адресной строки через history.replaceState). Уведомление в Telegram
+// об этом же событии уходит отдельно, из payment-notification.
+function renderPaymentSuccessOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Оплата прошла успешно</h2>
+          <p>Начинаем поиск мастера рядом с вами. Как только заявку возьмут в работу, статус заказа появится в разделе «Заказы».</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
@@ -8344,7 +8346,6 @@ async function handleAction(action, value) {
       composerExpandedField = null;
       return render();
     case 'dismiss-onboarding':
-      if (state.infoOverlay === 'short') markOnboardingDismissed();
       state.infoOverlay = null;
       return render();
     case 'show-help':
@@ -8559,11 +8560,29 @@ async function boot() {
   state.screen = 'home';
 
   // Краткая карточка-подсказка сама всплывает при старте, пока человек не
-  // авторизован (телефон/Telegram не привязаны). Подробное объяснение
-  // работы сайта в любой момент открывается кнопкой «?» в шапке. Картинка
-  // в этой карточке — реальная карта зоны покрытия мастеров (см.
-  // renderOnboardingOverlay).
-  state.infoOverlay = currentUser() || wasOnboardingDismissed() ? null : 'short';
+  // авторизован (телефон/Telegram не привязаны). Показывается при КАЖДОМ
+  // обновлении страницы для неавторизованных — статус dismissed НЕ
+  // запоминается навсегда (раньше здесь была ошибка: wasOnboardingDismissed()
+  // подавляла баннер после первого закрытия для всех будущих визитов).
+  // Подробное объяснение работы сайта в любой момент открывается кнопкой
+  // «?» в шапке. Картинка в этой карточке — реальная карта зоны покрытия
+  // мастеров (см. renderOnboardingOverlay).
+  state.infoOverlay = currentUser() ? null : 'short';
+
+  // Возврат с успешной оплаты (T-Bank SuccessURL с ?paid_order=<id>, см.
+  // create-payment.ts) — показываем баннер поверх всего остального и
+  // сразу вычищаем параметр из адресной строки, чтобы он не всплывал
+  // повторно при обновлении страницы.
+  try {
+    const paidOrderId = new URLSearchParams(location.search).get('paid_order');
+    if (paidOrderId) {
+      state.infoOverlay = 'payment_success';
+      const cleanUrl = location.pathname + location.hash;
+      history.replaceState(null, '', cleanUrl);
+    }
+  } catch (err) {
+    console.error('[boot] не удалось обработать paid_order', err);
+  }
 
   state.booting = false;
   console.info(assistantDemoNotice());
