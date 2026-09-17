@@ -1102,11 +1102,12 @@ function wireOrderCards(list) {
 // теперь означает «Ожидает оплаты», а не мгновенный проходной пункт, как
 // раньше. Финальная цена проставляется здесь вручную (later —
 // автоматизируем). Мастеров рядом мы здесь НЕ уведомляем и в searching
-// заказ не переводим — заказчик должен сначала «оплатить» на своей
-// стороне (кнопка «Оплатить» в index.html → payOrder(), имитация без
-// ввода карты); именно оттуда заказ переходит в paid → searching и летит
-// notify-nearby-workers. Так мы не тратим уведомление на заказ, который
-// клиент в итоге не оплатит/отклонит.
+// заказ не переводим — заказчик должен сначала оплатить на своей стороне
+// (кнопка «Оплатить» в index.html → payOrder(), реальный эквайринг
+// Т-Банка в проде); в paid → searching заказ переводит сервер, когда банк
+// подтвердит платёж (см. supabase/functions/payment-notification). Так мы
+// не тратим уведомление о поиске мастера на заказ, который клиент в итоге
+// не оплатит/отклонит.
 async function approveOrder(o) {
   const suggested = o.finalPrice ?? o.estimate?.min ?? '';
   const priceRaw = prompt('Финальная цена заказа для клиента (₽):', suggested === '' ? '' : String(suggested));
@@ -1126,6 +1127,27 @@ async function approveOrder(o) {
   try {
     const timeline = [...(o.timeline || []), { status: 'estimate_ready', at: new Date().toISOString() }];
     await updateRow('orders', o.id, { status: 'estimate_ready', final_price: finalPrice, timeline });
+
+    // Уведомление клиенту о необходимости оплатить — раньше после
+    // модерации клиент узнавал об этом, только зайдя на сайт сам (по
+    // замечанию Sg от 17.09.2026). Пишем строку в notifications — тот же
+    // путь, что и все клиентские уведомления из index.html
+    // (pushNotification/createNotification): вставка подхватывается
+    // триггером БД notify_telegram_on_new_notification и уходит в Telegram
+    // сама, без отдельного вызова admin-notify. Best-effort — сбой отправки
+    // не должен блокировать саму модерацию, заказ уже одобрен.
+    try {
+      await insertRow('notifications', {
+        recipient_user_id: o.customerId,
+        recipient_role: 'customer',
+        order_id: o.id,
+        text: `Ваш заказ одобрен, стоимость ${finalPrice} ₽. Оплатите на сайте, чтобы начать поиск мастера: https://мастерврайоне.рф/`,
+        channel: 'telegram',
+      });
+    } catch (notifyErr) {
+      console.warn('[approveOrder] не удалось отправить уведомление об оплате', notifyErr);
+    }
+
     await loadData({ keepOpen: true });
   } catch (err) {
     alert('Не удалось одобрить заказ: ' + err.message);
@@ -1172,7 +1194,7 @@ async function requestClarification(o) {
     const customer = allUsers.find((u) => u.id === o.customerId);
     if (customer && customer.telegramId) {
       const orderLabel = o.title || o.description || 'Заказ';
-      const text = `По заказу «${orderLabel}» нужно уточнение:\n\n${question}\n\nОтветьте в разделе «Заказы» на сайте — после ответа мы продолжим оформление.`;
+      const text = `По заказу «${orderLabel}» нужно уточнение:\n\n${question}\n\nОтветьте в разделе «Заказы» на сайте — после ответа мы продолжим оформление: https://мастерврайоне.рф/`;
       try {
         const res = await sendAdminNotification([customer.telegramId], text);
         if (res.configured && res.sent > 0) {

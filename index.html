@@ -2049,15 +2049,29 @@ function toWorkerOrderView(order, requestingUserId) {
  * журнал (см. store/localStore.js).
  */
 
+// Ссылка на сайт добавляется в каждый шаблон, где от получателя требуется
+// действие (зайти и что-то сделать) — по просьбе Sg от 17.09.2026: «В каждом
+// уведомлении, требующего действия на сайте должна быть ссылка на сайт».
+const SITE_URL = 'https://мастерврайоне.рф/';
+
 const TEMPLATES = {
-  order_published: () => 'Заказ создан, ожидаем отклика мастеров рядом.',
+  // Заказ на этом этапе ещё не виден мастерам — он только что ушёл на
+  // первичную модерацию (см. publishDraft() в index.html: статус
+  // collecting_details, «На проверке»). Раньше текст ошибочно обещал
+  // «ожидаем отклика мастеров рядом», хотя до одобрения администратором и
+  // оплаты поиск мастеров вообще не запускается — исправлено по замечанию
+  // Sg от 17.09.2026.
+  order_published: () => `Заказ создан и отправлен на модерацию, ожидайте. ${SITE_URL}`,
+  // Модерация прошла, администратор выставил цену (estimate_ready,
+  // «Ожидает оплаты») — отправляется из admin.html approveOrder().
+  payment_required: (ctx) => `Ваш заказ одобрен, стоимость ${ctx.amount} ₽. Оплатите на сайте, чтобы начать поиск мастера: ${SITE_URL}`,
   worker_found: (ctx) => `Мастер найден: ${ctx.workerName}. Приедет в интервал ${ctx.timeWindow}.`,
   worker_en_route: () => 'Мастер выехал к вам.',
   work_started: () => 'Мастер начал работу.',
-  work_completed: () => 'Заказ выполнен. Пожалуйста, оцените качество работы.',
+  work_completed: () => `Заказ выполнен. Пожалуйста, оцените качество работы: ${SITE_URL}`,
   issue_reported: () => 'По заказу зарегистрирована проблема, мы уже разбираемся.',
-  new_matching_order: (ctx) => `Рядом появился подходящий заказ: «${ctx.orderTitle}».`,
-  order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}».`,
+  new_matching_order: (ctx) => `Рядом появился подходящий заказ: «${ctx.orderTitle}». ${SITE_URL}`,
+  order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_cancelled: () => 'Заказ отменён или изменён заказчиком.',
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
 };
@@ -3520,6 +3534,22 @@ const STATUS_LABELS = {
   issue_reported: 'Есть проблема',
 };
 
+// Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
+// вынесены сюда, а не в разметку карточки заказа, потому что после
+// подключения реального эквайринга Т-Банка появился третий метод ('tbank')
+// и раньше на его месте по ошибке всегда показывалось «предоплата (демо)»,
+// даже для настоящих платежей.
+const PAYMENT_METHOD_LABELS = {
+  on_site: 'на месте',
+  online_stub: 'предоплата (демо)',
+  tbank: 'картой онлайн (Т-Банк)',
+};
+const PAYMENT_STATUS_LABELS = {
+  none: 'не требуется',
+  prepayment_pending: 'ожидает оплаты',
+  prepayment_paid: 'оплачено',
+};
+
 // Порядок статусов для сортировки списков заказов «по статусу» (см.
 // ordersSortSettings/applyOrdersBlockSettings рядом с renderOrders) — тот же
 // порядок стадий жизненного цикла, что и в STATUS_LABELS/admin.html.
@@ -4390,6 +4420,22 @@ function computeEstimateForDraft() {
 }
 
 async function publishDraft() {
+  // Защита от повторного/тройного вызова (см. комментарий у isPublishingDraft
+  // выше) — publishDraft небыстрая (AI-разбор + запись в БД), и без этой
+  // защиты несколько тапов по «Отправить» подряд создавали несколько
+  // заказов с несколькими одинаковыми уведомлениями «Заказ создан…» каждый.
+  if (isPublishingDraft) return;
+  isPublishingDraft = true;
+  if (state.screen === 'compose') render(); // сразу показать «Отправляем…»/disabled
+
+  try {
+    return await publishDraftInner();
+  } finally {
+    isPublishingDraft = false;
+  }
+}
+
+async function publishDraftInner() {
   const d = state.draft;
   const budgetWarning = d.isPrecedent
     ? null
@@ -4713,25 +4759,80 @@ function advanceWorkerStatus(orderId, nextStatus) {
   render();
 }
 
-// Оплата — имитация (см. paymentAdapter вверху файла): реального
-// эквайринга нет, ввода карты нет, только «Оплатить»/«Отказаться».
-// Доступна заказчику, когда администратор уже одобрил заказ и выставил
-// цену (status === 'estimate_ready', см. admin.html approveOrder).
-// «Оплатить» сразу проводит обе следующие ступени — paid и searching —
-// одним saveOrder (как раньше делал publishDraft для нескольких статусов
-// подряд): «оплачено» остаётся видно шагом в истории заказа, а поиск
-// мастеров стартует тем же кликом, без дополнительного ожидания.
+// Оплата. Доступна заказчику, когда администратор уже одобрил заказ и
+// выставил цену (status === 'estimate_ready', см. admin.html approveOrder).
+//
+// В проде (isSupabaseConfigured()) — реальный эквайринг Т-Банка: создаём
+// платёж через Edge Function create-payment (там же TerminalKey/Password из
+// секретов) и уводим покупателя на PaymentURL — защищённую форму банка,
+// сайт данные карты не видит и не обрабатывает (сценарий nonPCI, см.
+// developer.tbank.ru/eacq/scenarios/payments/nonPCI). Сам перевод в paid →
+// searching и запуск notify-nearby-workers происходит НЕ здесь, а на
+// сервере — банк подтверждает платёж на NotificationURL, который принимает
+// payment-notification (см. supabase/functions/payment-notification).
+// 100% суммы уходит на расчётный счёт получателя — с мастерами расчёт
+// отдельно, вне платформы (см. переписку с Sg, 17.09.2026).
+//
+// В демо-режиме без Supabase бэкенда для секретов нет, поэтому оставлена
+// прежняя имитация — иначе демо перестало бы работать без реального банка.
 async function payOrder(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
   if (!order || order.status !== 'estimate_ready') return;
   const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
-  order.payment = confirmMockPayment(initiatePayment('online_stub', amount));
-  order = transition(order, 'paid');
-  order = transition(order, 'searching');
-  order = await saveOrder(order);
-  notifyNearbyWorkers(order.id); // best-effort, см. approveOrder в admin.html — та же функция
-  showToast('Оплата прошла (демо) — мастера рядом уже видят заказ');
-  render();
+
+  if (!isSupabaseConfigured()) {
+    order.payment = confirmMockPayment(initiatePayment('online_stub', amount));
+    order = transition(order, 'paid');
+    order = transition(order, 'searching');
+    order = await saveOrder(order);
+    notifyNearbyWorkers(order.id);
+    showToast('Оплата прошла (демо) — мастера рядом уже видят заказ');
+    return render();
+  }
+
+  const token = loadSessionToken();
+  if (!token) {
+    showToast('Не получилось подтвердить вход — зайдите заново по номеру телефона');
+    return;
+  }
+
+  const btn = document.getElementById(`pay-order-${orderId}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Переходим к оплате…';
+  }
+
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/create-payment`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ orderId, sessionToken: token }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok || !data.paymentUrl) {
+      console.error('[payOrder] create-payment failed', res.status, data);
+      const messages = {
+        wrong_status: 'Заказ уже оплачен или отменён — обновите страницу',
+        no_price: 'У заказа ещё не выставлена цена — обновите страницу',
+        unauthorized: 'Сессия истекла — зайдите заново',
+      };
+      showToast(messages[data && data.error] || 'Не получилось перейти к оплате — попробуйте ещё раз');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = `Оплатить ${amount} ₽`;
+      }
+      return;
+    }
+    // Дальше — редирект на форму банка, экран заказа тут уже не важен.
+    window.location.href = data.paymentUrl;
+  } catch (err) {
+    reportError('переход к оплате', err);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = `Оплатить ${amount} ₽`;
+    }
+  }
 }
 
 function declineOrder(orderId) {
@@ -6026,6 +6127,18 @@ const ICON_PENCIL =
 // любого пункта меню (см. handleAction).
 let avatarMenuOpen = false;
 
+// Защита от повторной отправки заявки (см. handleAction → 'publish-draft').
+// publishDraft() — асинхронная и небыстрая (AI-разбор текста заявки +
+// запись в БД), а сама кнопка «Отправить» раньше не блокировалась на время
+// ожидания. Несколько тапов подряд запускали publishDraft() параллельно
+// несколько раз — каждый создавал свой заказ и своё уведомление «Заказ
+// создан…» (отсюда тройная отправка одного и того же уведомления, отчёт
+// Sg от 17.09.2026). Флаг — на уровне модуля, а не только disabled на
+// DOM-узле кнопки, потому что render() между кликом и завершением
+// publishDraft() пересоздаёт кнопку заново (innerHTML) и стирает disabled,
+// выставленный вручную (см. renderCompose(), где кнопка учитывает этот флаг).
+let isPublishingDraft = false;
+
 // ---------------------------------------------------------------------
 // «Прочитанные» уведомления — только на этом устройстве: сервер не хранит
 // признак прочтения (таблица notifications его не знает), поэтому просто
@@ -6646,7 +6759,7 @@ function renderCompose() {
           `
             : ''
         }
-        <button class="primary-button" id="compose-publish-send" data-action="publish-draft">Отправить</button>
+        <button class="primary-button" id="compose-publish-send" data-action="publish-draft" ${isPublishingDraft ? 'disabled' : ''}>${isPublishingDraft ? 'Отправляем…' : 'Отправить'}</button>
         <button class="secondary-button" data-action="go-home">Отменить</button>
       </div>
     `;
@@ -6775,12 +6888,12 @@ function renderOrderDetail() {
         <button class="primary-button" data-action="submit-clarification" data-value="${order.id}">Отправить ответ</button>
       `;
     } else if (order.status === 'estimate_ready') {
-      // Оплата — имитация платёжного шлюза: сумма и две кнопки, без
-      // ввода карты и реального списания (см. payOrder/paymentAdapter).
+      // Оплата — редирект на защищённую форму Т-Банка (см. payOrder), сайт
+      // данные карты не видит. В демо-режиме без Supabase — имитация.
       const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
       actions = `
-        <p class="order-meta">Оплата — демо-режим: реального списания нет, форма ввода карты не нужна.</p>
-        <button class="primary-button" data-action="pay-order" data-value="${order.id}">Оплатить ${amount} ₽</button>
+        <p class="order-meta">${isSupabaseConfigured() ? 'Оплата картой, СБП и другими способами — на защищённой форме банка.' : 'Оплата — демо-режим: реального списания нет.'}</p>
+        <button class="primary-button" id="pay-order-${order.id}" data-action="pay-order" data-value="${order.id}">Оплатить ${amount} ₽</button>
         <button class="secondary-button" data-action="decline-order" data-value="${order.id}">Отказаться</button>
       `;
     } else if (order.status === 'completed') {
@@ -6858,7 +6971,7 @@ function renderOrderDetail() {
             : renderWorkerPayoutBlock(order)
         }
         ${isCustomer && typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
-        <p class="order-meta"><span>Оплата: ${order.payment.method === 'on_site' ? 'на месте' : 'предоплата (демо)'}, статус — ${order.payment.status}</span></p>
+        <p class="order-meta"><span>Оплата: ${PAYMENT_METHOD_LABELS[order.payment.method] || order.payment.method}, статус — ${PAYMENT_STATUS_LABELS[order.payment.status] || order.payment.status}</span></p>
         ${
           order.attachments && order.attachments.length
             ? `<div class="attachment-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${order.attachments
