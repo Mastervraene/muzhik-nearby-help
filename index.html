@@ -1544,6 +1544,7 @@ body {
 }
 
 .onboarding-body {
+  position: relative;
   padding: 20px 22px 24px;
   overflow-y: auto;
   min-height: 0;
@@ -1586,6 +1587,17 @@ body {
   border-radius: 999px;
   font-size: 15px;
   font-weight: 700;
+}
+
+/* Красный вариант карточки — баннер «оплата не прошла» (см.
+   renderPaymentFailedOverlay). По просьбе Sg (17.09.2026) сознательно
+   используется настоящий красный, а не приглушённый var(--danger),
+   чтобы визуально явно отличаться от синего баннера успешной оплаты. */
+.onboarding-card-danger .onboarding-body h2 {
+  color: #b91c1c;
+}
+.onboarding-cta-danger {
+  background: #dc2626;
 }
 
 /* Маленькая кнопка «Понятно» под основным CTA краткой карточки — в
@@ -3587,7 +3599,7 @@ const state = {
   // карточка «Локация — самое важное» (авто при каждом старте без входа,
   // пока не нажата кнопка «Понятно» насовсем — см. ONBOARDING_DISMISSED_KEY
   // ниже); 'long' — подробное «Как это работает» (по кнопке «?»);
-  // 'payment_success' — баннер после успешной оплаты (см. boot()).
+  // 'payment_success' / 'payment_failed' — баннеры после оплаты (см. boot()).
   infoOverlay: null,
   // Навыки на экране профиля — теперь просто кнопки-переключатели (см.
   // renderProfile → «Мои навыки»): клик по навыку открывает звёздный
@@ -7318,7 +7330,7 @@ function render() {
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${renderBottomNav()}
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     `;
     wireEvents();
@@ -7346,7 +7358,7 @@ function render() {
     ${content}
     ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
@@ -7545,7 +7557,7 @@ function renderRadiusNoticeOverlay() {
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-body" style="padding-top: 28px;">
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Ищем чуть дальше</h2>
           <p>Похоже, в вашем районе сильная нехватка настоящих мужчин. Мы расширили радиус поиска и обязательно кого-нибудь найдём.</p>
@@ -7565,11 +7577,31 @@ function renderPaymentSuccessOverlay() {
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-body" style="padding-top: 28px;">
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Оплата прошла успешно</h2>
           <p>Начинаем поиск мастера рядом с вами. Как только заявку возьмут в работу, статус заказа появится в разделе «Заказы».</p>
-          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Супер, жду мастера</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Показывается при возврате на сайт сразу после неуспешной/отклонённой
+// оплаты (T-Bank FailURL с ?failed_order=<id>, см. boot()) — красный
+// вариант той же карточки. Уведомление в Telegram об этом же событии
+// уходит отдельно, из payment-notification (ветка status !== 'CONFIRMED').
+function renderPaymentFailedOverlay() {
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card onboarding-card-danger" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Оплата не прошла</h2>
+          <p>Банк отклонил платёж. Попробуйте оформить оплату ещё раз — деньги за неудачную попытку не списываются.</p>
+          <button type="button" class="onboarding-cta onboarding-cta-danger" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
     </div>
@@ -7588,7 +7620,7 @@ function renderSupportOverlay() {
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-body" style="padding-top: 28px;">
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Поддержка</h2>
           <p>Если что-то не работает или остались вопросы — пишите или звоните напрямую, это не бот.</p>
@@ -8612,19 +8644,23 @@ async function boot() {
   // мастеров (см. renderOnboardingOverlay).
   state.infoOverlay = currentUser() || wasOnboardingDismissed() ? null : 'short';
 
-  // Возврат с успешной оплаты (T-Bank SuccessURL с ?paid_order=<id>, см.
-  // create-payment.ts) — показываем баннер поверх всего остального и
-  // сразу вычищаем параметр из адресной строки, чтобы он не всплывал
-  // повторно при обновлении страницы.
+  // Возврат с оплаты T-Bank — SuccessURL с ?paid_order=<id> или FailURL с
+  // ?failed_order=<id> (см. create-payment.ts) — показываем баннер поверх
+  // всего остального и сразу вычищаем параметр из адресной строки, чтобы
+  // он не всплывал повторно при обновлении страницы.
   try {
-    const paidOrderId = new URLSearchParams(location.search).get('paid_order');
+    const params = new URLSearchParams(location.search);
+    const paidOrderId = params.get('paid_order');
+    const failedOrderId = params.get('failed_order');
     if (paidOrderId) {
       state.infoOverlay = 'payment_success';
-      const cleanUrl = location.pathname + location.hash;
-      history.replaceState(null, '', cleanUrl);
+      history.replaceState(null, '', location.pathname + location.hash);
+    } else if (failedOrderId) {
+      state.infoOverlay = 'payment_failed';
+      history.replaceState(null, '', location.pathname + location.hash);
     }
   } catch (err) {
-    console.error('[boot] не удалось обработать paid_order', err);
+    console.error('[boot] не удалось обработать paid_order/failed_order', err);
   }
 
   state.booting = false;
