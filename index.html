@@ -1588,6 +1588,23 @@ body {
   font-weight: 700;
 }
 
+/* Маленькая кнопка «Понятно» под основным CTA краткой карточки — в
+   отличие от крестика/свайпа/«Начать» (которые просто закрывают карточку
+   на этот раз, и она снова всплывёт при следующей перезагрузке), эта
+   кнопка запоминает отказ насовсем (см. markOnboardingDismissed()). */
+.onboarding-dismiss-forever {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: none;
+  background: none;
+  color: var(--gray-500);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  padding: 6px;
+}
+
 .onboarding-art-photo {
   height: 180px;
 }
@@ -3567,10 +3584,10 @@ const state = {
   bootError: null,
   specialistMode: false, // показать доп. кнопки специалиста над формой заявки
   // Какое из всплывающих окон открыто: null — ни одно; 'short' — краткая
-  // карточка «Локация — самое важное» (авто при КАЖДОМ старте без входа,
-  // не запоминается между визитами — так и задумано); 'long' — подробное
-  // «Как это работает» (по кнопке «?»); 'payment_success' — баннер после
-  // успешной оплаты (см. boot()).
+  // карточка «Локация — самое важное» (авто при каждом старте без входа,
+  // пока не нажата кнопка «Понятно» насовсем — см. ONBOARDING_DISMISSED_KEY
+  // ниже); 'long' — подробное «Как это работает» (по кнопке «?»);
+  // 'payment_success' — баннер после успешной оплаты (см. boot()).
   infoOverlay: null,
   // Навыки на экране профиля — теперь просто кнопки-переключатели (см.
   // renderProfile → «Мои навыки»): клик по навыку открывает звёздный
@@ -3591,6 +3608,26 @@ function showToast(text) {
     state.toast = null;
     render();
   }, 2200);
+}
+
+// Ключ localStorage для явного, окончательного отказа от краткой карточки
+// «Локация — самое важное» — ставится ТОЛЬКО кнопкой «Понятно» внизу
+// карточки (см. renderOnboardingOverlay → dismiss-onboarding-forever).
+// Обычное закрытие (крестик, свайп, «Начать») этот флаг не трогает —
+// карточка в таком случае снова покажется при следующей перезагрузке,
+// как и требуется для неавторизованных гостей.
+const ONBOARDING_DISMISSED_KEY = 'muzhik_onboarding_dismissed';
+function wasOnboardingDismissed() {
+  try {
+    return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
+  } catch (err) {
+    return false; // приватный режим браузера и т.п. — просто показываем карточку как раньше
+  }
+}
+function markOnboardingDismissed() {
+  try {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+  } catch (err) { /* не критично — просто не запомнится между визитами */ }
 }
 
 function go(screen, extra = {}) {
@@ -7459,6 +7496,7 @@ function renderOnboardingOverlay() {
           <h2>Локация — самое важное</h2>
           <p>Опишите задачу одним сообщением — рядом найдётся человек, который поможет. Чем точнее адрес, тем быстрее откликнется мастер поблизости.</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Начать</button>
+          <button type="button" class="onboarding-dismiss-forever" data-action="dismiss-onboarding-forever">Понятно</button>
         </div>
       </div>
     </div>
@@ -8348,6 +8386,10 @@ async function handleAction(action, value) {
     case 'dismiss-onboarding':
       state.infoOverlay = null;
       return render();
+    case 'dismiss-onboarding-forever':
+      markOnboardingDismissed();
+      state.infoOverlay = null;
+      return render();
     case 'show-help':
       state.infoOverlay = 'long';
       return render();
@@ -8560,14 +8602,15 @@ async function boot() {
   state.screen = 'home';
 
   // Краткая карточка-подсказка сама всплывает при старте, пока человек не
-  // авторизован (телефон/Telegram не привязаны). Показывается при КАЖДОМ
-  // обновлении страницы для неавторизованных — статус dismissed НЕ
-  // запоминается навсегда (раньше здесь была ошибка: wasOnboardingDismissed()
-  // подавляла баннер после первого закрытия для всех будущих визитов).
-  // Подробное объяснение работы сайта в любой момент открывается кнопкой
-  // «?» в шапке. Картинка в этой карточке — реальная карта зоны покрытия
+  // авторизован (телефон/Telegram не привязаны). Показывается при каждой
+  // перезагрузке для неавторизованных, ЕСЛИ человек не нажимал кнопку
+  // «Понятно» внизу карточки насовсем (см. wasOnboardingDismissed()) —
+  // обычное закрытие крестиком/свайпом/«Начать» на это не влияет и
+  // карточка всплывёт заново при следующей перезагрузке. Подробное
+  // объяснение работы сайта в любой момент открывается кнопкой «?» в
+  // шапке. Картинка в этой карточке — реальная карта зоны покрытия
   // мастеров (см. renderOnboardingOverlay).
-  state.infoOverlay = currentUser() ? null : 'short';
+  state.infoOverlay = currentUser() || wasOnboardingDismissed() ? null : 'short';
 
   // Возврат с успешной оплаты (T-Bank SuccessURL с ?paid_order=<id>, см.
   // create-payment.ts) — показываем баннер поверх всего остального и
