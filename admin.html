@@ -69,6 +69,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   background: #fef2f2; color: var(--red); font-size: 13px; padding: 10px 12px;
   border-radius: 10px; margin-bottom: 14px; display: none;
 }
+.link-btn {
+  display: block; width: 100%; text-align: center; background: none; color: var(--gray-500);
+  font-size: 12.5px; text-decoration: underline; margin-top: 14px; padding: 4px;
+}
+.link-btn:hover { color: var(--gray-700); }
 
 /* ---------- Приложение ---------- */
 #admin-app { display: none; min-height: 100vh; }
@@ -355,13 +360,43 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <input type="password" id="login-password" placeholder="даженепытайся567" autocomplete="current-password" />
     </div>
     <button class="btn-primary" id="login-submit">Войти</button>
+    <button type="button" class="link-btn" id="show-setup-link">Ещё не настроен пароль — первичная настройка</button>
+  </div>
+</div>
+
+<div id="setup-screen" style="display:none; min-height: 100vh; align-items: center; justify-content: center; padding: 20px;">
+  <div class="login-card">
+    <h1>Настройка пароля</h1>
+    <p class="sub">Одноразовая настройка пароля администратора — доступна только тому, у кого есть код настройки (его даёт Claude в чате один раз; в коде сайта он не хранится).</p>
+    <div class="login-error" id="setup-error"></div>
+    <div class="field">
+      <label>Телефон администратора</label>
+      <input type="text" id="setup-phone" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Код настройки</label>
+      <input type="text" id="setup-token" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>Новый пароль (от 8 символов)</label>
+      <input type="password" id="setup-password" autocomplete="new-password" />
+    </div>
+    <div class="field">
+      <label>Повторите пароль</label>
+      <input type="password" id="setup-password-confirm" autocomplete="new-password" />
+    </div>
+    <button class="btn-primary" id="setup-submit">Установить пароль и войти</button>
+    <button type="button" class="link-btn" id="show-login-link">Пароль уже настроен — войти</button>
   </div>
 </div>
 
 <div id="admin-app">
   <div class="topbar">
     <h1 class="heading">Мужик — админка</h1>
-    <button class="logout" id="logout-btn">Выйти</button>
+    <div style="display:flex; gap:14px; align-items:center;">
+      <button class="logout" id="change-password-btn">Пароль</button>
+      <button class="logout" id="logout-btn">Выйти</button>
+    </div>
   </div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="orders">Заказы</button>
@@ -447,6 +482,34 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
   </div>
 
+  <div class="admin-modal-overlay" id="password-change-overlay" style="display:none;" data-action="close-password-change">
+    <div class="admin-modal-card" onclick="event.stopPropagation()">
+      <div class="admin-modal-head">
+        <h2 class="heading">Сменить пароль</h2>
+        <button type="button" class="admin-modal-close" id="password-change-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="admin-modal-body">
+        <div class="login-error" id="password-change-error"></div>
+        <div class="field">
+          <label>Текущий пароль</label>
+          <input type="password" id="password-change-current" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label>Новый пароль (от 8 символов)</label>
+          <input type="password" id="password-change-new" autocomplete="new-password" />
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Повторите новый пароль</label>
+          <input type="password" id="password-change-confirm" autocomplete="new-password" />
+        </div>
+      </div>
+      <div class="admin-modal-actions">
+        <button type="button" class="btn-sm ghost" id="password-change-cancel">Отмена</button>
+        <button type="button" class="btn-sm primary" id="password-change-submit">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
   <div class="lightbox-overlay" id="lightbox-overlay" style="display:none;" data-action="close-lightbox">
     <div class="lightbox-stage" id="lightbox-stage" onclick="event.stopPropagation()">
       <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Закрыть">✕</button>
@@ -497,28 +560,34 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 // =======================================================================
 // НАСТРОЙКИ ДОСТУПА
 // -----------------------------------------------------------------------
-// Логин администратора — телефон + пароль. Пароль хранится тут не в
-// открытом виде, а как SHA-256-хэш (см. sha256Hex ниже), чтобы он не был
-// виден невооружённым глазом при просмотре исходного кода страницы.
+// ОБНОВЛЕНО 18.09.2026 (Sg, через Claude): раньше здесь лежал номер
+// телефона администратора и SHA-256-хэш пароля прямым текстом в клиентском
+// коде — оба значения оказались видны кому угодно, читающему исходники
+// страницы (или git-историю ПУБЛИЧНОГО репозитория). Теперь вход проверяет
+// сервер: Edge Function admin-login-with-password ищет в public.users
+// строку с данным телефоном и is_admin = true, и сверяет пароль с хэшем в
+// отдельной таблице public.admin_auth (никак не связанной с профильным
+// паролем пользователя в public.user_auth — это два разных пароля даже
+// если это один и тот же человек). Ни номер, ни хэш, ни сам пароль в этом
+// файле больше не хранятся — см. _auth_migration/ в репозитории.
 //
-// ВАЖНО, честно: это ТОЛЬКО фильтр «случайного посетителя» на уровне
-// интерфейса этой страницы. Настоящие данные (заказы, телефоны,
-// геолокация) в проекте сейчас читаются и пишутся напрямую через
-// публичный anon-ключ Supabase с ОТКРЫТЫМИ RLS-политиками (это видно в
-// index.html — там прямо написано, что это сознательный компромисс для
-// MVP). Значит, кто угодно, кто знает адрес Supabase-проекта и anon-ключ
-// (а они и так открыты в исходном коде сайта), может обратиться к базе
-// напрямую — минуя эту страницу и её пароль вообще. Логин на /admin.html
-// прячет админку от случайных людей и поисковиков, но не защищает сами
-// данные. Перед стартом стоит сузить RLS-политики в Supabase (админ-доступ
-// — через отдельный service_role/Edge Function), не полагаясь только на
-// пароль здесь.
+// Первичная установка пароля — через Edge Function admin-set-password,
+// защищена одноразовым кодом (секрет ADMIN_SETUP_TOKEN на сервере, не в
+// этом файле) — см. экран «Настройка пароля» ниже.
+//
+// ВАЖНО, честно: это устраняет утечку пароля/номера, но НЕ решает более
+// крупный вопрос — настоящие данные (заказы, телефоны, геолокация) в
+// проекте всё ещё читаются и пишутся напрямую через публичный anon-ключ
+// Supabase с ОТКРЫТЫМИ RLS-политиками (это видно в index.html — там прямо
+// написано, что это сознательный компромисс для MVP). Значит, кто угодно,
+// кто знает адрес Supabase-проекта и anon-ключ (а они и так открыты в
+// исходном коде сайта), может обратиться к базе напрямую — минуя эту
+// страницу и её логин вообще. Это отдельная, более крупная задача
+// (сузить RLS-политики / перевести админ-доступ на service_role Edge
+// Function) — см. аудит и предложение в чате.
 // =======================================================================
-const ADMIN_PHONE_DIGITS = '79165339588';
-// Хэш пароля literal-строки ",f,jxrf123" (именно тех символов, которые
-// нужно набрать) — см. пояснение в чате про раскладку клавиатуры.
-const ADMIN_PASSWORD_SHA256 = 'e644ebb1efd0a3dbfe533f3f22b5bda1d5f25333e0b3337dc1fa87a4fce6f4b0';
-const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1';
+const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1'; // теперь хранит настоящий токен сессии (не булев флаг)
+let adminSessionToken = null;
 
 // Тот же проект Supabase, что и в основном приложении (см. index.html →
 // window.__ENV__). Ключ публичный (anon) — так и задумано, см. пояснение выше.
@@ -2853,6 +2922,14 @@ function showApp() {
     sessionStorage.removeItem(ADMIN_SESSION_KEY);
     location.reload();
   });
+  document.getElementById('change-password-btn').addEventListener('click', openPasswordChangeModal);
+  document.getElementById('password-change-close').addEventListener('click', closePasswordChangeModal);
+  document.getElementById('password-change-cancel').addEventListener('click', closePasswordChangeModal);
+  document.getElementById('password-change-submit').addEventListener('click', submitPasswordChange);
+  document.getElementById('password-change-overlay').addEventListener('click', (e) => {
+    if (e.target.dataset.action === 'close-password-change') closePasswordChangeModal();
+  });
+  wireModalSwipeToClose(document.querySelector('#password-change-overlay .admin-modal-card'), closePasswordChangeModal);
   loadData().catch((err) => {
     document.getElementById('orders-list').innerHTML = `<div class="empty-state">Не удалось загрузить данные: ${escapeHtml(err.message)}</div>`;
   });
@@ -2939,19 +3016,43 @@ function applyLoginLockUi() {
   }
 }
 
+const ADMIN_LOGIN_ERROR_MESSAGES = {
+  invalid_credentials: 'Неверный номер или пароль',
+  no_password_set: 'Для этого номера ещё не задан пароль администратора — используйте «Первичная настройка»',
+  locked: 'Слишком много неверных попыток — сервер временно заблокировал вход, попробуйте позже',
+  phone_and_password_required: 'Введите номер и пароль',
+};
+
 async function handleLogin() {
   if (loginBlockedUntil()) { applyLoginLockUi(); return; }
   const phone = normalizePhoneDigits(document.getElementById('login-phone').value);
   const password = document.getElementById('login-password').value;
-  const hash = await sha256Hex(password);
   const errBox = document.getElementById('login-error');
-  if (phone === ADMIN_PHONE_DIGITS && hash === ADMIN_PASSWORD_SHA256) {
-    clearLoginAttempts();
-    sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
-    errBox.style.display = 'none';
-    showApp();
-  } else {
+  const btn = document.getElementById('login-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-login-with-password`, {
+      method: 'POST',
+      headers: sbHeaders(),
+      body: JSON.stringify({ phone, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data && data.ok && data.token) {
+      clearLoginAttempts();
+      adminSessionToken = data.token;
+      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      errBox.style.display = 'none';
+      showApp();
+      return;
+    }
     recordLoginFailure();
+    errBox.textContent = (data && ADMIN_LOGIN_ERROR_MESSAGES[data.error]) || 'Не получилось войти — попробуйте ещё раз';
+    errBox.style.display = 'block';
+  } catch (err) {
+    recordLoginFailure();
+    errBox.textContent = 'Не получилось соединиться — попробуйте ещё раз';
+    errBox.style.display = 'block';
+  } finally {
     applyLoginLockUi();
   }
 }
@@ -2962,7 +3063,146 @@ document.getElementById('login-password').addEventListener('keydown', (e) => {
 });
 applyLoginLockUi();
 
-if (sessionStorage.getItem(ADMIN_SESSION_KEY) === '1') {
+// -----------------------------------------------------------------------
+// Первичная настройка пароля администратора (admin-set-password) — см.
+// пояснение в «НАСТРОЙКИ ДОСТУПА» выше по файлу. Доступна с экрана входа
+// по ссылке «Ещё не настроен пароль».
+// -----------------------------------------------------------------------
+const ADMIN_SETUP_ERROR_MESSAGES = {
+  invalid_setup_token: 'Неверный код настройки',
+  not_admin: 'Этот номер не отмечен как администратор',
+  password_already_set: 'Пароль уже установлен — используйте обычный вход',
+  password_too_short: 'Пароль должен быть не короче 8 символов',
+  phone_required: 'Введите номер телефона',
+};
+
+function showSetupScreen() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = 'flex';
+}
+function showLoginScreenFromSetup() {
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+document.getElementById('show-setup-link').addEventListener('click', showSetupScreen);
+document.getElementById('show-login-link').addEventListener('click', showLoginScreenFromSetup);
+
+async function handleSetupSubmit() {
+  const phone = normalizePhoneDigits(document.getElementById('setup-phone').value);
+  const setupToken = document.getElementById('setup-token').value.trim();
+  const password = document.getElementById('setup-password').value;
+  const confirmValue = document.getElementById('setup-password-confirm').value;
+  const errBox = document.getElementById('setup-error');
+  if (password.length < 8) {
+    errBox.textContent = 'Пароль должен быть не короче 8 символов';
+    errBox.style.display = 'block';
+    return;
+  }
+  if (password !== confirmValue) {
+    errBox.textContent = 'Пароли не совпадают';
+    errBox.style.display = 'block';
+    return;
+  }
+  const btn = document.getElementById('setup-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-set-password`, {
+      method: 'POST',
+      headers: sbHeaders(),
+      body: JSON.stringify({ phone, setupToken, newPassword: password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data && data.ok && data.token) {
+      adminSessionToken = data.token;
+      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      errBox.style.display = 'none';
+      showApp();
+      return;
+    }
+    errBox.textContent = (data && ADMIN_SETUP_ERROR_MESSAGES[data.error]) || 'Не получилось — попробуйте ещё раз';
+    errBox.style.display = 'block';
+    if (data && data.error === 'password_already_set') showLoginScreenFromSetup();
+  } catch (err) {
+    errBox.textContent = 'Не получилось соединиться — попробуйте ещё раз';
+    errBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById('setup-submit').addEventListener('click', handleSetupSubmit);
+
+// -----------------------------------------------------------------------
+// Смена пароля из настроек (admin-change-password) — требует текущий
+// пароль и действующий токен сессии. Сброс/восстановление пароля админки
+// по номеру телефона сознательно не реализован — как и у клиентов, см.
+// договорённость про отложенный email-recovery.
+// -----------------------------------------------------------------------
+const ADMIN_CHANGE_PASSWORD_ERROR_MESSAGES = {
+  invalid_credentials: 'Неверный текущий пароль',
+  invalid_session: 'Сессия истекла — войдите заново',
+  password_too_short: 'Новый пароль должен быть не короче 8 символов',
+  locked: 'Слишком много попыток — попробуйте позже',
+};
+
+function openPasswordChangeModal() {
+  document.getElementById('password-change-current').value = '';
+  document.getElementById('password-change-new').value = '';
+  document.getElementById('password-change-confirm').value = '';
+  document.getElementById('password-change-error').style.display = 'none';
+  document.getElementById('password-change-overlay').style.display = 'flex';
+}
+function closePasswordChangeModal() {
+  document.getElementById('password-change-overlay').style.display = 'none';
+}
+
+async function submitPasswordChange() {
+  const current = document.getElementById('password-change-current').value;
+  const next = document.getElementById('password-change-new').value;
+  const confirmValue = document.getElementById('password-change-confirm').value;
+  const errBox = document.getElementById('password-change-error');
+  if (next.length < 8) {
+    errBox.textContent = 'Новый пароль должен быть не короче 8 символов';
+    errBox.style.display = 'block';
+    return;
+  }
+  if (next !== confirmValue) {
+    errBox.textContent = 'Пароли не совпадают';
+    errBox.style.display = 'block';
+    return;
+  }
+  const btn = document.getElementById('password-change-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-change-password`, {
+      method: 'POST',
+      headers: sbHeaders(),
+      body: JSON.stringify({ token: adminSessionToken, currentPassword: current, newPassword: next }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data && data.ok && data.token) {
+      adminSessionToken = data.token;
+      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      closePasswordChangeModal();
+      return;
+    }
+    if (data && data.error === 'invalid_session') {
+      closePasswordChangeModal();
+      sessionStorage.removeItem(ADMIN_SESSION_KEY);
+      location.reload();
+      return;
+    }
+    errBox.textContent = (data && ADMIN_CHANGE_PASSWORD_ERROR_MESSAGES[data.error]) || 'Не получилось — попробуйте ещё раз';
+    errBox.style.display = 'block';
+  } catch (err) {
+    errBox.textContent = 'Не получилось соединиться — попробуйте ещё раз';
+    errBox.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+if (sessionStorage.getItem(ADMIN_SESSION_KEY)) {
+  adminSessionToken = sessionStorage.getItem(ADMIN_SESSION_KEY);
   showApp();
 }
 </script>
