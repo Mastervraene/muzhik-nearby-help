@@ -6125,6 +6125,19 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Лёгкий виброотклик на тап (по просьбе Sg, 18.09.2026). Vibration API
+// поддерживает только Chrome/Android — в Safari/iOS navigator.vibrate вообще
+// не существует, поэтому проверка 'vibrate' in navigator делает вызов
+// безопасным no-op там, где вибрации нет (полноценный тактильный отклик и
+// для iOS, и для Android — уже для будущих приложений в App Store/Google
+// Play, там он не ограничен этим API). 10мс — едва заметный «тик», как
+// у нативных лёгких тапов, а не сирена на весь заказ.
+function vibrateTap() {
+  if ('vibrate' in navigator) {
+    try { navigator.vibrate(10); } catch (_) { /* игнорируем: не критично */ }
+  }
+}
+
 // ---------------------------------------------------------------------
 // Фильтр символов в описании задачи (composer-input): разрешены только
 // буквы (рус/лат), цифры, пробелы/переносы строк и обычные знаки
@@ -8161,6 +8174,7 @@ function wireEvents() {
     node.addEventListener('click', (e) => {
       const action = node.getAttribute('data-action');
       const value = node.getAttribute('data-value');
+      vibrateTap();
       handleAction(action, value);
     });
   });
