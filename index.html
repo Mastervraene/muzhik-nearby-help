@@ -230,6 +230,11 @@ body {
   align-items: center;
   justify-content: center;
   padding: 0 3px;
+  /* Белая обводка, чтобы бейдж не сливался с фото на аватарке, если его
+     цвета случайно совпадут с --notify-badge (по просьбе Sg, 18.09.2026).
+     box-shadow вместо border — не меняет геометрию (min-width/height),
+     в отличие от border без box-sizing:border-box. */
+  box-shadow: 0 0 0 2px var(--gray-0);
 }
 
 /* ---------- Avatar menu (попап аккаунта в шапке) ---------- */
