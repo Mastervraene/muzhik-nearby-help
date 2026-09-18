@@ -1024,6 +1024,14 @@ body {
   margin: 0 0 4px;
 }
 
+.order-number-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gray-500);
+  margin: 0 0 3px;
+  letter-spacing: 0.02em;
+}
+
 .status-pill {
   font-size: 10.5px;
   padding: 3px 8px;
@@ -2680,6 +2688,9 @@ function dbSkillToSkill(row) {
 function dbOrderToOrder(row) {
   return {
     id: row.id,
+    // Порядковый номер для людей (чек эквайринга, поиск в админке) — НЕ
+    // UUID id заказа, см. миграцию orders.order_number (18.09.2026).
+    orderNumber: row.order_number ?? null,
     customerId: row.customer_id,
     assignedWorkerId: row.assigned_worker_id,
     title: row.title,
@@ -6315,7 +6326,7 @@ function renderTopbar() {
         <button class="icon-button" data-action="show-help" aria-label="Как это работает" title="Как это работает">?</button>
         <button class="icon-button" data-action="show-support" aria-label="Поддержка" title="Поддержка">🛟</button>
         <div class="avatar-menu-anchor">
-          <button class="icon-button" style="overflow:hidden;" data-action="toggle-avatar-menu" aria-label="Аккаунт" title="Аккаунт">
+          <button class="icon-button" data-action="toggle-avatar-menu" aria-label="Аккаунт" title="Аккаунт">
             ${avatarInner}
             ${unread ? `<span class="badge">${unread > 9 ? '9+' : unread}</span>` : ''}
           </button>
@@ -6481,6 +6492,7 @@ function orderCardHtml(order, { viewer }) {
     <div class="order-card" data-action="open-order" data-value="${order.id}">
       <div class="order-card-top">
         <div>
+          ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
           <p class="order-title">${escapeHtml(order.title)}</p>
           <div class="order-meta">
             <span>${escapeHtml(catTitle)}</span>
@@ -6967,7 +6979,10 @@ function renderOrderDetail() {
     <div class="screen">
       <div class="order-card">
         <div class="order-card-top">
-          <p class="order-title">${escapeHtml(order.title)}</p>
+          <div>
+            ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
+            <p class="order-title">${escapeHtml(order.title)}</p>
+          </div>
           <span class="status-pill">${STATUS_LABELS[order.status]}</span>
         </div>
         <p class="order-meta">
@@ -8154,11 +8169,25 @@ function wireEvents() {
  * закрытием. Жест ловится с «шапки» карточки (ручка + иллюстрация), чтобы
  * не мешать прокрутке текста в теле карточки на длинном окне «Как это
  * работает».
+ *
+ * Короткие карточки без прокручиваемого содержимого (баннеры оплаты,
+ * радиуса, поддержки) свайпаются ЦЕЛИКОМ этой же логикой с маленьким
+ * порогом — раньше их тело всегда отдавалось wireScrollBoundarySwipe
+ * ниже, а там порог закрытия — половина высоты экрана (рассчитан на
+ * настоящий скролл длинной карточки «Как это работает»), из-за чего
+ * свайп на коротких карточках практически не срабатывал (см. баг,
+ * 18.09.2026: «баннер оплаты не закрывается свайпом» — не только на
+ * реальном тач-устройстве из-за touch-action, но и здесь: даже жест,
+ * который технически сработал, не мог набрать нужную дистанцию). Отличаем
+ * по факту: если контент тела не длиннее видимой области — скролла там
+ * всё равно никогда не будет, значит нет смысла отдавать его
+ * scroll-boundary-логике.
  */
 function wireOnboardingSwipe() {
   const card = document.querySelector('.onboarding-card');
   if (!card) return;
   const body = card.querySelector('.onboarding-body');
+  const bodyScrollable = !!body && body.scrollHeight > body.clientHeight + 4;
   const DISMISS_THRESHOLD = 70;
   let startY = null;
   let dragging = false;
@@ -8170,12 +8199,12 @@ function wireOnboardingSwipe() {
     // возврата карточки на место) и кнопки визуально не реагируют. Жест
     // остаётся только для пустых областей карточки.
     if (e.target.closest('button, a, [data-action]')) return;
-    // Жест, начатый внутри тела карточки, целиком отдаём
-    // wireScrollBoundarySwipe ниже — она сама решает, когда обычный скролл
-    // должен превратиться в свайп-закрытие (см. её комментарий). Здесь
-    // ловим только шапку/иллюстрацию/пустые поля — там свайп закрывает
-    // сразу, без всякого скролла.
-    if (body && body.contains(e.target)) return;
+    // Жест, начатый внутри тела карточки, отдаём wireScrollBoundarySwipe
+    // ниже ТОЛЬКО если тело действительно прокручивается — она сама решает,
+    // когда обычный скролл должен превратиться в свайп-закрытие (см. её
+    // комментарий). Для нескролящихся коротких карточек ловим всю карточку
+    // целиком здесь же, с тем же небольшим порогом, что и у шапки.
+    if (body && bodyScrollable && body.contains(e.target)) return;
     startY = e.clientY;
     dragging = true;
     card.style.transition = 'none';
@@ -8203,7 +8232,9 @@ function wireOnboardingSwipe() {
   card.addEventListener('pointerup', onPointerEnd);
   card.addEventListener('pointercancel', onPointerEnd);
 
-  wireScrollBoundarySwipe(body, card, () => handleAction('dismiss-onboarding'));
+  if (bodyScrollable) {
+    wireScrollBoundarySwipe(body, card, () => handleAction('dismiss-onboarding'));
+  }
 }
 
 /**
@@ -8647,16 +8678,23 @@ async function boot() {
   // Возврат с оплаты T-Bank — SuccessURL с ?paid_order=<id> или FailURL с
   // ?failed_order=<id> (см. create-payment.ts) — показываем баннер поверх
   // всего остального и сразу вычищаем параметр из адресной строки, чтобы
-  // он не всплывал повторно при обновлении страницы.
+  // он не всплывал повторно при обновлении страницы. Заодно открываем
+  // карточку именно ЭТОГО заказа (а не оставляем человека на главном
+  // экране «Что нужно сделать?») — по просьбе Sg, 18.09.2026: после
+  // оплаты не нужно самому идти в «Заказы» и искать нужный.
   try {
     const params = new URLSearchParams(location.search);
     const paidOrderId = params.get('paid_order');
     const failedOrderId = params.get('failed_order');
     if (paidOrderId) {
       state.infoOverlay = 'payment_success';
+      state.screen = 'orderDetail';
+      state.openOrderId = paidOrderId;
       history.replaceState(null, '', location.pathname + location.hash);
     } else if (failedOrderId) {
       state.infoOverlay = 'payment_failed';
+      state.screen = 'orderDetail';
+      state.openOrderId = failedOrderId;
       history.replaceState(null, '', location.pathname + location.hash);
     }
   } catch (err) {
