@@ -101,6 +101,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; cursor: pointer; }
 .card-head-main { min-width: 0; flex: 1; }
 .card-title { font-weight: 700; font-size: 15px; color: var(--gray-900); margin: 0 0 4px; }
+.card-order-number { font-size: 11.5px; font-weight: 700; color: var(--gray-500); margin: 0 0 3px; letter-spacing: 0.02em; }
 .card-meta { font-size: 12.5px; color: var(--gray-500); display: flex; gap: 10px; flex-wrap: wrap; }
 .pill {
   display: inline-block; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
@@ -766,6 +767,9 @@ async function deleteRow(table, id, byField) {
 function dbOrderToOrder(row) {
   return {
     id: row.id,
+    // Порядковый номер для людей (чек эквайринга, поиск здесь) — НЕ UUID
+    // id заказа, см. миграцию orders.order_number (18.09.2026).
+    orderNumber: row.order_number ?? null,
     customerId: row.customer_id,
     assignedWorkerId: row.assigned_worker_id,
     title: row.title,
@@ -969,6 +973,7 @@ function messagesForTelegramId(telegramId) {
 // найти, в одну строку в нижнем регистре и проверяем вхождение подстроки.
 function orderSearchHaystack(o) {
   return [
+    o.orderNumber ? `№${o.orderNumber}` : '', o.orderNumber,
     o.title, o.description, o.district, o.fullAddress, o.desiredDate, o.timeWindow,
     STATUS_LABELS[o.status] || o.status, CATEGORY_TITLES[o.categoryId] || o.categoryId,
     userName(o.customerId), o.assignedWorkerId ? userName(o.assignedWorkerId) : '',
@@ -1233,6 +1238,7 @@ function orderCardHtml(o) {
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
         <div class="card-head-main">
+          ${o.orderNumber ? `<p class="card-order-number">Заказ №${o.orderNumber}</p>` : ''}
           <p class="card-title">${escapeHtml(nameDistrict)}</p>
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           <div class="card-meta">
