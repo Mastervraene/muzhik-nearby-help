@@ -3661,10 +3661,10 @@ function markOnboardingDismissed() {
 function go(screen, extra = {}) {
   state.screen = screen;
   Object.assign(state, extra);
-  if (screen === 'profile') {
-    // Свежий заход на экран профиля всегда начинается со свёрнутого
-    // (подтверждённого) вида адреса, если он уже есть — а не с середины
-    // редактирования, оставшейся с прошлого визита.
+  if (screen === 'profile' || screen === 'masterPanel') {
+    // Свежий заход на экран профиля/панели мастера всегда начинается со
+    // свёрнутого (подтверждённого) вида адреса, если он уже есть — а не с
+    // середины редактирования, оставшейся с прошлого визита.
     profileAddressEditing = false;
   }
   if (screen === 'notifications') {
@@ -6262,6 +6262,7 @@ function getUnreadNotificationsCount(userId) {
 function renderAvatarMenu(user, unreadCount) {
   const items = [
     { action: 'go-profile', icon: '◍', label: 'Профиль' },
+    { action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' },
     { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
@@ -6390,7 +6391,7 @@ function renderBottomNav() {
       ${tabs
         .map(
           ([key, icon, label]) => `
-        <button data-action="go-${key}" class="${state.screen === key ? 'active' : ''}">
+        <button data-action="go-${key}" class="${state.screen === key || (key === 'profile' && state.screen === 'masterPanel') ? 'active' : ''}">
           <span class="nav-icon">${icon}</span>${label}
         </button>`
         )
@@ -7108,7 +7109,6 @@ function renderNotifications() {
 
 function renderProfile() {
   const user = currentUser();
-  if (!profileDistrictValue.trim() && user?.district) profileDistrictValue = user.district;
   return `
     <div class="screen">
       <div class="section-title">Профиль</div>
@@ -7128,7 +7128,54 @@ function renderProfile() {
           <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
         </div>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
-        <label style="margin-top:10px;">Район / адрес, где вы работаете</label>
+      </div>
+
+      ${
+        isSupabaseConfigured()
+          ? `<button class="secondary-button" data-action="logout">Выйти из аккаунта</button>`
+          : `
+      <div class="section-title">Демо-вход</div>
+      <div class="field-card">
+        <p class="order-meta">Переключитесь на другого демо-пользователя, чтобы посмотреть сценарий с другой стороны (в проде — вход по номеру телефона).</p>
+        <select id="field-demo-user">
+          ${getUsers()
+            .map((u) => `<option value="${u.id}" ${u.id === state.currentUserId ? 'selected' : ''}>${escapeHtml(u.displayName)}</option>`)
+            .join('')}
+        </select>
+        <button class="secondary-button" data-action="switch-demo-user">Переключить</button>
+      </div>
+      <button class="secondary-button" data-action="reset-demo">Сбросить демо-данные</button>
+      `
+      }
+
+      <div class="section-title">Документы</div>
+      <a href="/price-list.html" class="secondary-button" style="display:block; box-sizing:border-box; text-align:center; text-decoration:none;">Прайс-лист услуг</a>
+
+      <div class="section-title">Для мастеров</div>
+      <div class="field-card">
+        <p class="order-meta" style="margin-bottom:10px;">Локация, специализации и уведомления о новых заказах рядом — в отдельной панели, чтобы не мешать тем, кто просто оставляет заявки.</p>
+        <button type="button" class="secondary-button" data-action="go-master-panel">🛠 Панель мастера</button>
+      </div>
+    </div>
+  `;
+}
+
+// Вынесено из обычного профиля (см. историю изменений) — всё, что нужно
+// только тем, кто выполняет заказы как мастер: рабочая локация/радиус,
+// специализации со звёздами и телеграм-уведомления о новых подходящих
+// заказах рядом. Обычному пользователю, который только оставляет заявки,
+// эти поля не нужны — у него для уведомлений о СВОИХ заказах есть своя
+// карточка привязки Telegram прямо на экране заказа (см. renderOrderDetail).
+function renderMasterPanel() {
+  const user = currentUser();
+  if (!profileDistrictValue.trim() && user?.district) profileDistrictValue = user.district;
+  return `
+    <div class="screen">
+      <div class="section-title">Панель мастера</div>
+      <button type="button" class="secondary-button" data-action="go-profile" style="margin-bottom:14px;box-sizing:border-box;">← Назад в профиль</button>
+
+      <div class="field-card">
+        <label>Район / адрес, где вы работаете</label>
         ${
           hasValidLocation(user.location) && !profileAddressEditing
             ? `
@@ -7158,8 +7205,8 @@ function renderProfile() {
 
       <div class="section-title">Уведомления в Telegram</div>
       <div class="field-card">
-        <p class="order-meta">Бесплатно и без SMS: статус ваших заказов, а если укажете навыки ниже — пуши о новых подходящих заказах рядом.</p>
-        ${renderTelegramLinkCard('получать уведомления о заказах')}
+        <p class="order-meta">Бесплатно и без SMS: пуши о новых подходящих заказах рядом, как только укажете навыки ниже.</p>
+        ${renderTelegramLinkCard('получать уведомления о новых заказах рядом')}
       </div>
 
       <div class="section-title">Мои навыки</div>
@@ -7198,26 +7245,7 @@ function renderProfile() {
         </div>
       </div>
 
-      ${
-        isSupabaseConfigured()
-          ? `<button class="secondary-button" data-action="logout">Выйти из аккаунта</button>`
-          : `
-      <div class="section-title">Демо-вход</div>
-      <div class="field-card">
-        <p class="order-meta">Переключитесь на другого демо-пользователя, чтобы посмотреть сценарий с другой стороны (в проде — вход по номеру телефона).</p>
-        <select id="field-demo-user">
-          ${getUsers()
-            .map((u) => `<option value="${u.id}" ${u.id === state.currentUserId ? 'selected' : ''}>${escapeHtml(u.displayName)}</option>`)
-            .join('')}
-        </select>
-        <button class="secondary-button" data-action="switch-demo-user">Переключить</button>
-      </div>
-      <button class="secondary-button" data-action="reset-demo">Сбросить демо-данные</button>
-      `
-      }
-
       <div class="section-title">Документы</div>
-      <a href="/price-list.html" class="secondary-button" style="display:block; box-sizing:border-box; text-align:center; text-decoration:none;">Прайс-лист услуг</a>
       <a href="/oferta-dlya-ispolniteley.html" class="secondary-button" style="display:block; box-sizing:border-box; text-align:center; text-decoration:none;">Оферта для исполнителей</a>
     </div>
   `;
@@ -7354,7 +7382,7 @@ function render() {
     return;
   }
 
-  const screensRequiringUser = ['orders', 'profile', 'notifications', 'orderDetail'];
+  const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'notifications', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
     app.innerHTML = `
       ${renderTopbarNoUser()}
@@ -7385,6 +7413,7 @@ function render() {
   else if (state.screen === 'orderDetail') content = renderOrderDetail();
   else if (state.screen === 'notifications') content = renderNotifications();
   else if (state.screen === 'profile') content = renderProfile();
+  else if (state.screen === 'masterPanel') content = renderMasterPanel();
 
   app.innerHTML = `
     ${renderTopbar()}
@@ -8393,6 +8422,7 @@ async function handleAction(action, value) {
     case 'go-orders': return go('orders');
     case 'go-notifications': return go('notifications');
     case 'go-profile': return go('profile');
+    case 'go-master-panel': return go('masterPanel');
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'voice-toggle':
       return toggleVoiceRecording();
