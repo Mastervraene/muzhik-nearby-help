@@ -403,6 +403,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="masters">Мастера</button>
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
+    <button class="tab-btn" data-tab="payouts">Выплаты</button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -552,6 +553,21 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <div class="stats-note">Собирается автоматически каждую ночь в 00:00 по Москве (фоновая функция compute-daily-stats). Данные за сегодня появятся только после ближайшего ночного расчёта.</div>
     <div class="stats-table-wrap" id="stats-table-wrap"></div>
   </div>
+
+  <div class="tab-panel" id="panel-payouts">
+    <div class="stats-note">Начисления мастерам за подтверждённые заказы (70% от стоимости, 30% — комиссия площадки). Запись создаётся автоматически, когда заказчик подтверждает заказ. Площадка принимает полную сумму на счёт ИП и переводит мастеру отдельно, вручную, в течение 3–5 дней — здесь отмечается, что реально выплачено.</div>
+    <div class="toolbar">
+      <select id="payouts-status-filter">
+        <option value="">Все статусы</option>
+        <option value="pending">Ожидает выплаты</option>
+        <option value="paid">Оплачено</option>
+      </select>
+      <span class="count-hint" id="payouts-count"></span>
+      <button type="button" class="btn-sm ghost" id="payouts-create-for-order">Создать по заказу…</button>
+      <button type="button" class="btn-sm ghost" id="payouts-refresh">Обновить</button>
+    </div>
+    <div id="payouts-list"></div>
+  </div>
 </div>
 
 <script>
@@ -607,6 +623,16 @@ const SUPABASE_ANON_KEY = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
 // старое значение больше не действует ни в этом файле, ни в секрете на
 // сервере (поменяны синхронно).
 const ADMIN_NOTIFY_SECRET = '4c47682400cf37bf55c5ef4da657c87c63a6bcc7091e695a';
+
+// Секрет для Edge Function admin-payouts (вкладка «Выплаты» — список
+// начислений мастерам и отметка «оплачено»). Тот же принцип, что и у
+// ADMIN_NOTIFY_SECRET выше: значение ДОЛЖНО совпадать с тем, что задано на
+// сервере через `supabase secrets set ADMIN_PAYOUTS_SECRET=...`, иначе
+// вкладка будет отвечать «доступ запрещён». Не настоящая защита данных
+// (см. пояснение выше) — барьер от вызова функции напрямую с публичным
+// anon-ключом; сами деньги вообще не проходят через эту функцию, это
+// только бухгалтерская запись поверх заказа (см. worker_payouts).
+const ADMIN_PAYOUTS_SECRET = 'fbda3ba71e622775d4247798e2a96060f1c3b72bd36f2d48';
 
 // Ключ JS API Яндекс.Карт — ОТДЕЛЬНЫЙ от YANDEX_GEOCODER_API_KEY в
 // index.html (это разные продукты в одном кабинете разработчика Яндекса,
@@ -798,6 +824,30 @@ async function sendAdminNotification(chatIds, text) {
   return data || { configured: true, sent: 0, failed: [] };
 }
 
+// Вызов Edge Function admin-payouts (вкладка «Выплаты», см. панель ниже) —
+// action: 'list' | 'mark_paid' | 'create_for_order' (подробности действий
+// см. в самой функции, _auth_migration/admin-payouts.ts).
+async function callAdminPayouts(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-payouts`, {
+    method: 'POST',
+    headers: sbHeaders({ 'x-admin-payouts-secret': ADMIN_PAYOUTS_SECRET }),
+    body: JSON.stringify(Object.assign({ action }, extra || {})),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || !data || !data.ok) {
+    const reason = data?.error === 'forbidden'
+      ? 'секрет ADMIN_PAYOUTS_SECRET не совпадает с настройкой сервера'
+      : data?.error || `HTTP ${res.status}`;
+    throw new Error(`не удалось выполнить (${reason})`);
+  }
+  return data;
+}
+
 // Добавление строки (используется для записи исходящих сообщений в
 // telegram_messages — входящие пишет сама Edge Function telegram-webhook
 // сервисным ключом, это для симметрии видно в истории переписки).
@@ -872,6 +922,21 @@ function dbOrderToOrder(row) {
     // быть null — ассистент не настроен, сбой запроса, или заказ создан
     // до появления этой функции.
     formattedBrief: row.formatted_brief || null,
+    // Комментарии к оценке (звёзды — в customer_rating/worker_rating, тут
+    // только текст) и флаг «админ уже открывал карточку после этого
+    // отзыва» — см. orderCardHtml (баннер непрочитанного) и wireOrderCards
+    // (гасит флаг при открытии), просьба Sg от 18.09.2026.
+    customerReviewComment: row.customer_review_comment || '',
+    customerReviewSeenByAdmin: Boolean(row.customer_review_seen_by_admin),
+    workerReviewComment: row.worker_review_comment || '',
+    workerReviewSeenByAdmin: Boolean(row.worker_review_seen_by_admin),
+    // Время прибытия, названное мастером в форме «Буду через» на сайте
+    // (см. advanceToEnRoute/renderEtaPicker в index.html).
+    etaMinutes: row.eta_minutes ?? null,
+    etaAt: row.eta_at || null,
+    // Фото «до»/«после» работы мастером — для контроля качества.
+    beforePhotos: row.before_photos || [],
+    afterPhotos: row.after_photos || [],
   };
 }
 
@@ -989,6 +1054,170 @@ function renderStats() {
 }
 
 // -----------------------------------------------------------------------
+// Вкладка «Выплаты» (worker_payouts, см. admin-payouts.ts)
+// -----------------------------------------------------------------------
+async function loadPayouts() {
+  payoutsLoading = true;
+  renderPayouts();
+  try {
+    const data = await callAdminPayouts('list');
+    allPayouts = data.payouts || [];
+    payoutsLoaded = true;
+  } catch (err) {
+    document.getElementById('payouts-list').innerHTML = `<div class="empty-state">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    payoutsLoading = false;
+    renderPayouts();
+  }
+}
+
+function renderPayouts() {
+  const container = document.getElementById('payouts-list');
+  if (payoutsLoading && !allPayouts.length) {
+    container.innerHTML = '<div class="empty-state">Загрузка…</div>';
+    document.getElementById('payouts-count').textContent = '';
+    return;
+  }
+  let list = allPayouts;
+  if (payoutsStatusFilter) list = list.filter((p) => p.status === payoutsStatusFilter);
+  document.getElementById('payouts-count').textContent = list.length
+    ? `${list.length} записей, ожидает ${allPayouts.filter((p) => p.status === 'pending').reduce((s, p) => s + Number(p.amount || 0), 0)} ₽`
+    : '';
+  if (!list.length) {
+    container.innerHTML = '<div class="empty-state">Записей нет</div>';
+    return;
+  }
+  const sorted = [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  container.innerHTML = sorted.map((p) => payoutCardHtml(p)).join('');
+  sorted.forEach((p) => {
+    document.getElementById(`payout-head-${p.id}`).addEventListener('click', () => {
+      openPayoutId = openPayoutId === p.id ? null : p.id;
+      renderPayouts();
+    });
+    if (openPayoutId === p.id) wirePayoutForm(p);
+  });
+}
+
+function payoutCardHtml(p) {
+  const open = openPayoutId === p.id;
+  const isPaid = p.status === 'paid';
+  const title = p.orderTitle || (p.orderNumber ? `Заказ №${p.orderNumber}` : p.orderId);
+  return `
+    <div class="card">
+      <div class="card-head" id="payout-head-${p.id}">
+        <div class="card-head-main">
+          <p class="card-title">${escapeHtml(title)} ${isPaid ? '<span class="pill ok">оплачено</span>' : '<span class="pill warn">ожидает</span>'}</p>
+          <div class="card-meta">
+            <span>${p.amount} ₽</span>
+            <span>мастер: ${escapeHtml(userName(p.workerId))}</span>
+            ${isPaid ? `<span>выплачено ${fmtDate(p.paidAt)}</span>` : `<span>срок до ${fmtDate(p.dueAt)}</span>`}
+          </div>
+        </div>
+        <span class="chevron">${open ? '▲' : '▼'}</span>
+      </div>
+      ${open ? payoutFormHtml(p) : ''}
+    </div>
+  `;
+}
+
+function payoutFormHtml(p) {
+  const isPaid = p.status === 'paid';
+  return `
+    <div class="card-body open" id="payout-body-${p.id}">
+      <p class="form-section-label">Заказ</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>ID заказа</label>
+          <input type="text" disabled value="${escapeHtml(p.orderId)}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Начислено</label>
+          <input type="text" disabled value="${p.amount} ₽ (создано ${fmtDate(p.createdAt)})" />
+        </div>
+      </div>
+      ${
+        isPaid
+          ? `
+      <p class="form-section-label">Выплата</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>Сумма</label>
+          <input type="text" disabled value="${p.paidAmount ?? p.amount} ₽" />
+        </div>
+        <div class="field-sm dense">
+          <label>Когда</label>
+          <input type="text" disabled value="${escapeHtml(fmtDate(p.paidAt))}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Способ</label>
+          <input type="text" disabled value="${escapeHtml(p.paidMethod || '—')}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Куда</label>
+          <input type="text" disabled value="${escapeHtml(p.paidDestination || '—')}" />
+        </div>
+      </div>
+      ${p.adminNote ? `<p class="form-section-label">Заметка</p><p>${escapeHtml(p.adminNote)}</p>` : ''}
+      `
+          : `
+      <p class="form-section-label">Отметить оплаченным</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense">
+          <label>Сумма (₽)</label>
+          <input type="number" id="payout-amount-${p.id}" value="${p.amount}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Способ</label>
+          <input type="text" id="payout-method-${p.id}" placeholder="Например: перевод на карту" />
+        </div>
+        <div class="field-sm dense">
+          <label>Куда (реквизиты/телефон)</label>
+          <input type="text" id="payout-destination-${p.id}" placeholder="+7…" />
+        </div>
+        <div class="field-sm dense">
+          <label>Заметка (необязательно)</label>
+          <input type="text" id="payout-note-${p.id}" />
+        </div>
+      </div>
+      <div class="row-actions" style="margin-top:14px;">
+        <button class="btn-sm primary" id="mark-paid-${p.id}">Отметить оплаченным</button>
+        <span class="save-hint" id="mark-paid-hint-${p.id}">Сохранено ✓</span>
+      </div>
+      `
+      }
+    </div>
+  `;
+}
+
+function wirePayoutForm(p) {
+  const btn = document.getElementById(`mark-paid-${p.id}`);
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const amountRaw = document.getElementById(`payout-amount-${p.id}`).value;
+    const paidAmount = Number(amountRaw);
+    if (!paidAmount || paidAmount <= 0) { alert('Укажите сумму выплаты'); return; }
+    const paidMethod = document.getElementById(`payout-method-${p.id}`).value.trim();
+    const paidDestination = document.getElementById(`payout-destination-${p.id}`).value.trim();
+    const adminNote = document.getElementById(`payout-note-${p.id}`).value.trim();
+    const ok = confirm(`Отметить ${paidAmount} ₽ как выплаченные мастеру ${userName(p.workerId)}?`);
+    if (!ok) return;
+    btn.disabled = true;
+    btn.textContent = 'Сохраняю…';
+    try {
+      await callAdminPayouts('mark_paid', { payoutId: p.id, paidAmount, paidMethod, paidDestination, adminNote });
+      await loadPayouts();
+      openPayoutId = p.id;
+      renderPayouts();
+    } catch (err) {
+      alert('Не удалось сохранить: ' + err.message);
+      const freshBtn = document.getElementById(`mark-paid-${p.id}`);
+      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Отметить оплаченным'; }
+    }
+  });
+}
+
+// -----------------------------------------------------------------------
 // Состояние
 // -----------------------------------------------------------------------
 let allOrders = [];
@@ -996,6 +1225,11 @@ let allUsers = [];
 let allStats = [];
 let allSkills = [];
 let allMessages = [];
+let allPayouts = [];
+let payoutsLoaded = false; // грузим лениво, только при первом открытии вкладки «Выплаты»
+let payoutsLoading = false;
+let payoutsStatusFilter = '';
+let openPayoutId = null;
 let ordersStatusFilter = '';
 let ordersSearchQuery = '';
 let ordersGroupByCustomer = false;
@@ -1154,6 +1388,7 @@ function wireOrderCards(list) {
     head.addEventListener('click', () => {
       openOrderId = openOrderId === o.id ? null : o.id;
       renderOrders();
+      if (openOrderId === o.id) markOrderReviewsSeen(o);
     });
     if (openOrderId === o.id) {
       wireOrderForm(o);
@@ -1303,10 +1538,28 @@ async function requestClarification(o) {
   }
 }
 
+/**
+ * Гасит баннер непрочитанного отзыва при открытии карточки заказа (см.
+ * wireOrderCards) — тот же принцип, что markNotificationsSeen на сайте:
+ * прочитал = открыл карточку, отдельной кнопки «отметить прочитанным» нет.
+ * Best-effort — сбой не должен мешать просто посмотреть заказ.
+ */
+function markOrderReviewsSeen(o) {
+  const patch = {};
+  if (o.customerReviewComment && !o.customerReviewSeenByAdmin) patch.customer_review_seen_by_admin = true;
+  if (o.workerReviewComment && !o.workerReviewSeenByAdmin) patch.worker_review_seen_by_admin = true;
+  if (!Object.keys(patch).length) return;
+  if ('customer_review_seen_by_admin' in patch) o.customerReviewSeenByAdmin = true;
+  if ('worker_review_seen_by_admin' in patch) o.workerReviewSeenByAdmin = true;
+  updateRow('orders', o.id, patch).catch((err) => console.warn('[reviews] не удалось пометить прочитанным', err));
+}
+
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
   const nameDistrict = o.district ? `${customerName} · ${o.district}` : customerName;
+  const hasUnreadReview =
+    (o.customerReviewComment && !o.customerReviewSeenByAdmin) || (o.workerReviewComment && !o.workerReviewSeenByAdmin);
   return `
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
@@ -1314,6 +1567,7 @@ function orderCardHtml(o) {
           ${o.orderNumber ? `<p class="card-order-number">Заказ №${o.orderNumber}</p>` : ''}
           <p class="card-title">${escapeHtml(nameDistrict)}</p>
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
+          ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
             <span>${fmtDate(o.createdAt)}</span>
@@ -1370,6 +1624,53 @@ function formattedBriefHtml(brief) {
       <label>ТЗ для исполнителя (ассистент)</label>
       ${rows.map(([label, value]) => `<p style="margin:4px 0;"><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`).join('')}
       ${missing}
+    </div>
+  `;
+}
+
+/** То же самое, что formatEtaText в index.html — дублируется, т.к. admin.html отдельный файл. */
+function formatEtaTextAdmin(etaMinutes, etaAt) {
+  if (etaMinutes) return `Мастер будет в течение ${etaMinutes} минут.`;
+  if (!etaAt) return '';
+  const d = new Date(etaAt);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return `${time} ${date}`;
+}
+
+/** Фото «до»/«после» работы мастером (order.beforePhotos/afterPhotos) — те же миниатюры-лайтбокс, что и у фото заявки. */
+function orderQualityPhotosHtml(o, kind, label) {
+  const photos = (kind === 'before' ? o.beforePhotos : o.afterPhotos) || [];
+  if (!photos.length) return '';
+  return `
+    <div class="field-sm">
+      <label>${escapeHtml(label)}</label>
+      <div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;">${photos
+        .map(
+          (a, idx) =>
+            `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb-quality" data-order-id="${o.id}" data-photo-kind="${kind}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" />`
+        )
+        .join('')}</div>
+    </div>
+  `;
+}
+
+/** Текстовые отзывы заказчика о работе и мастера о заказчике — читаются на модерации, звёзды видны отдельно в списке статистики. */
+function orderReviewsHtml(o) {
+  if (!o.customerReviewComment && !o.workerReviewComment) return '';
+  return `
+    <div class="field-sm" style="background:#f6f8fa;border-radius:8px;padding:10px 12px;">
+      <label>Отзывы по заказу</label>
+      ${
+        o.customerReviewComment
+          ? `<p style="margin:4px 0;"><b>Заказчик о работе${typeof o.workerRating === 'number' ? ` (${o.workerRating}★)` : ''}:</b> ${escapeHtml(o.customerReviewComment)}</p>`
+          : ''
+      }
+      ${
+        o.workerReviewComment
+          ? `<p style="margin:4px 0;"><b>Мастер о заказчике${typeof o.customerRating === 'number' ? ` (${o.customerRating}★)` : ''}:</b> ${escapeHtml(o.workerReviewComment)}</p>`
+          : ''
+      }
     </div>
   `;
 }
@@ -1442,6 +1743,13 @@ function orderFormHtml(o) {
         </div>
       </div>
       ${formattedBriefHtml(o.formattedBrief)}
+      ${
+        // Время прибытия мастера («Буду через» на сайте) — видно только
+        // пока заказ ещё едет, дальше уже не актуально.
+        o.status === 'en_route' && o.etaAt
+          ? `<div class="field-sm"><label>Время прибытия мастера</label><p style="margin:4px 0;">${escapeHtml(formatEtaTextAdmin(o.etaMinutes, o.etaAt))}</p></div>`
+          : ''
+      }
       ${o.attachments && o.attachments.length
         ? `<div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${o.attachments
             .map(
@@ -1450,6 +1758,9 @@ function orderFormHtml(o) {
             )
             .join('')}</div>`
         : ''}
+      ${orderQualityPhotosHtml(o, 'before', 'Фото до')}
+      ${orderQualityPhotosHtml(o, 'after', 'Фото после')}
+      ${orderReviewsHtml(o)}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
       <div class="row-actions">
         <button class="btn-sm primary" id="save-order-${o.id}">Сохранить</button>
@@ -1484,6 +1795,20 @@ function wireOrderForm(o) {
       });
     });
   }
+  // Фото «до»/«после» работы мастером — тот же лайтбокс, но своя пара
+  // массивов (см. orderQualityPhotosHtml).
+  ['before', 'after'].forEach((kind) => {
+    const photos = (kind === 'before' ? o.beforePhotos : o.afterPhotos) || [];
+    if (!photos.length) return;
+    document
+      .querySelectorAll(`.order-photo-thumb-quality[data-order-id="${o.id}"][data-photo-kind="${kind}"]`)
+      .forEach((thumbEl) => {
+        thumbEl.addEventListener('click', () => {
+          const idx = Number(thumbEl.getAttribute('data-photo-index') || 0);
+          openLightbox(photos, idx);
+        });
+      });
+  });
   document.getElementById(`save-order-${o.id}`).addEventListener('click', async () => {
     const newStatus = document.getElementById(`f-status-${o.id}`).value;
     const statusChanged = newStatus !== o.status;
@@ -2734,6 +3059,7 @@ function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
+  if (tab === 'payouts' && !payoutsLoaded) loadPayouts();
 }
 
 // Переход по клику на точку карты — из балуна метки мастера/заказа сразу
@@ -2917,6 +3243,25 @@ function showApp() {
   });
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  });
+  document.getElementById('payouts-status-filter').addEventListener('change', (e) => {
+    payoutsStatusFilter = e.target.value;
+    renderPayouts();
+  });
+  document.getElementById('payouts-refresh').addEventListener('click', () => loadPayouts());
+  document.getElementById('payouts-create-for-order').addEventListener('click', async () => {
+    const orderId = prompt('ID заказа (UUID из таблицы orders), для которого создать запись о выплате:');
+    if (!orderId || !orderId.trim()) return;
+    try {
+      await callAdminPayouts('create_for_order', { orderId: orderId.trim() });
+      await loadPayouts();
+      alert('Готово — запись создана (или уже была создана ранее).');
+    } catch (err) {
+      const notEligible = /not_eligible/.test(err.message);
+      alert(notEligible
+        ? 'Заказ не подходит: не найден, без назначенного мастера или без выставленной финальной цены.'
+        : 'Не удалось создать запись: ' + err.message);
+    }
   });
   document.getElementById('logout-btn').addEventListener('click', () => {
     sessionStorage.removeItem(ADMIN_SESSION_KEY);
