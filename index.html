@@ -2108,7 +2108,10 @@ const TEMPLATES = {
   // «Ожидает оплаты») — отправляется из admin.html approveOrder().
   payment_required: (ctx) => `Ваш заказ одобрен, стоимость ${ctx.amount} ₽. Оплатите на сайте, чтобы начать поиск мастера: ${SITE_URL}`,
   worker_found: (ctx) => `Мастер найден: ${ctx.workerName}. Приедет в интервал ${ctx.timeWindow}.`,
-  worker_en_route: () => 'Мастер выехал к вам.',
+  // ctx.etaText — готовая фраза с временем прибытия (см. formatEtaText):
+  // «Мастер будет в течение N минут.» либо «Мастер будет в ЧЧ:ММ ДД.ММ.ГГГГ.
+  // Ожидайте и будьте на связи.» Фолбэк на случай старого/пустого ctx.
+  worker_en_route: (ctx) => (ctx && ctx.etaText) || 'Мастер выехал к вам.',
   work_started: () => 'Мастер начал работу.',
   work_completed: () => `Заказ выполнен. Пожалуйста, оцените качество работы: ${SITE_URL}`,
   issue_reported: () => 'По заказу зарегистрирована проблема, мы уже разбираемся.',
@@ -2594,6 +2597,12 @@ const cache = {
   // попытка завершилась ошибкой, см. refreshAvailableOrders.
   availableOrdersLoading: false,
   availableOrdersError: false,
+  // Записи баланса мастера (worker_payouts) — тоже не из initDb(), а с
+  // отдельной Edge Function worker-balance (см. refreshWorkerPayouts):
+  // таблица закрыта RLS полностью, обычным getRows() её не прочитать.
+  workerPayouts: [],
+  workerPayoutsLoading: false,
+  workerPayoutsError: false,
 };
 
 let onSyncError = () => {};
@@ -2728,6 +2737,15 @@ function dbOrderToOrder(row) {
     workerRating: row.worker_rating ?? null,
     customerRating: row.customer_rating ?? null,
     customerRatedAt: row.customer_rated_at || null,
+    // Комментарии к оценке — заказчик комментирует работу мастера,
+    // мастер комментирует заказчика (текстом, отдельно от звёзд).
+    // *_seen_by_admin гасится при открытии карточки заказа в админке
+    // (см. wireOrderCards в admin.html) — до этого на карточке баннер
+    // непрочитанного отзыва, тот же принцип, что у остальных уведомлений.
+    customerReviewComment: row.customer_review_comment || '',
+    customerReviewSeenByAdmin: Boolean(row.customer_review_seen_by_admin),
+    workerReviewComment: row.worker_review_comment || '',
+    workerReviewSeenByAdmin: Boolean(row.worker_review_seen_by_admin),
     // Структурированное ТЗ для исполнителя — сформировано ассистентом
     // (/format-brief) сразу при создании заказа, см. requestFormattedBrief().
     // Может быть null: ассистент не настроен, запрос не удался, или заказ
@@ -2737,6 +2755,19 @@ function dbOrderToOrder(row) {
     // { question, askedAt, answer, answeredAt } или null. См. STATUS_LABELS
     // .clarification_requested и submitClarificationAnswer().
     clarification: row.clarification || null,
+    // Время прибытия мастера, которое он сам указал при «Буду через» (см.
+    // advanceWorkerStatus/en_route-форму) — либо готовый пресет в минутах
+    // (etaMinutes: 5/10/20), либо точное время (etaMinutes: null,
+    // etaAt — выбранная дата-время). Показывается и мастеру, и заказчику
+    // на карточке заказа с момента en_route.
+    etaMinutes: row.eta_minutes ?? null,
+    etaAt: row.eta_at || null,
+    // Фото «до»/«после» работы — отдельно от attachments (те — фото
+    // проблемы от заказчика при создании заявки). «До» прикладывает мастер
+    // на шаге «На месте» (en_route → in_progress), «после» — на шаге
+    // «Завершил» (in_progress → completed). Для контроля качества.
+    beforePhotos: row.before_photos || [],
+    afterPhotos: row.after_photos || [],
   };
 }
 
@@ -2776,8 +2807,16 @@ function orderToDbOrder(order) {
     worker_rating: order.workerRating ?? null,
     customer_rating: order.customerRating ?? null,
     customer_rated_at: order.customerRatedAt || null,
+    customer_review_comment: order.customerReviewComment || null,
+    customer_review_seen_by_admin: order.customerReviewSeenByAdmin ?? false,
+    worker_review_comment: order.workerReviewComment || null,
+    worker_review_seen_by_admin: order.workerReviewSeenByAdmin ?? false,
     formatted_brief: order.formattedBrief || null,
     clarification: order.clarification || null,
+    eta_minutes: order.etaMinutes ?? null,
+    eta_at: order.etaAt || null,
+    before_photos: order.beforePhotos || [],
+    after_photos: order.afterPhotos || [],
   };
 }
 
@@ -3681,6 +3720,7 @@ function go(screen, extra = {}) {
   } else {
     stopAvailableOrdersPolling();
   }
+  if (screen === 'workerBalance') refreshWorkerPayouts();
 }
 
 // ---------------------------------------------------------------------
@@ -4830,15 +4870,189 @@ async function refreshAvailableOrders(isRetry) {
   if (state.screen === 'orders') render();
 }
 
+/**
+ * Загружает баланс мастера через Edge Function worker-balance (см.
+ * renderWorkerBalance) — тот же принцип авторизации sessionToken, что и
+ * refreshAvailableOrders. Вызывается при заходе на экран «Баланс».
+ */
+async function refreshWorkerPayouts(isRetry) {
+  const user = currentUser();
+  if (!isSupabaseConfigured() || !user) {
+    cache.workerPayouts = [];
+    cache.workerPayoutsError = false;
+    cache.workerPayoutsLoading = false;
+    return;
+  }
+  if (!isRetry) {
+    cache.workerPayoutsLoading = true;
+    if (state.screen === 'workerBalance') render();
+  }
+  let token = loadSessionToken();
+  if (!token) token = await issueSessionToken(user.id);
+  if (!token) {
+    cache.workerPayoutsError = true;
+    cache.workerPayoutsLoading = false;
+    if (state.screen === 'workerBalance') render();
+    return;
+  }
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/worker-balance`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ workerId: user.id, sessionToken: token }),
+    });
+    if (res.status === 401 && !isRetry) {
+      const freshToken = await issueSessionToken(user.id);
+      if (freshToken) return refreshWorkerPayouts(true);
+    }
+    if (!res.ok) throw new Error(`worker-balance failed: ${res.status}`);
+    const data = await res.json();
+    cache.workerPayouts = (data.payouts || []).map((p) => ({
+      id: p.id,
+      orderId: p.order_id,
+      orderNumber: p.order_number ?? null,
+      orderTitle: p.order_title || '',
+      amount: p.amount,
+      dueAt: p.due_at,
+      status: p.status,
+      paidAmount: p.paid_amount ?? null,
+      paidAt: p.paid_at || null,
+      paidMethod: p.paid_method || '',
+      paidDestination: p.paid_destination || '',
+      createdAt: p.created_at,
+    }));
+    cache.workerPayoutsError = false;
+  } catch (err) {
+    console.error('[worker-balance] не удалось обновить баланс', err);
+    cache.workerPayoutsError = true;
+  }
+  cache.workerPayoutsLoading = false;
+  if (state.screen === 'workerBalance') render();
+}
+
 function advanceWorkerStatus(orderId, nextStatus) {
   let order = getOrders().find((o) => o.id === orderId);
   order = transition(order, nextStatus);
   saveOrder(order);
-  const eventMap = { en_route: 'worker_en_route', in_progress: 'work_started', completed: 'work_completed' };
+  // en_route сюда больше не приходит — у него своя ETA-форма и своя
+  // функция перехода, см. advanceToEnRoute() ниже.
+  const eventMap = { in_progress: 'work_started', completed: 'work_completed' };
   if (eventMap[nextStatus]) {
     pushNotification(createNotification(order.customerId, 'customer', order.id, eventMap[nextStatus]));
   }
   render();
+}
+
+// Какой заказ сейчас показывает поле «Выбрать точное время» у ETA-формы
+// (см. renderEtaPicker) — id заказа или null, как profileAddressEditing/
+// ordersSortModalOpenFor у остальных мини-форм на весь экран не открытых.
+let etaCustomOpenFor = null;
+
+/**
+ * Текст уведомления заказчику про время прибытия — пресет в минутах
+ * («Мастер будет в течение 10 минут.») либо точное время
+ * («Мастер будет в 18:30 09.09.2026. Ожидайте и будьте на связи.»),
+ * см. TEMPLATES.worker_en_route и просьбу Sg от 18.09.2026.
+ */
+function formatEtaText(etaMinutes, etaAt) {
+  if (etaMinutes) return `Мастер будет в течение ${etaMinutes} минут.`;
+  if (!etaAt) return 'Мастер выехал к вам.';
+  const d = new Date(etaAt);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const date = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return `Мастер будет в ${time} ${date}. Ожидайте и будьте на связи.`;
+}
+
+/**
+ * Переход assigned → en_route с обязательным указанием времени прибытия
+ * (пресет в минутах либо точное время) — заменяет прежнюю мгновенную
+ * кнопку «Выехал». См. renderEtaPicker() за разметкой формы.
+ * @param {string} orderId
+ * @param {{minutes?: number, at?: string}} opts — ровно одно из двух
+ */
+function advanceToEnRoute(orderId, opts) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || !canTransition(order.status, 'en_route')) return;
+
+  let etaMinutes = null;
+  let etaAt = null;
+  if (opts && opts.minutes) {
+    etaMinutes = opts.minutes;
+    etaAt = new Date(Date.now() + opts.minutes * 60000).toISOString();
+  } else if (opts && opts.at) {
+    const parsed = new Date(opts.at);
+    if (Number.isNaN(parsed.getTime())) {
+      showToast('Выберите корректное время');
+      return;
+    }
+    etaAt = parsed.toISOString();
+  } else {
+    showToast('Укажите, через сколько будете, или выберите время');
+    return;
+  }
+
+  order = transition(order, 'en_route');
+  order.etaMinutes = etaMinutes;
+  order.etaAt = etaAt;
+  saveOrder(order);
+  etaCustomOpenFor = null;
+  pushNotification(
+    createNotification(order.customerId, 'customer', order.id, 'worker_en_route', {
+      etaText: formatEtaText(etaMinutes, etaAt),
+    })
+  );
+  render();
+}
+
+/** Разметка мини-формы «Буду через» на карточке заказа мастера (status === 'assigned'). */
+function renderEtaPicker(order) {
+  const presets = [5, 10, 20];
+  return `
+    <p class="order-meta">Буду через:</p>
+    <div class="chip-row">
+      ${presets.map((m) => `<button type="button" data-action="eta-preset" data-value="${order.id}:${m}">${m} мин</button>`).join('')}
+    </div>
+    <button type="button" class="secondary-button" data-action="eta-custom-toggle" data-value="${order.id}">🕐 Выбрать время…</button>
+    ${
+      etaCustomOpenFor === order.id
+        ? `
+      <input type="datetime-local" id="eta-custom-input-${order.id}" class="composer-textarea" />
+      <button type="button" class="primary-button" data-action="eta-custom-confirm" data-value="${order.id}">Подтвердить время</button>
+    `
+        : ''
+    }
+  `;
+}
+
+/**
+ * Фото «до»/«после» работы мастером — для контроля качества (просьба Sg от
+ * 18.09.2026). Тот же бакет/сжатие/лимит, что и у фото заявки от заказчика
+ * (см. handleFileSelection/uploadAttachment), просто отдельные массивы на
+ * заказе (order.beforePhotos/afterPhotos) и своя пара id для wireEvents.
+ * @param {import('./types.js').Order} order
+ * @param {'before'|'after'} kind
+ */
+function renderOrderPhotoForm(order, kind) {
+  const photos = (kind === 'before' ? order.beforePhotos : order.afterPhotos) || [];
+  const label = kind === 'before' ? 'Фото до начала работы' : 'Фото после выполнения';
+  return `
+    <div class="field-card" style="padding:10px 12px;">
+      <p class="order-meta" style="margin-bottom:6px;">${label}</p>
+      <div id="order-photos-${kind}-${order.id}" class="attachment-preview">
+        ${photos.map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
+      </div>
+      ${
+        !photos.length
+          ? `<div class="order-warning">Фото пока нет — приложите ${kind === 'before' ? 'перед началом' : 'после завершения'} работы, для контроля качества.</div>`
+          : ''
+      }
+      <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;">
+        📎 Прикрепить фото (до 5 штук)
+        <input id="order-photos-${kind}-file-${order.id}" type="file" accept="image/*" multiple style="display:none" />
+      </label>
+    </div>
+  `;
 }
 
 // Оплата. Доступна заказчику, когда администратор уже одобрил заказ и
@@ -4945,6 +5159,29 @@ async function notifyNearbyWorkers(orderId) {
   }
 }
 
+// Best-effort вызов create-worker-payout сразу после подтверждения заказа
+// заказчиком (см. confirmCompletion() ниже) — заводит запись в
+// worker_payouts (сколько причитается мастеру и к какому сроку, см.
+// renderWorkerBalance()). Безопасна для anon-ключа без секрета — сумма и
+// мастер считаются на сервере из уже существующего заказа, а не из тела
+// запроса (см. комментарий в create-worker-payout.ts). Сбой здесь не должен
+// мешать заказчику увидеть подтверждение заказа — на крайний случай есть
+// ручной триггер в admin.html («Выплаты» → создать по заказу).
+async function createWorkerPayout(orderId) {
+  if (!isSupabaseConfigured()) return;
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/create-worker-payout`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ orderId }),
+    });
+    if (!res.ok) console.warn('[confirmCompletion] create-worker-payout ответила ошибкой', res.status);
+  } catch (err) {
+    console.warn('[confirmCompletion] не удалось создать запись о выплате:', err);
+  }
+}
+
 // Ответ на уточнение администратора (см. admin.html requestClarification) —
 // возвращает заказ на модерацию (collecting_details), где админ уже видит
 // вопрос и этот ответ рядом и может одобрить заказ с ценой.
@@ -4985,6 +5222,7 @@ function confirmCompletion(orderId) {
     pushNotification(
       createNotification(order.assignedWorkerId, 'worker', order.id, 'order_confirmed_by_customer')
     );
+    createWorkerPayout(order.id);
   }
   render();
 }
@@ -4996,6 +5234,16 @@ function rateOrder(orderId, rating) {
   // рейтинг мастера) — нужно для дневной статистики (метрика «средний
   // рейтинг исполнителей за день»).
   order.workerRating = rating;
+  // Комментарий заказчика к выполненной работе — читаем textarea прямо
+  // сейчас, пока она ещё в DOM (см. renderOrderDetail): непустой текст
+  // помечает отзыв непрочитанным для админки (см. orderCardHtml в
+  // admin.html — баннер, гасится при открытии карточки заказа).
+  const commentEl = document.getElementById(`rating-comment-order-${orderId}`);
+  const comment = commentEl ? commentEl.value.trim() : '';
+  if (comment) {
+    order.customerReviewComment = comment;
+    order.customerReviewSeenByAdmin = false;
+  }
   saveOrder(order);
   if (order.assignedWorkerId) {
     const worker = getUsers().find((u) => u.id === order.assignedWorkerId);
@@ -5019,7 +5267,13 @@ function rateCustomer(orderId, rating) {
   // (order.status ей не затрагивается) — это отдельная, необязательная
   // оценка, которая нужна для дневной статистики (метрика «средний
   // рейтинг заказчиков за день»).
+  const commentEl = document.getElementById(`rating-comment-customer-${orderId}`);
+  const comment = commentEl ? commentEl.value.trim() : '';
   order = { ...order, customerRating: rating, customerRatedAt: new Date().toISOString() };
+  if (comment) {
+    order.workerReviewComment = comment;
+    order.workerReviewSeenByAdmin = false;
+  }
   saveOrder(order);
   const customer = getUsers().find((u) => u.id === order.customerId);
   if (customer) {
@@ -6279,6 +6533,7 @@ function renderAvatarMenu(user, unreadCount) {
   const items = [
     { action: 'go-profile', icon: '◍', label: 'Профиль' },
     { action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' },
+    { action: 'go-worker-balance', icon: '💰', label: 'Баланс' },
     { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
@@ -6407,7 +6662,7 @@ function renderBottomNav() {
       ${tabs
         .map(
           ([key, icon, label]) => `
-        <button data-action="go-${key}" class="${state.screen === key || (key === 'profile' && state.screen === 'masterPanel') ? 'active' : ''}">
+        <button data-action="go-${key}" class="${state.screen === key || (key === 'profile' && (state.screen === 'masterPanel' || state.screen === 'workerBalance')) ? 'active' : ''}">
           <span class="nav-icon">${icon}</span>${label}
         </button>`
         )
@@ -6543,6 +6798,26 @@ function orderCardHtml(order, { viewer }) {
           : typeof order.finalPrice === 'number'
           ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
+      }
+      ${
+        // Контакт заказчика — прямо в карточке списка «Заказы, которые я
+        // выполняю», а не только после открытия деталей заказа (просьба Sg
+        // от 18.09.2026: мастеру неудобно тыкать в каждый заказ, чтобы
+        // увидеть, кому звонить). Тот же ensureCustomerContact, что и в
+        // renderOrderDetail — если контакта ещё нет в кэше, сам подгрузит
+        // и вызовет render() по готовности.
+        viewer === 'worker' && order.assignedWorkerId === state.currentUserId
+          ? (() => {
+              const contact = ensureCustomerContact(order.customerId);
+              if (contact === 'loading' || contact === null) {
+                return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
+              }
+              if (contact === 'error') {
+                return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
+              }
+              return `<p class="order-meta"><span>${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
+            })()
+          : ''
       }
       ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
       ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
@@ -6958,15 +7233,33 @@ function renderOrderDetail() {
   if (iCanAccept) {
     actions = `<button class="primary-button" data-action="accept-order" data-value="${order.id}">Принять заказ</button>`;
   } else if (isAssignedWorker) {
-    if (canTransition(order.status, 'en_route')) actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:en_route">Выехал</button>`;
-    if (canTransition(order.status, 'in_progress')) actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">Начал работу</button>`;
-    if (canTransition(order.status, 'completed')) actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
+    // «Буду через» — вместо мгновенной кнопки «Выехал» мастер называет
+    // время, и заказчик получает его в уведомлении (см. advanceToEnRoute).
+    // Пресеты 5/10/20 минут — самое частое; «Выбрать время» — точное время
+    // прибытия отдельным полем (см. etaCustomOpenFor/renderEtaPicker).
+    if (canTransition(order.status, 'en_route')) actions += renderEtaPicker(order);
+    // «На месте» — мастер приступает к работе; форма фото «до» прикреплена
+    // именно к этому шагу (см. renderOrderPhotoForm), чтобы фиксация
+    // состояния «до» происходила до начала работы, а не постфактум.
+    if (canTransition(order.status, 'in_progress')) {
+      actions += renderOrderPhotoForm(order, 'before');
+      actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">На месте, приступаю</button>`;
+    }
+    if (canTransition(order.status, 'completed')) {
+      actions += renderOrderPhotoForm(order, 'after');
+      actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
+    }
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
     // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
+    // Комментарий — необязательный текст рядом со звёздами; читается из
+    // textarea в момент клика по звезде (см. rateCustomer()), а не через
+    // отдельный шаг «сначала звезда, потом отправить» — так его не теряет
+    // повторный render() между вводом и оценкой.
     if (['completed', 'confirmed', 'rated'].includes(order.status) && !order.customerRating) {
       actions += `
         <p class="order-meta">Оцените заказчика:</p>
+        <textarea id="rating-comment-customer-${order.id}" class="composer-textarea" placeholder="Комментарий по заказчику (необязательно)…" rows="2"></textarea>
         <div class="chip-row">
           ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-customer" data-value="${order.id}:${n}">${n}★</button>`).join('')}
         </div>
@@ -7001,6 +7294,7 @@ function renderOrderDetail() {
     } else if (order.status === 'confirmed') {
       actions = `
         <p class="order-meta">Оцените работу:</p>
+        <textarea id="rating-comment-order-${order.id}" class="composer-textarea" placeholder="Комментарий по работе (необязательно)…" rows="2"></textarea>
         <div class="chip-row">
           ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-order" data-value="${order.id}:${n}">${n}★</button>`).join('')}
         </div>
@@ -7061,6 +7355,15 @@ function renderOrderDetail() {
         ${
           order.desiredDate || order.timeWindow
             ? `<p class="order-meta"><span>${escapeHtml(formatOrderDateLabel(order.desiredDate))} ${escapeHtml(order.timeWindow)}</span></p>`
+            : ''
+        }
+        ${
+          // Время прибытия, которое мастер назвал в форме «Буду через» (см.
+          // renderEtaPicker/advanceToEnRoute) — видно и заказчику, и самому
+          // мастеру (чтобы помнить, что обещал), пока заказ не сдвинулся
+          // дальше en_route.
+          order.status === 'en_route' && order.etaAt
+            ? `<p class="order-meta"><b>${escapeHtml(formatEtaText(order.etaMinutes, order.etaAt))}</b></p>`
             : ''
         }
         ${
@@ -7267,6 +7570,72 @@ function renderMasterPanel() {
   `;
 }
 
+/** Экран «Баланс» (пункт меню под аватаркой мастера) — начисления за выполненные заказы, см. cache.workerPayouts / refreshWorkerPayouts(). */
+function renderWorkerBalance() {
+  const payouts = cache.workerPayouts || [];
+  const pending = payouts.filter((p) => p.status === 'pending');
+  const paid = payouts.filter((p) => p.status === 'paid');
+  const pendingTotal = pending.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const paidTotal = paid.reduce((sum, p) => sum + (p.paidAmount ?? p.amount ?? 0), 0);
+
+  return `
+    <div class="screen">
+      <div class="section-title">Баланс</div>
+      <button type="button" class="secondary-button" data-action="go-profile" style="margin-bottom:14px;box-sizing:border-box;">← Назад в профиль</button>
+
+      <div class="field-card">
+        <p class="order-meta">Здесь — начисления за выполненные заказы. Площадка принимает оплату целиком на счёт ИП, а с мастерами рассчитывается отдельно, вручную, в течение 3–5 дней после подтверждения заказа заказчиком.</p>
+        <div class="composer-field-inline" style="margin-top:10px;">
+          <div>
+            <p class="order-meta" style="margin:0;">Ожидает выплаты</p>
+            <p style="font-size:20px;font-weight:700;margin:2px 0 0;">${pendingTotal} ₽</p>
+          </div>
+          <div>
+            <p class="order-meta" style="margin:0;">Выплачено всего</p>
+            <p style="font-size:20px;font-weight:700;margin:2px 0 0;">${paidTotal} ₽</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">История</div>
+      ${
+        cache.workerPayoutsLoading && !payouts.length
+          ? `<div class="empty-state">Загрузка…</div>`
+          : cache.workerPayoutsError && !payouts.length
+          ? `<div class="available-orders-error">Не удалось загрузить баланс — проверьте соединение и откройте раздел ещё раз.</div>`
+          : payouts.length
+          ? payouts.map((p) => workerPayoutCardHtml(p)).join('')
+          : `<div class="empty-state">Пока нет начислений — они появятся здесь после подтверждённых заказов</div>`
+      }
+    </div>
+  `;
+}
+
+/** Карточка одной выплаты в renderWorkerBalance(). */
+function workerPayoutCardHtml(p) {
+  const isPaid = p.status === 'paid';
+  const title = p.orderTitle || (p.orderNumber ? `Заказ №${p.orderNumber}` : 'Заказ');
+  return `
+    <div class="order-card">
+      ${p.orderNumber ? `<p class="order-number-tag">№${p.orderNumber}</p>` : ''}
+      <p><b>${escapeHtml(title)}</b></p>
+      <div class="order-meta">
+        <span class="status-pill ${isPaid ? '' : 'muted'}">${isPaid ? 'Выплачено' : 'Ожидает'}</span>
+        <span>${isPaid ? p.paidAmount ?? p.amount : p.amount} ₽</span>
+      </div>
+      ${
+        isPaid
+          ? `<p class="order-meta">
+               <span>Выплачено ${p.paidAt ? new Date(p.paidAt).toLocaleDateString('ru-RU') : ''}</span>
+               ${p.paidMethod ? `<span>${escapeHtml(p.paidMethod)}</span>` : ''}
+               ${p.paidDestination ? `<span>${escapeHtml(p.paidDestination)}</span>` : ''}
+             </p>`
+          : `<p class="order-meta"><span>Ожидаемая выплата до ${new Date(p.dueAt).toLocaleDateString('ru-RU')}</span></p>`
+      }
+    </div>
+  `;
+}
+
 function renderBooting() {
   return `<div class="screen"><div class="empty-state">Загрузка…</div></div>`;
 }
@@ -7398,7 +7767,7 @@ function render() {
     return;
   }
 
-  const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'notifications', 'orderDetail'];
+  const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'workerBalance', 'notifications', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
     app.innerHTML = `
       ${renderTopbarNoUser()}
@@ -7430,6 +7799,7 @@ function render() {
   else if (state.screen === 'notifications') content = renderNotifications();
   else if (state.screen === 'profile') content = renderProfile();
   else if (state.screen === 'masterPanel') content = renderMasterPanel();
+  else if (state.screen === 'workerBalance') content = renderWorkerBalance();
 
   app.innerHTML = `
     ${renderTopbar()}
@@ -8171,6 +8541,30 @@ function wireEvents() {
     });
   }
 
+  // Фото «до»/«после» работы мастером (см. renderOrderPhotoForm) — те же
+  // id-пары, что и у quick-review выше, просто на экране заказа и с
+  // сохранением сразу на order.beforePhotos/afterPhotos (см. saveOrder).
+  if (state.screen === 'orderDetail') {
+    const openOrder = getOrders().find((o) => o.id === state.openOrderId);
+    if (openOrder) {
+      ['before', 'after'].forEach((kind) => {
+        const fileEl = document.getElementById(`order-photos-${kind}-file-${openOrder.id}`);
+        const containerEl = document.getElementById(`order-photos-${kind}-${openOrder.id}`);
+        if (!fileEl || !containerEl) return;
+        fileEl.addEventListener('change', () => {
+          const files = Array.from(fileEl.files);
+          const key = kind === 'before' ? 'beforePhotos' : 'afterPhotos';
+          const holder = { value: openOrder[key] || [] };
+          handleFileSelection(files, holder, containerEl, () => {
+            openOrder[key] = holder.value;
+            saveOrder(openOrder);
+            render();
+          });
+        });
+      });
+    }
+  }
+
   // Карта подтверждения точки (renderCompose → quickReview) — есть в DOM,
   // только пока открыт этот шаг композера (initQuickReviewMap сама
   // проверяет наличие #quick-review-map и ничего не делает на других
@@ -8439,6 +8833,7 @@ async function handleAction(action, value) {
     case 'go-notifications': return go('notifications');
     case 'go-profile': return go('profile');
     case 'go-master-panel': return go('masterPanel');
+    case 'go-worker-balance': return go('workerBalance');
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'voice-toggle':
       return toggleVoiceRecording();
@@ -8612,6 +9007,22 @@ async function handleAction(action, value) {
     case 'advance-order': {
       const [orderId, next] = value.split(':');
       return advanceWorkerStatus(orderId, next);
+    }
+    case 'eta-preset': {
+      const [orderId, minutes] = value.split(':');
+      return advanceToEnRoute(orderId, { minutes: Number(minutes) });
+    }
+    case 'eta-custom-toggle':
+      etaCustomOpenFor = etaCustomOpenFor === value ? null : value;
+      return render();
+    case 'eta-custom-confirm': {
+      const orderId = value;
+      const input = document.getElementById(`eta-custom-input-${orderId}`);
+      if (!input || !input.value) {
+        showToast('Выберите время');
+        return;
+      }
+      return advanceToEnRoute(orderId, { at: input.value });
     }
     case 'report-issue':
       return reportIssue(value);
