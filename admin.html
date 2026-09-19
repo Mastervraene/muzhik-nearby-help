@@ -781,14 +781,40 @@ function sbHeaders(extra) {
   }, extra || {});
 }
 
+/**
+ * Обёртка над fetch с одним автоматическим повтором при явно временных
+ * сбоях — обрыв соединения (fetch бросает TypeError до получения ответа) или
+ * 5xx от сервера/прокси. Именно из-за таких сбоев сохранение в админке
+ * раньше срабатывало «со второго раза», например одобрение заказа с ценой —
+ * просьба Sg от 19.09.2026. 4xx не повторяем — retry их не исправит.
+ */
+async function fetchRetry(url, options, retries = 1) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (!res.ok && res.status >= 500 && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function getRows(table, query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query || 'select=*'}`, { headers: sbHeaders() });
+  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?${query || 'select=*'}`, { headers: sbHeaders() });
   if (!res.ok) throw new Error(`GET ${table} failed: ${res.status} ${await res.text()}`);
   return res.json();
 }
 
 async function updateRow(table, id, patch) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: sbHeaders({ Prefer: 'return=representation' }),
     body: JSON.stringify(patch),
@@ -852,7 +878,7 @@ async function callAdminPayouts(action, extra) {
 // telegram_messages — входящие пишет сама Edge Function telegram-webhook
 // сервисным ключом, это для симметрии видно в истории переписки).
 async function insertRow(table, data) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
     headers: sbHeaders({ Prefer: 'return=representation' }),
     body: JSON.stringify(data),
@@ -866,7 +892,7 @@ async function insertRow(table, data) {
 // успешного получателя за один запрос вместо N).
 async function insertRows(table, rows) {
   if (!rows.length) return [];
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}`, {
     method: 'POST',
     headers: sbHeaders({ Prefer: 'return=representation' }),
     body: JSON.stringify(rows),
@@ -877,7 +903,7 @@ async function insertRows(table, rows) {
 
 async function deleteRow(table, id, byField) {
   const field = byField || 'id';
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${field}=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?${field}=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: sbHeaders({ Prefer: 'return=minimal' }),
   });
@@ -1410,6 +1436,13 @@ function wireOrderCards(list) {
   });
 }
 
+// Черновик суммы по заказу, который ещё не удалось сохранить — если
+// approveOrder упадёт (обрыв сети/VPN — с ретраем в fetchRetry такое реже,
+// но полностью не исключено), при повторном клике подставляем именно то,
+// что админ уже набрал, а не старое предложенное значение, — чтобы не
+// перепечатывать сумму заново (просьба Sg от 19.09.2026).
+const pendingApprovePriceDrafts = {};
+
 // Первичная модерация: одобрение заказа со статуса «На проверке»
 // (collecting_details) переводит его в estimate_ready — этот статус
 // теперь означает «Ожидает оплаты», а не мгновенный проходной пункт, как
@@ -1422,7 +1455,7 @@ function wireOrderCards(list) {
 // не тратим уведомление о поиске мастера на заказ, который клиент в итоге
 // не оплатит/отклонит.
 async function approveOrder(o) {
-  const suggested = o.finalPrice ?? o.estimate?.min ?? '';
+  const suggested = pendingApprovePriceDrafts[o.id] ?? o.finalPrice ?? o.estimate?.min ?? '';
   const priceRaw = prompt('Финальная цена заказа для клиента (₽):', suggested === '' ? '' : String(suggested));
   if (priceRaw === null) return; // отменено
   const finalPrice = Number(String(priceRaw).replace(',', '.').trim());
@@ -1430,6 +1463,7 @@ async function approveOrder(o) {
     alert('Введите корректную сумму в рублях');
     return;
   }
+  pendingApprovePriceDrafts[o.id] = priceRaw;
 
   const btn = document.getElementById(`approve-order-${o.id}`);
   if (btn) {
@@ -1461,9 +1495,10 @@ async function approveOrder(o) {
       console.warn('[approveOrder] не удалось отправить уведомление об оплате', notifyErr);
     }
 
+    delete pendingApprovePriceDrafts[o.id]; // сохранилось — черновик суммы больше не нужен
     await loadData({ keepOpen: true });
   } catch (err) {
-    alert('Не удалось одобрить заказ: ' + err.message);
+    alert('Не удалось одобрить заказ: ' + err.message + '\nНажмите «Одобрить» ещё раз — сумма уже подставится сама.');
     const freshBtn = document.getElementById(`approve-order-${o.id}`);
     if (freshBtn) {
       freshBtn.disabled = false;
