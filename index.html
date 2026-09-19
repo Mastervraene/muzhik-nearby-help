@@ -2189,12 +2189,41 @@ function headers(extra = {}) {
 }
 
 /**
+ * Обёртка над fetch с одним автоматическим повтором при явно временных
+ * сбоях — обрыв соединения (fetch бросает TypeError до получения ответа,
+ * например при обрыве VPN/мобильной сети) или 5xx от сервера/прокси
+ * (Supabase/Cloudflare временно недоступны). Именно из-за таких сбоев
+ * сохранение раньше срабатывало «со второго раза» — просьба Sg от
+ * 19.09.2026. 4xx (неверные данные, RLS и т.п.) не повторяем — retry их не
+ * исправит, а для не-идемпотентного POST (insertRow) лишний повтор такой
+ * ошибки не нужен.
+ */
+async function fetchRetry(url, options, retries = 1) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (!res.ok && res.status >= 500 && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
  * @param {string} table
  * @param {string} [query] — например "select=*&order=created_at.desc"
  */
 async function getRows(table, query = 'select=*') {
   const { url } = getConfig();
-  const res = await fetch(`${url}/rest/v1/${table}?${query}`, {
+  const res = await fetchRetry(`${url}/rest/v1/${table}?${query}`, {
     headers: headers(),
   });
   if (!res.ok) {
@@ -2210,7 +2239,7 @@ async function getRows(table, query = 'select=*') {
  */
 async function insertRow(table, row) {
   const { url } = getConfig();
-  const res = await fetch(`${url}/rest/v1/${table}`, {
+  const res = await fetchRetry(`${url}/rest/v1/${table}`, {
     method: 'POST',
     headers: headers({ Prefer: 'return=representation' }),
     body: JSON.stringify(row),
@@ -2229,7 +2258,7 @@ async function insertRow(table, row) {
  */
 async function updateRow(table, id, patch) {
   const { url } = getConfig();
-  const res = await fetch(`${url}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+  const res = await fetchRetry(`${url}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: headers({ Prefer: 'return=representation' }),
     body: JSON.stringify(patch),
@@ -5185,18 +5214,56 @@ async function createWorkerPayout(orderId) {
 // Ответ на уточнение администратора (см. admin.html requestClarification) —
 // возвращает заказ на модерацию (collecting_details), где админ уже видит
 // вопрос и этот ответ рядом и может одобрить заказ с ценой.
-function submitClarificationAnswer(orderId) {
+//
+// Раньше это была синхронная функция: локальный статус менялся и тост
+// «Ответ отправлен» показывался СРАЗУ, а сохранение в Supabase уходило в
+// фоне через saveOrder() — и если оно падало (обрыв сети/VPN), ошибка
+// глушилась молча (onSyncError так и не был никем подписан, см.
+// reportError), а textarea уже исчезала с экрана вместе с вопросом. Человек
+// видел «успех», но на сервере ничего не менялось — после обновления
+// страницы уточнение оказывалось не отправлено, и его приходилось писать
+// заново (жалоба Sg от 19.09.2026). Теперь ждём реального ответа сервера:
+// статус меняем и тост показываем только при подтверждённом успехе, а при
+// сбое текст остаётся в поле и кнопка снова активна — можно просто нажать
+// «Отправить» ещё раз, не перепечатывая ответ.
+async function submitClarificationAnswer(orderId) {
   const textarea = document.getElementById(`clarification-answer-${orderId}`);
   const answer = textarea ? textarea.value.trim() : '';
   if (!answer) {
     showToast('Введите ответ перед отправкой');
     return;
   }
-  let order = getOrders().find((o) => o.id === orderId);
+  const order = getOrders().find((o) => o.id === orderId);
   if (!order || order.status !== 'clarification_requested') return;
-  order.clarification = { ...(order.clarification || {}), answer, answeredAt: new Date().toISOString() };
-  order = transition(order, 'collecting_details');
-  saveOrder(order);
+
+  const submitBtn = document.querySelector(
+    `[data-action="submit-clarification"][data-value="${orderId}"]`
+  );
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Отправляем…';
+  }
+
+  const updated = transition(
+    { ...order, clarification: { ...(order.clarification || {}), answer, answeredAt: new Date().toISOString() } },
+    'collecting_details'
+  );
+
+  if (isSupabaseConfigured()) {
+    try {
+      await updateRow('orders', orderId, orderToDbOrder(updated));
+    } catch (err) {
+      console.error('[submitClarificationAnswer] не удалось отправить ответ', err);
+      showToast('Не удалось отправить ответ — проверьте соединение и нажмите «Отправить» ещё раз');
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Отправить ответ';
+      }
+      return; // ответ и статус не трогаем — текст остаётся в поле
+    }
+  }
+
+  saveOrder(updated);
   showToast('Ответ отправлен — заказ снова на проверке у администратора');
   render();
 }
