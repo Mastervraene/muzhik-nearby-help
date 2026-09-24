@@ -1778,14 +1778,24 @@ const ALLOWED_TRANSITIONS = {
   estimate_ready: ['paid', 'cancelled'],
   paid: ['searching', 'cancelled'],
   searching: ['assigned', 'cancelled'],
-  assigned: ['en_route', 'cancelled', 'issue_reported'],
+  // awaiting_part из assigned/in_progress — мастер приехал, но деталь
+  // (запчасть для ремонта техники) не подошла или заказчик её ещё не
+  // купил: работы не выполнены, это НЕ «есть проблема» (issue_reported,
+  // которая про совсем другое — например, невозможность связаться с
+  // заказчиком), а именно ожидание материала (см. reportDiagnosisOnly).
+  assigned: ['en_route', 'cancelled', 'issue_reported', 'awaiting_part'],
   en_route: ['in_progress', 'issue_reported', 'cancelled'],
-  in_progress: ['completed', 'issue_reported'],
+  in_progress: ['completed', 'issue_reported', 'awaiting_part'],
   completed: ['confirmed', 'issue_reported'],
   confirmed: ['rated'],
   rated: [],
   cancelled: [],
   issue_reported: ['searching', 'cancelled', 'in_progress', 'assigned'],
+  // Заказчик подтверждает готовность (деталь куплена и на руках, см.
+  // confirmPartReady) — заказ возвращается в общий пул поиска мастера,
+  // с сохранённой лентой диагностики (diagnosis_log), так что новый (или
+  // тот же) мастер видит всю историю, а не начинает разбираться с нуля.
+  awaiting_part: ['searching', 'cancelled'],
 };
 
 class InvalidTransitionError extends Error {
@@ -2119,6 +2129,9 @@ const TEMPLATES = {
   order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_cancelled: () => 'Заказ отменён или изменён заказчиком.',
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
+  // Мастер приехал, но деталь не подошла — только диагностика, работы не
+  // выполнены (см. reportDiagnosisOnly). ctx.text — комментарий мастера.
+  diagnosis_only: (ctx) => `Мастер приехал, но деталь не подошла — нужна диагностика: «${ctx.text}». Уточните нужную деталь и нажмите «Деталь готова» в заказе, когда она будет на руках: ${SITE_URL}`,
 };
 
 /**
@@ -2797,6 +2810,18 @@ function dbOrderToOrder(row) {
     // «Завершил» (in_progress → completed). Для контроля качества.
     beforePhotos: row.before_photos || [],
     afterPhotos: row.after_photos || [],
+    // Заказы на ремонт техники «с деталью» (продумано с Sg 24.09.2026) —
+    // модель неисправного устройства (необязательное поле, заполняется по
+    // ходу заказа, не при создании — см. renderDeviceModelBlock), история
+    // её изменений (кто/когда — на случай ошибки при вводе), открытая
+    // лента диагностики (комментарии заказчика/мастеров, видна всем,
+    // включая мастеров, ещё не взявших заказ) и аудит-лог ручных
+    // возвратов (когда оплачен был ремонт, а по факту — только визит
+    // диагностики, см. admin.html).
+    deviceModel: row.device_model || '',
+    deviceModelHistory: row.device_model_history || [],
+    diagnosisLog: row.diagnosis_log || [],
+    refunds: row.refunds || [],
   };
 }
 
@@ -2846,6 +2871,10 @@ function orderToDbOrder(order) {
     eta_at: order.etaAt || null,
     before_photos: order.beforePhotos || [],
     after_photos: order.afterPhotos || [],
+    device_model: order.deviceModel || null,
+    device_model_history: order.deviceModelHistory || [],
+    diagnosis_log: order.diagnosisLog || [],
+    refunds: order.refunds || [],
   };
 }
 
@@ -3645,6 +3674,7 @@ const STATUS_LABELS = {
   rated: 'Завершено и оценено',
   cancelled: 'Отменено',
   issue_reported: 'Есть проблема',
+  awaiting_part: 'Ждём деталь от заказчика',
 };
 
 // Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
@@ -4162,6 +4192,54 @@ function submitEditName(value) {
     saveUser({ ...user, displayName: trimmed });
   }
   editNameState = null;
+  render();
+}
+
+// ---------------------------------------------------------------------
+// Изменение модели неисправного устройства на заказе (см. миграцию 007 —
+// device_model/device_model_history) — тот же паттерн всплывающего окна,
+// что и editNameState выше. Редактировать может заказчик и назначенный
+// мастер (см. renderOrderDetail) — на каждое изменение пишется запись в
+// device_model_history (кто/когда/что было), чтобы при ошибке в названии
+// можно было понять, кто именно ошибся (Sg 24.09.2026: «иначе кто-то
+// ошибется и мы не узнаем, кто неправильно ввел»).
+// ---------------------------------------------------------------------
+let editDeviceModelState = null;
+
+function openEditDeviceModel(orderId) {
+  const order = getOrders().find((o) => o.id === orderId);
+  if (!order) return;
+  editDeviceModelState = { orderId, value: order.deviceModel || '', error: '' };
+  render();
+}
+
+function cancelEditDeviceModel() {
+  editDeviceModelState = null;
+  render();
+}
+
+function submitEditDeviceModel(value) {
+  if (!editDeviceModelState) return;
+  const trimmed = (value || '').trim();
+  let order = getOrders().find((o) => o.id === editDeviceModelState.orderId);
+  if (!order) {
+    editDeviceModelState = null;
+    return render();
+  }
+  if (trimmed !== (order.deviceModel || '')) {
+    const user = currentUser();
+    const role = order.customerId === state.currentUserId ? 'customer' : 'worker';
+    order = {
+      ...order,
+      deviceModel: trimmed,
+      deviceModelHistory: [
+        ...(order.deviceModelHistory || []),
+        { value: trimmed, byRole: role, byName: user?.displayName || '', at: new Date().toISOString() },
+      ],
+    };
+    saveOrder(order);
+  }
+  editDeviceModelState = null;
   render();
 }
 
@@ -5293,6 +5371,85 @@ function reportIssue(orderId) {
   render();
 }
 
+// ---------------------------------------------------------------------
+// Заказы «с деталью» (ремонт техники — нужна диагностика и покупка
+// запчасти заказчиком, см. миграцию 007 и diagnosisLogHtml выше).
+// Продумано с Sg 24.09.2026 в несколько заходов.
+// ---------------------------------------------------------------------
+
+/**
+ * Мастер приехал, но деталь не подошла (или заказчик её ещё не купил) —
+ * работа не выполнена. Это НЕ «есть проблема» (см. reportIssue выше) —
+ * отдельный статус awaiting_part именно про ожидание материала. Коммент
+ * обязателен: без него следующий мастер (или этот же, вернувшись позже)
+ * не поймёт, что уже проверено — «весь путь решения проблемы должен быть
+ * виден и открыт для новых мастеров» (Sg). Мастер с заказа снимается —
+ * заказ вернётся в общий пул, только когда заказчик подтвердит готовность
+ * (см. confirmPartReady), с сохранённой лентой диагностики.
+ */
+function reportDiagnosisOnly(orderId, comment) {
+  const trimmed = (comment || '').trim();
+  if (!trimmed) {
+    showToast('Опишите, что выяснилось, — без этого следующий мастер не поймёт, что уже проверено');
+    return;
+  }
+  let order = getOrders().find((o) => o.id === orderId);
+  const worker = currentUser();
+  order = transition(order, 'awaiting_part');
+  order.diagnosisLog = [
+    ...(order.diagnosisLog || []),
+    { authorRole: 'worker', authorName: worker?.displayName || '', text: trimmed, at: new Date().toISOString() },
+  ];
+  order.assignedWorkerId = null;
+  saveOrder(order);
+  pushNotification(createNotification(order.customerId, 'customer', order.id, 'diagnosis_only', { text: trimmed }));
+  showToast('Отмечено: только диагностика. Заказ ждёт деталь от заказчика.');
+  go('orders');
+}
+
+/**
+ * Заказчик подтверждает, что деталь куплена и на руках — заказ
+ * возвращается в общий пул поиска мастера (см. ALLOWED_TRANSITIONS:
+ * awaiting_part → searching). Лента диагностики (order.diagnosisLog)
+ * остаётся при заказе, так что новый (или тот же) мастер видит всю
+ * историю, а не начинает разбираться с нуля.
+ */
+function confirmPartReady(orderId) {
+  let order = getOrders().find((o) => o.id === orderId);
+  order = transition(order, 'searching');
+  saveOrder(order);
+  showToast('Отлично — снова ищем мастера');
+  render();
+}
+
+/**
+ * Заказчик добавляет свою догадку о причине поломки («кажется, сломался
+ * ТЭН») — доступно в любом статусе заказа, не только когда уже приезжал
+ * мастер. Это первая запись ленты диагностики (см. diagnosisLogHtml) —
+ * мастер увидит её ещё в списке доступных заказов, до того как возьмёт
+ * заказ (продумано с Sg 24.09.2026).
+ */
+function submitCustomerDiagnosisNote(orderId) {
+  const el = document.getElementById(`customer-diagnosis-note-${orderId}`);
+  const trimmed = (el?.value || '').trim();
+  if (!trimmed) {
+    showToast('Напишите комментарий');
+    return;
+  }
+  let order = getOrders().find((o) => o.id === orderId);
+  const user = currentUser();
+  order = {
+    ...order,
+    diagnosisLog: [
+      ...(order.diagnosisLog || []),
+      { authorRole: 'customer', authorName: user?.displayName || '', text: trimmed, at: new Date().toISOString() },
+    ],
+  };
+  saveOrder(order);
+  showToast('Комментарий добавлен');
+  render();
+}
+
 function confirmCompletion(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
   order = transition(order, 'confirmed');
@@ -6105,6 +6262,28 @@ function renderEditNameOverlay(st) {
 }
 
 /**
+ * Изменение модели неисправного устройства на заказе (см. editDeviceModelState
+ * выше) — тот же паттерн всплывающего окна, что и renderEditNameOverlay.
+ * Необязательное поле: не при создании заказа, а когда по ходу стало
+ * понятно, что заказ «непростой» (Sg 24.09.2026).
+ */
+function renderEditDeviceModelOverlay(st) {
+  return `
+    <div class="map-picker-overlay" data-action="edit-device-model-cancel">
+      <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
+        <p><b>Модель устройства</b></p>
+        <p class="order-meta"><span>Например: стиральная машина Bosch WAA24270, модель/серийный номер с шильдика — чтобы позже не искать в переписке.</span></p>
+        ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
+        <label>Модель</label>
+        <input type="text" id="edit-device-model-input" value="${escapeHtml(st.value)}" placeholder="Например: Bosch WAA24270" />
+        <button class="primary-button" id="edit-device-model-submit" style="margin-top:14px;">Сохранить</button>
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="edit-device-model-cancel">Отмена</button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Подключает выпадающий список подсказок адреса к текстовому полю: с
  * задержкой (дебаунс) ищет реальные адреса по мере ввода (Геосаджест) и по
  * клику на вариант подставляет его текст, а следом — координаты (их
@@ -6848,6 +7027,50 @@ function renderMyOrdersMini() {
   return mine.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('');
 }
 
+// Подписи автора записи в ленте диагностики (см. diagnosisLogHtml/
+// diagnosisLogPreviewHtml ниже) — по ролям, а не по конкретному имени,
+// чтобы не тащить лишний lookup пользователя в каждую карточку списка.
+const DIAGNOSIS_AUTHOR_LABELS = { customer: 'Заказчик', worker: 'Мастер', admin: 'Админ' };
+
+/**
+ * Полная лента диагностики по заказу (см. миграцию 007 — diagnosis_log):
+ * комментарий заказчика о предполагаемой причине поломки и комментарии
+ * каждого мастера, кто визитировал заказ. Продумано с Sg 24.09.2026—
+ * должна быть открыта и видна ВСЕМ, включая мастеров, ещё не взявших
+ * заказ (см. diagnosisLogPreviewHtml для списка), чтобы новый мастер не
+ * начинал разбираться с нуля, а видел, что уже проверено и что не
+ * подошло. Только для чтения — записи добавляются через
+ * reportDiagnosisOnly (мастер) и submitClarificationAnswer/самим текстом
+ * заказчика при создании (пока просто через диагностику ниже).
+ */
+function diagnosisLogHtml(order) {
+  const log = order.diagnosisLog || [];
+  if (!log.length) return '';
+  return `
+    <div class="field-card" style="margin:8px 0;">
+      <p class="order-meta"><b>История диагностики</b></p>
+      ${log
+        .map(
+          (e) => `
+        <div style="margin-bottom:6px;">
+          <p class="order-meta"><span><b>${escapeHtml(DIAGNOSIS_AUTHOR_LABELS[e.authorRole] || e.authorRole)}${e.authorName ? ' (' + escapeHtml(e.authorName) + ')' : ''}</b> — ${new Date(e.at).toLocaleString('ru-RU')}</span></p>
+          <p style="margin:2px 0 0;">${escapeHtml(e.text)}</p>
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+/** Короткий превью последней записи ленты диагностики — для карточки в списке (см. orderCardHtml), в том числе видна мастеру ДО того, как он взял заказ. */
+function diagnosisLogPreviewHtml(order) {
+  const log = order.diagnosisLog || [];
+  if (!log.length) return '';
+  const last = log[log.length - 1];
+  const text = last.text.length > 90 ? last.text.slice(0, 90) + '…' : last.text;
+  return `<p class="order-meta"><span>🔧 ${log.length > 1 ? `Диагностика (${log.length}): ` : 'Диагностика: '}<b>${escapeHtml(DIAGNOSIS_AUTHOR_LABELS[last.authorRole] || last.authorRole)}:</b> «${escapeHtml(text)}»</span></p>`;
+}
+
 function orderCardHtml(order, { viewer }) {
   const catTitle = CATEGORY_TITLES[order.categoryId] || order.categoryId;
   // Для карточек-кандидатов из available-orders точных координат заказа нет
@@ -6865,6 +7088,7 @@ function orderCardHtml(order, { viewer }) {
       <div class="order-card-top">
         <div>
           ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
+          ${order.deviceModel ? `<p style="margin:2px 0;"><b>${escapeHtml(order.deviceModel)}</b></p>` : ''}
           <p class="order-title">${escapeHtml(order.title)}</p>
           <div class="order-meta">
             <span>${escapeHtml(catTitle)}</span>
@@ -6903,6 +7127,7 @@ function orderCardHtml(order, { viewer }) {
       }
       ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
       ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
+      ${diagnosisLogPreviewHtml(order)}
     </div>
   `;
 }
@@ -7331,6 +7556,21 @@ function renderOrderDetail() {
       actions += renderOrderPhotoForm(order, 'after');
       actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
     }
+    if (
+      // Деталь не подошла (или заказчик её ещё не купил) — работа не
+      // выполнена, только диагностика (продумано с Sg 24.09.2026). Не
+      // «есть проблема» — отдельное действие с обязательным комментарием,
+      // без которого следующий мастер не поймёт, что уже проверено.
+      canTransition(order.status, 'awaiting_part')
+    ) {
+      actions += `
+        <div class="field-card" style="margin:8px 0;">
+          <p class="order-meta"><b>Деталь не подошла или её ещё нет?</b></p>
+          <textarea id="diagnosis-only-comment-${order.id}" class="composer-textarea" placeholder="Что выяснилось, какая деталь нужна точнее…" rows="2"></textarea>
+          <button class="secondary-button" data-action="report-diagnosis-only" data-value="${order.id}">Только диагностика — работа не выполнена</button>
+        </div>
+      `;
+    }
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
     // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
@@ -7399,6 +7639,16 @@ function renderOrderDetail() {
           ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-order" data-value="${order.id}:${n}">${n}★</button>`).join('')}
         </div>
       `;
+    } else if (order.status === 'awaiting_part') {
+      // Мастер приезжал, деталь не подошла (см. reportDiagnosisOnly) — см.
+      // ленту диагностики ниже для точного комментария. Как только деталь
+      // куплена и на руках, заказчик подтверждает готовность, и заказ
+      // возвращается в общий поиск мастера с сохранённой историей.
+      actions = `
+        <p class="order-meta"><b>Нужна деталь — см. историю диагностики ниже.</b></p>
+        <p class="order-meta">Как только деталь куплена и на руках, нажмите кнопку — мы снова начнём подбирать мастера, и он увидит всю историю.</p>
+        <button class="primary-button" data-action="confirm-part-ready" data-value="${order.id}">Деталь готова — искать мастера</button>
+      `;
     }
   }
 
@@ -7410,6 +7660,22 @@ function renderOrderDetail() {
         <div class="order-card-top">
           <div>
             ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
+            ${
+              // Модель неисправного устройства — жирным и первой строкой
+              // (продумано с Sg 24.09.2026), чтобы не искать в переписке.
+              // Редактировать может заказчик и назначенный мастер (мастер
+              // физически видит шильдик точнее) — история правок в
+              // deviceModelHistory, показана пока только в админке.
+              order.deviceModel
+                ? `<p style="margin:2px 0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(order.deviceModel)}</b>${
+                    isCustomer || isAssignedWorker
+                      ? `<button type="button" class="icon-edit-btn" data-action="edit-device-model" data-value="${order.id}" aria-label="Изменить модель" title="Изменить модель">${ICON_PENCIL}</button>`
+                      : ''
+                  }</p>`
+                : isCustomer || isAssignedWorker
+                ? `<p style="margin:2px 0;"><button type="button" class="secondary-button" style="padding:2px 10px;font-size:12px;display:inline-block;width:auto;" data-action="edit-device-model" data-value="${order.id}">+ Указать модель устройства</button></p>`
+                : ''
+            }
             <p class="order-title">${escapeHtml(order.title)}</p>
           </div>
           <span class="status-pill">${STATUS_LABELS[order.status]}</span>
@@ -7483,6 +7749,22 @@ function renderOrderDetail() {
                     `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;" loading="lazy" onerror="onArchivedPhotoError(this)" />`
                 )
                 .join('')}</div>`
+            : ''
+        }
+        ${diagnosisLogHtml(order)}
+        ${
+          // Заказчик может добавить свою догадку о причине поломки в любой
+          // момент (не только по требованию) — доступно всегда, а не
+          // только для конкретного статуса, в отличие от остальных actions
+          // выше (продумано с Sg 24.09.2026).
+          isCustomer
+            ? `
+          <div class="field-card" style="margin:8px 0;">
+            <p class="order-meta"><b>Есть предположение, что сломалось?</b></p>
+            <textarea id="customer-diagnosis-note-${order.id}" class="composer-textarea" placeholder="Например: кажется, сломался ТЭН…" rows="2"></textarea>
+            <button class="secondary-button" data-action="add-diagnosis-note" data-value="${order.id}">Добавить комментарий</button>
+          </div>
+        `
             : ''
         }
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
@@ -7910,6 +8192,7 @@ function render() {
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
+    ${editDeviceModelState ? renderEditDeviceModelOverlay(editDeviceModelState) : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -8708,6 +8991,19 @@ function wireEvents() {
     editNameInput.setSelectionRange(len, len);
   }
 
+  const editDeviceModelInput = document.getElementById('edit-device-model-input');
+  if (editDeviceModelInput) {
+    const editDeviceModelSubmit = document.getElementById('edit-device-model-submit');
+    const submit = () => submitEditDeviceModel(editDeviceModelInput.value);
+    if (editDeviceModelSubmit) editDeviceModelSubmit.addEventListener('click', submit);
+    editDeviceModelInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    editDeviceModelInput.focus();
+    const dmLen = editDeviceModelInput.value.length;
+    editDeviceModelInput.setSelectionRange(dmLen, dmLen);
+  }
+
   const composeName = document.getElementById('compose-name');
   if (composeName) {
     composeName.addEventListener('input', () => {
@@ -9263,6 +9559,18 @@ async function handleAction(action, value) {
       return reportIssue(value);
     case 'confirm-completion':
       return confirmCompletion(value);
+    case 'edit-device-model':
+      return openEditDeviceModel(value);
+    case 'edit-device-model-cancel':
+      return cancelEditDeviceModel();
+    case 'report-diagnosis-only': {
+      const commentEl = document.getElementById(`diagnosis-only-comment-${value}`);
+      return reportDiagnosisOnly(value, commentEl ? commentEl.value : '');
+    }
+    case 'confirm-part-ready':
+      return confirmPartReady(value);
+    case 'add-diagnosis-note':
+      return submitCustomerDiagnosisNote(value);
     case 'rate-order': {
       const [orderId, n] = value.split(':');
       return rateOrder(orderId, Number(n));
