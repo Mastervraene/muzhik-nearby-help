@@ -7566,7 +7566,7 @@ function renderOrderDetail() {
       actions += `
         <div class="field-card" style="margin:8px 0;">
           <p class="order-meta"><b>Деталь не подошла или её ещё нет?</b></p>
-          <textarea id="diagnosis-only-comment-${order.id}" class="composer-textarea" placeholder="Что выяснилось, какая деталь нужна точнее…" rows="2"></textarea>
+          <textarea id="diagnosis-only-comment-${order.id}" class="composer-textarea" placeholder="Этот комментарий увидят все мастера. Напишите результат диагностики: что выяснилось, какая деталь нужна точнее…" rows="2"></textarea>
           <button class="secondary-button" data-action="report-diagnosis-only" data-value="${order.id}">Только диагностика — работа не выполнена</button>
         </div>
       `;
@@ -7581,7 +7581,7 @@ function renderOrderDetail() {
     if (['completed', 'confirmed', 'rated'].includes(order.status) && !order.customerRating) {
       actions += `
         <p class="order-meta">Оцените заказчика:</p>
-        <textarea id="rating-comment-customer-${order.id}" class="composer-textarea" placeholder="Комментарий по заказчику (необязательно)…" rows="2"></textarea>
+        <textarea id="rating-comment-customer-${order.id}" class="composer-textarea" placeholder="Этот комментарий увидит только команда разработчиков (необязательно)…" rows="2"></textarea>
         <div class="chip-row">
           ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-customer" data-value="${order.id}:${n}">${n}★</button>`).join('')}
         </div>
