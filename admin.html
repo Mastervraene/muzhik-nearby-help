@@ -687,6 +687,7 @@ const STATUS_LABELS = {
   rated: 'Завершено и оценено',
   cancelled: 'Отменено',
   issue_reported: 'Есть проблема',
+  awaiting_part: 'Ждём деталь от заказчика',
 };
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
 
@@ -719,6 +720,11 @@ STATUS_COLORS.issue_reported = { bg: '#fce7f3', fg: '#be185d', dot: '#ec4899' };
 // действия», но не тревожный малиновый issue_reported (это не проблема, а
 // обычный рабочий момент модерации).
 STATUS_COLORS.clarification_requested = { bg: '#fef3c7', fg: '#92400e', dot: '#f59e0b' };
+// «Ждём деталь от заказчика» — тоже боковая ветка (из assigned/in_progress,
+// см. index.html ALLOWED_TRANSITIONS), но своя семантика — не тревожная
+// (issue_reported) и не «ждём ответа на вопрос» (clarification_requested,
+// амбер), а «ждём покупку детали» — голубой, чтобы визуально не путать.
+STATUS_COLORS.awaiting_part = { bg: '#e0f2fe', fg: '#075985', dot: '#0ea5e9' };
 
 function statusColor(status) {
   return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
@@ -963,6 +969,15 @@ function dbOrderToOrder(row) {
     // Фото «до»/«после» работы мастером — для контроля качества.
     beforePhotos: row.before_photos || [],
     afterPhotos: row.after_photos || [],
+    // Заказы «с деталью» (ремонт техники — см. миграцию 007, продумано с
+    // Sg 24.09.2026): модель неисправного устройства + история её правок
+    // (кто/когда — на случай ошибки при вводе), открытая лента диагностики
+    // (комментарии заказчика/мастеров) и аудит-лог ручных возвратов (когда
+    // оплачен был ремонт, а по факту только визит-диагностика).
+    deviceModel: row.device_model || '',
+    deviceModelHistory: row.device_model_history || [],
+    diagnosisLog: row.diagnosis_log || [],
+    refunds: row.refunds || [],
   };
 }
 
@@ -1728,6 +1743,82 @@ function orderReviewsHtml(o) {
   `;
 }
 
+// Подписи автора записи в ленте диагностики — те же роли, что в index.html
+// (см. diagnosisLogHtml там); держим отдельную константу, т.к. это разные
+// файлы без общего модуля.
+const DIAGNOSIS_AUTHOR_LABELS = { customer: 'Заказчик', worker: 'Мастер', admin: 'Админ' };
+
+/**
+ * История изменений модели устройства (order.deviceModelHistory, см.
+ * миграцию 007) — кто/когда что вписал. Запрошено Sg 24.09.2026: «нужно
+ * видеть историю изменений этого названия... иначе кто-то ошибется и мы
+ * не узнаем, кто неправильно ввел». Пишется в wireOrderForm при сохранении,
+ * если поле реально изменилось. Только для чтения.
+ */
+function deviceModelHistoryHtml(o) {
+  const hist = o.deviceModelHistory || [];
+  if (!hist.length) return '';
+  return `
+    <div class="field-sm">
+      <label>История изменений модели устройства</label>
+      <div style="font-size:13px;color:var(--gray-600);">
+        ${hist
+          .map(
+            (e) =>
+              `<div style="margin:2px 0;">«${escapeHtml(e.value || '(пусто)')}» — ${escapeHtml(DIAGNOSIS_AUTHOR_LABELS[e.byRole] || e.byRole || '')}${e.byName ? ' (' + escapeHtml(e.byName) + ')' : ''}, ${fmtDate(e.at)}</div>`
+          )
+          .join('')}
+      </div>
+    </div>
+  `;
+}
+
+/** Открытая лента диагностики по заказу (order.diagnosisLog, см. миграцию 007 и index.html) — только для чтения, для контекста/поддержки. */
+function diagnosisLogHtmlAdmin(o) {
+  const log = o.diagnosisLog || [];
+  if (!log.length) return '';
+  return `
+    <div class="field-sm" style="background:#f6f8fa;border-radius:8px;padding:10px 12px;">
+      <label>История диагностики</label>
+      ${log
+        .map(
+          (e) =>
+            `<p style="margin:4px 0;"><b>${escapeHtml(DIAGNOSIS_AUTHOR_LABELS[e.authorRole] || e.authorRole)}${e.authorName ? ' (' + escapeHtml(e.authorName) + ')' : ''}</b> — ${fmtDate(e.at)}: ${escapeHtml(e.text)}</p>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
+/**
+ * Аудит-лог ручных возвратов (order.refunds, см. миграцию 007) — когда
+ * заказчик оплатил ремонт, а по факту был только визит-диагностика (деталь
+ * не подошла), админ возвращает деньги сам через банк, а здесь остаётся
+ * запись для истории. Форма ничего не переводит сама — только фиксирует
+ * то, что уже сделано вручную (сумма + произвольный текст с деталями
+ * операции), по кнопке «Подтвердить возврат» (см. wireOrderForm).
+ */
+function refundsHtml(o) {
+  const refunds = o.refunds || [];
+  return `
+    <div class="field-sm">
+      <label>Возвраты (возвращаются вручную в банке — здесь только запись для истории)</label>
+      ${refunds
+        .map(
+          (r) =>
+            `<div style="margin:2px 0;font-size:13px;color:var(--gray-600);">${r.amount != null ? escapeHtml(String(r.amount)) + ' ₽ — ' : ''}${escapeHtml(r.note || '')} · ${fmtDate(r.confirmedAt)}</div>`
+        )
+        .join('')}
+      <div class="grid-2" style="margin-top:6px;">
+        <input type="number" id="f-refund-amount-${o.id}" placeholder="Сумма, ₽ (необязательно)" />
+        <input type="text" id="f-refund-note-${o.id}" placeholder="Детали возврата (номер операции и т.п.)" />
+      </div>
+      <button class="btn-sm" id="confirm-refund-${o.id}" style="margin-top:6px;" type="button">Подтвердить возврат</button>
+      <span class="save-hint" id="refund-hint-${o.id}">Записано ✓</span>
+    </div>
+  `;
+}
+
 function orderFormHtml(o) {
   const statusOptions = STATUS_KEYS.map(
     (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''} style="color:${statusColor(k).fg};">${escapeHtml(STATUS_LABELS[k])}</option>`
@@ -1794,7 +1885,14 @@ function orderFormHtml(o) {
           <label>Радиус поиска (км)</label>
           <input type="number" id="f-radius-${o.id}" value="${o.searchRadiusKm ?? 3}" />
         </div>
+        <div class="field-sm">
+          <label>Модель устройства</label>
+          <input type="text" id="f-device-model-${o.id}" placeholder="Например: Bosch WAA24270" value="${escapeHtml(o.deviceModel || '')}" />
+        </div>
       </div>
+      ${deviceModelHistoryHtml(o)}
+      ${diagnosisLogHtmlAdmin(o)}
+      ${refundsHtml(o)}
       ${formattedBriefHtml(o.formattedBrief)}
       ${
         // Время прибытия мастера («Буду через» на сайте) — видно только
@@ -1891,6 +1989,20 @@ function wireOrderForm(o) {
       patch.timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
     }
 
+    // Модель устройства — история пишется, только если значение реально
+    // изменилось (см. deviceModelHistoryHtml выше и просьбу Sg 24.09.2026
+    // видеть, кто и когда ошибся в названии). Отдельного логина у каждого
+    // админа сейчас нет (общий вход на admin.html) — byName оставляем
+    // пустым, byRole: 'admin' достаточно, чтобы отличить от правок с сайта.
+    const deviceModelValue = document.getElementById(`f-device-model-${o.id}`).value.trim();
+    if (deviceModelValue !== (o.deviceModel || '')) {
+      patch.device_model = deviceModelValue || null;
+      patch.device_model_history = [
+        ...(o.deviceModelHistory || []),
+        { value: deviceModelValue, byRole: 'admin', byName: '', at: new Date().toISOString() },
+      ];
+    }
+
     // Принудительное назначение мастера — отдельное подтверждение, т.к. это
     // единственное изменение в этой форме, которое уходит третьему лицу
     // (мастеру придёт сообщение в Telegram), а не просто меняет запись.
@@ -1950,6 +2062,46 @@ function wireOrderForm(o) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
     }
   });
+
+  // Подтверждение возврата (см. refundsHtml выше) — сам перевод денег
+  // делает админ вручную через банк, кнопка только фиксирует факт и сумму
+  // для истории/прозрачности (просьба Sg 24.09.2026). Отдельная кнопка от
+  // общего «Сохранить», т.к. это не редактирование заказа, а разовая запись.
+  const refundBtn = document.getElementById(`confirm-refund-${o.id}`);
+  if (refundBtn) {
+    refundBtn.addEventListener('click', async () => {
+      const amountRaw = document.getElementById(`f-refund-amount-${o.id}`).value.trim();
+      const note = document.getElementById(`f-refund-note-${o.id}`).value.trim();
+      const amount = amountRaw === '' ? null : Number(amountRaw);
+      if (amountRaw !== '' && (!Number.isFinite(amount) || amount <= 0)) {
+        alert('Сумма возврата должна быть положительным числом');
+        return;
+      }
+      if (amount == null && !note) {
+        alert('Укажите сумму возврата и/или детали, чтобы было что записать');
+        return;
+      }
+      const ok = confirm(`Записать возврат${amount != null ? ` ${amount} ₽` : ''} по этому заказу?\n\nСам перевод денег делается отдельно, в банке — эта кнопка только фиксирует факт для истории.`);
+      if (!ok) return;
+      refundBtn.disabled = true;
+      refundBtn.textContent = 'Сохраняю…';
+      try {
+        const entry = { amount, note, confirmedAt: new Date().toISOString() };
+        await updateRow('orders', o.id, { refunds: [...(o.refunds || []), entry] });
+        await loadData({ keepOpen: true });
+        const hint = document.getElementById(`refund-hint-${o.id}`);
+        if (hint) {
+          hint.style.display = 'inline';
+          setTimeout(() => { hint.style.display = 'none'; }, 2500);
+        }
+      } catch (err) {
+        alert('Не удалось сохранить: ' + err.message);
+      } finally {
+        const freshBtn = document.getElementById(`confirm-refund-${o.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Подтвердить возврат'; }
+      }
+    });
+  }
 }
 
 // -----------------------------------------------------------------------
