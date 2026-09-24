@@ -4668,6 +4668,20 @@ async function publishDraftInner() {
   }
   order = saved;
 
+  // Архивные имена фото (см. buildArchiveFileName/applyArchiveNaming) — в
+  // композере/быстрой проверке фото грузились ещё ДО того, как появился
+  // номер заказа (order.orderNumber известен только теперь, после saveOrder
+  // выше), так что переименовываем задним числом. Лучшая попытка — не
+  // ждём и не блокируем открытие заказа, если пересохранение вдруг не
+  // удастся: фото всё равно останутся доступны, просто под неархивным
+  // именем (applyArchiveNaming потом попробует ещё раз при следующем
+  // сохранении заказа, раз archiveNamed так и останется false).
+  const renamedAttachments = applyArchiveNaming(order.attachments, order.orderNumber, 'C');
+  if (renamedAttachments !== order.attachments) {
+    order.attachments = renamedAttachments;
+    saveOrder(order);
+  }
+
   pushNotification(
     createNotification(order.customerId, 'customer', order.id, 'order_published')
   );
@@ -7466,7 +7480,7 @@ function renderOrderDetail() {
             ? `<div class="attachment-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${order.attachments
                 .map(
                   (a) =>
-                    `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;" loading="lazy" />`
+                    `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;" loading="lazy" onerror="onArchivedPhotoError(this)" />`
                 )
                 .join('')}</div>`
             : ''
@@ -8291,8 +8305,93 @@ async function compressImageFile(file, opts = {}) {
   return new File([blob], newName, { type: 'image/jpeg' });
 }
 
-/** Загружает выбранные файлы, кладёт результат в targetArray (по ссылке) и обновляет chips в containerEl. */
-async function handleFileSelection(files, targetArrayHolder, containerEl, onDone) {
+/**
+ * Архивное имя фото — подготовка к будущей выгрузке старых фото в архив
+ * (запрошено Sg 24.09.2026: «Давай продумаем выгрузку в архив в будущем»).
+ * Сама выгрузка/удаление из Storage пока НЕ делается — только имя, чтобы
+ * потом можно было быстро найти нужное фото по дате/номеру заказа, не
+ * разбирая каждый заказ вручную. Меняется только отображаемое имя (поле
+ * a.name), сам путь/URL файла в Storage не трогаем — он и так не зависит
+ * от имени (см. uploadAttachment: случайный ключ `${Date.now()}-...`).
+ * Формат согласован с Sg: 20260924_1453_63C_IMG1234.jpg
+ *   ГГГГММДД_ЧЧММ_НомерЗаказа{C|M}_ОригИмя.расширение
+ * C — фото от заказчика (композер/уточнение), M — фото от мастера (до/после).
+ * @param {{uploadedAt: number, orderNumber: number|string, prefix: 'C'|'M', origName: string}} p
+ * @returns {string}
+ */
+function buildArchiveFileName({ uploadedAt, orderNumber, prefix, origName }) {
+  const d = new Date(uploadedAt);
+  const pad = (n) => String(n).padStart(2, '0');
+  const datePart = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const timePart = `${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const safeOrig = origName || 'photo';
+  const dotIdx = safeOrig.lastIndexOf('.');
+  const ext = dotIdx > -1 ? safeOrig.slice(dotIdx + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+  let base = dotIdx > -1 ? safeOrig.slice(0, dotIdx) : safeOrig;
+  // Укорачиваем длинное исходное имя — иначе итоговая строка становится
+  // нечитаемой (а у некоторых ФС есть и жёсткий лимит на длину имени файла).
+  const MAX_BASE = 24;
+  if (base.length > MAX_BASE) base = base.slice(0, MAX_BASE);
+  const orderPart = `${orderNumber ?? '0'}${prefix}`;
+  return `${datePart}_${timePart}_${orderPart}_${base}${ext ? '.' + ext : ''}`;
+}
+
+/**
+ * Задним числом переименовывает (только a.name, см. buildArchiveFileName
+ * выше) уже загруженные фото заявки — нужно для композера/быстрой проверки
+ * (renderCompose/quickReview), где на момент самой загрузки фото номера
+ * заказа ещё не существует: заказ создаётся позже, при отправке (см.
+ * publishDraftInner). Пропускает фото без origName/uploadedAt (загруженные
+ * ДО появления этой схемы) — их не трогаем совсем, и уже переименованные
+ * (archiveNamed) — не переименовываем дважды. Возвращает исходный массив
+ * без изменений (тот же объект), если переименовывать было нечего — по
+ * этому вызывающий код понимает, нужно ли пересохранять заказ.
+ * @param {Array} list
+ * @param {number|string} orderNumber
+ * @param {'C'|'M'} prefix
+ */
+function applyArchiveNaming(list, orderNumber, prefix) {
+  if (!Array.isArray(list) || !list.length) return list;
+  let changed = false;
+  const next = list.map((a) => {
+    if (!a || a.archiveNamed || !a.origName || !a.uploadedAt) return a;
+    changed = true;
+    return {
+      ...a,
+      name: buildArchiveFileName({ uploadedAt: a.uploadedAt, orderNumber, prefix, origName: a.origName }),
+      archiveNamed: true,
+    };
+  });
+  return changed ? next : list;
+}
+
+/**
+ * Обработчик onerror для <img> с фото заказа — когда мы когда-нибудь
+ * выгрузим старые фото в архив и уберём сами файлы из Storage (см.
+ * buildArchiveFileName выше), ссылка a.url перестанет открываться и без
+ * этой подмены браузер молча покажет сломанную иконку. Вместо неё —
+ * понятная плашка того же размера, что и миниатюра.
+ */
+function onArchivedPhotoError(imgEl) {
+  if (!imgEl || imgEl.dataset.archiveFallbackApplied) return;
+  imgEl.dataset.archiveFallbackApplied = '1';
+  const ph = document.createElement('div');
+  ph.style.cssText = 'width:72px;height:72px;border-radius:8px;border:1px dashed var(--gray-200,#ccc);display:flex;align-items:center;justify-content:center;text-align:center;font-size:10px;line-height:1.2;color:var(--gray-400,#888);padding:2px;box-sizing:border-box;flex-shrink:0;';
+  ph.textContent = '📁 фото в архиве';
+  imgEl.replaceWith(ph);
+}
+
+/**
+ * Загружает выбранные файлы, кладёт результат в targetArray (по ссылке) и
+ * обновляет chips в containerEl. archiveInfo (необязательный) — {orderNumber,
+ * prefix}: когда он передан (номер заказа уже известен — фото до/после у
+ * мастера, фото к ответу на уточнение), архивное имя присваивается сразу.
+ * Если не передан (фото ещё до создания заказа — композер/быстрая
+ * проверка), origName/uploadedAt всё равно сохраняются, а само имя
+ * проставляется позже, задним числом (см. applyArchiveNaming в
+ * publishDraftInner).
+ */
+async function handleFileSelection(files, targetArrayHolder, containerEl, onDone, archiveInfo = null) {
   let incoming = Array.from(files).filter((f) => f.type && f.type.startsWith('image/'));
   if (incoming.length < files.length) {
     showToast('Принимаются только фото');
@@ -8315,15 +8414,25 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
   const uploaded = [];
   for (const f of incoming) {
     try {
+      const origName = f.name;
+      const uploadedAt = Date.now();
       const compact = await compressImageFile(f);
       const { url } = await uploadAttachment(compact);
-      uploaded.push({
+      const item = {
         id: `att-${Date.now()}-${uploaded.length}`,
         type: 'photo',
         url,
         name: compact.name,
         sizeBytes: compact.size,
-      });
+        origName,
+        uploadedAt,
+        archiveNamed: false,
+      };
+      if (archiveInfo && archiveInfo.orderNumber) {
+        item.name = buildArchiveFileName({ uploadedAt, orderNumber: archiveInfo.orderNumber, prefix: archiveInfo.prefix, origName });
+        item.archiveNamed = true;
+      }
+      uploaded.push(item);
     } catch (err) {
       console.error('[attachments] upload failed', err);
       showToast('Не удалось загрузить файл: ' + f.name);
@@ -8649,11 +8758,13 @@ function wireEvents() {
           const files = Array.from(fileEl.files);
           const key = kind === 'before' ? 'beforePhotos' : 'afterPhotos';
           const holder = { value: openOrder[key] || [] };
+          // Заказ уже существует (номер известен) — архивное имя (см.
+          // buildArchiveFileName) присваивается сразу, без задержки.
           handleFileSelection(files, holder, containerEl, () => {
             openOrder[key] = holder.value;
             saveOrder(openOrder);
             render();
-          });
+          }, { orderNumber: openOrder.orderNumber, prefix: 'M' });
         });
       });
 
@@ -8668,11 +8779,13 @@ function wireEvents() {
           clarFileEl.addEventListener('change', () => {
             const files = Array.from(clarFileEl.files);
             const holder = { value: openOrder.attachments || [] };
+            // Заказ уже существует (номер известен) — архивное имя (см.
+            // buildArchiveFileName) присваивается сразу, без задержки.
             handleFileSelection(files, holder, clarContainerEl, () => {
               openOrder.attachments = holder.value;
               saveOrder(openOrder);
               render();
-            });
+            }, { orderNumber: openOrder.orderNumber, prefix: 'C' });
           });
         }
         // Черновик текста ответа (см. clarificationAnswerDrafts) — иначе
