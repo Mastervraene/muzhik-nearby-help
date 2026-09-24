@@ -5263,6 +5263,7 @@ async function submitClarificationAnswer(orderId) {
     }
   }
 
+  delete clarificationAnswerDrafts[orderId]; // отправлено — черновик текста больше не нужен
   saveOrder(updated);
   showToast('Ответ отправлен — заказ снова на проверке у администратора');
   render();
@@ -7338,10 +7339,28 @@ function renderOrderDetail() {
       // requestClarification) — заказ на паузе до ответа. Ответ возвращает
       // заказ на модерацию (submitClarificationAnswer), без выбора «принять
       // /отклонить»: это не решение по заказу, а просто недостающая деталь.
+      //
+      // Админ часто просит именно фото (пример: «приложите фото стены») —
+      // раньше приложить их тут было нечем (жалоба Sg от 24.09.2026: форма
+      // была только с текстом). Добавляем фото прямо в order.attachments —
+      // тот же массив, что и исходные фото заявки, так что админка увидит
+      // их в той же галерее карточки заказа без каких-либо правок с её
+      // стороны (см. admin.html: o.attachments.map(...) в карточке заказа).
+      // Каждое фото сохраняется сразу по выбору (см. wireEvents), а не по
+      // кнопке «Отправить ответ» — тот же приём, что и с фото «до/после» у
+      // мастера (renderOrderPhotoForm), чтобы фото не терялись, если текст
+      // ответа ещё не готов.
       actions = `
         <p class="order-meta"><b>Администратору нужно уточнение:</b></p>
         <p>${escapeHtml(order.clarification?.question || '')}</p>
-        <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2"></textarea>
+        <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2">${escapeHtml(clarificationAnswerDrafts[order.id] || '')}</textarea>
+        <div id="clarification-photos-${order.id}" class="attachment-preview">
+          ${(order.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
+        </div>
+        <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;margin-bottom:8px;">
+          📎 Прикрепить фото (до ${MAX_ORDER_PHOTOS} штук)
+          <input id="clarification-photos-file-${order.id}" type="file" accept="image/*" multiple style="display:none" />
+        </label>
         <button class="primary-button" data-action="submit-clarification" data-value="${order.id}">Отправить ответ</button>
       `;
     } else if (order.status === 'estimate_ready') {
@@ -7909,6 +7928,14 @@ let composerTimeError = '';
 // textarea в разметке не привязана к состоянию.
 let composerDescriptionValue = '';
 let composerAddressValue = '';
+// Ответ на уточнение администратора (renderOrderDetail →
+// clarification_requested) — тот же приём: живёт вне state, потому что
+// теперь рядом появилось «Прикрепить фото», а сохранение фото вызывает
+// render() (см. wireEvents) — без этого набранный текст ответа стирался бы
+// каждый раз, как только приложено фото (жалоба Sg от 24.09.2026, заодно с
+// самой формой для фото). Ключ — id заказа, на случай если человек успеет
+// открыть разные заказы за одну сессию.
+let clarificationAnswerDrafts = {};
 // Поле «Район» на экране профиля (renderProfile) — тот же приём: живёт вне
 // state, чтобы повторный render() (например, после showToast) не стирал
 // то, что человек уже успел вписать руками.
@@ -8629,6 +8656,34 @@ function wireEvents() {
           });
         });
       });
+
+      // Фото к ответу на уточнение администратора (см. renderOrderDetail →
+      // clarification_requested) — кладём прямо в order.attachments, тот же
+      // приём, что и выше для before/after: сохраняем сразу по выбору файла,
+      // не дожидаясь клика по «Отправить ответ».
+      if (openOrder.status === 'clarification_requested') {
+        const clarFileEl = document.getElementById(`clarification-photos-file-${openOrder.id}`);
+        const clarContainerEl = document.getElementById(`clarification-photos-${openOrder.id}`);
+        if (clarFileEl && clarContainerEl) {
+          clarFileEl.addEventListener('change', () => {
+            const files = Array.from(clarFileEl.files);
+            const holder = { value: openOrder.attachments || [] };
+            handleFileSelection(files, holder, clarContainerEl, () => {
+              openOrder.attachments = holder.value;
+              saveOrder(openOrder);
+              render();
+            });
+          });
+        }
+        // Черновик текста ответа (см. clarificationAnswerDrafts) — иначе
+        // render() после сохранения фото стирал бы уже набранный текст.
+        const clarAnswerEl = document.getElementById(`clarification-answer-${openOrder.id}`);
+        if (clarAnswerEl) {
+          clarAnswerEl.addEventListener('input', () => {
+            clarificationAnswerDrafts[openOrder.id] = clarAnswerEl.value;
+          });
+        }
+      }
     }
   }
 
