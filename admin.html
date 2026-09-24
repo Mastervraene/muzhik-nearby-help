@@ -1320,6 +1320,12 @@ let mastersFilter = 'workers';
 let mastersSearchQuery = '';
 let openOrderId = null;
 let openMasterId = null;
+// Какие карточки заказов показывают развёрнутую историю уточнений (см.
+// orderCardHtml/orderClarificationHistory) — отдельно от openOrderId,
+// чтобы длинный текст переписки не разворачивался автоматически вместе со
+// всей карточкой заказа и не захламлял список (просьба Sg 24.09.2026,
+// заказ №72 — длинная инструкция по диагностике заняла весь экран списка).
+let expandedClarificationIds = new Set();
 // Приватные заметки администратора (admin_notes, см. admin-notes.ts) —
 // ключ `${entityType}:${entityId}` → текст. openAdminNoteKeys — какие из
 // них сейчас раскрыты в режим редактирования (см. adminNoteHtml ниже).
@@ -1494,6 +1500,15 @@ function wireOrderCards(list) {
         requestClarification(o);
       });
     }
+    const clarificationToggle = document.getElementById(`clarification-toggle-${o.id}`);
+    if (clarificationToggle) {
+      clarificationToggle.addEventListener('click', (e) => {
+        e.stopPropagation(); // не должно раскрывать/сворачивать всю карточку заказа
+        if (expandedClarificationIds.has(o.id)) expandedClarificationIds.delete(o.id);
+        else expandedClarificationIds.add(o.id);
+        renderOrders();
+      });
+    }
   });
 }
 
@@ -1587,6 +1602,51 @@ async function approveOrder(o) {
 function orderClarificationHistory(o) {
   if (o.clarificationHistory && o.clarificationHistory.length) return o.clarificationHistory;
   return o.clarification && o.clarification.question ? [o.clarification] : [];
+}
+
+/**
+ * Блок истории уточнений в СВЁРНУТОЙ карточке заказа (см. orderCardHtml).
+ * По умолчанию показывает только заголовок-переключатель (сколько раундов,
+ * получен ли ответ на последний) — сам текст вопросов/ответов раскрывается
+ * отдельным кликом по заголовку (см. wireOrderCards, expandedClarificationIds),
+ * НЕ разворачивая всю карточку заказа. Раньше вся история выводилась
+ * целиком прямо в списке заказов — длинная переписка (например, подробная
+ * инструкция по диагностике) занимала весь экран и мешала пролистывать
+ * список (просьба Sg 24.09.2026, заказ №72).
+ */
+function orderClarificationHistoryPreviewHtml(o) {
+  const history = orderClarificationHistory(o);
+  if (!history.length) return '';
+  const expanded = expandedClarificationIds.has(o.id);
+  const last = history[history.length - 1];
+  const summary = history.length > 1 ? `Уточнения (${history.length})` : 'Уточнение';
+  const statusHint = last.answer ? '' : ' · ждём ответ клиента';
+  return `
+    <div class="card-clarification-block">
+      <div class="card-clarification-toggle" id="clarification-toggle-${o.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span><b>${summary}</b>${statusHint}</span>
+        <span class="chevron">${expanded ? '▲' : '▼'}</span>
+      </div>
+      ${
+        expanded
+          ? history
+              .map(
+                (c, i, arr) => `
+               <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,.08);">
+                 ${arr.length > 1 ? `<p class="order-meta"><span>Уточнение ${i + 1} из ${arr.length}</span></p>` : ''}
+                 <p><b>Вопрос клиенту:</b> ${escapeHtml(c.question || '')}</p>
+                 ${
+                   c.answer
+                     ? `<p><b>Ответ клиента:</b> ${escapeHtml(c.answer)}</p>`
+                     : `<p><i>Ждём ответ клиента…</i></p>`
+                 }
+               </div>`
+              )
+              .join('')
+          : ''
+      }
+    </div>
+  `;
 }
 
 async function requestClarification(o) {
@@ -1713,24 +1773,11 @@ function orderCardHtml(o) {
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
       ${
-        orderClarificationHistory(o).length
-          ? `<div class="card-clarification-block">
-               ${orderClarificationHistory(o)
-                 .map(
-                   (c, i, arr) => `
-               <div${i > 0 ? ' style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,.08);"' : ''}>
-                 ${arr.length > 1 ? `<p class="order-meta"><span>Уточнение ${i + 1} из ${arr.length}</span></p>` : ''}
-                 <p><b>Вопрос клиенту:</b> ${escapeHtml(c.question || '')}</p>
-                 ${
-                   c.answer
-                     ? `<p><b>Ответ клиента:</b> ${escapeHtml(c.answer)}</p>`
-                     : `<p><i>Ждём ответ клиента…</i></p>`
-                 }
-               </div>`
-                 )
-                 .join('')}
-             </div>`
-          : ''
+        // Свёрнуто по умолчанию (expandedClarificationIds, см. объявление
+        // выше) — заголовок-переключатель виден всегда, сам текст вопросов
+        // и ответов раскрывается отдельным кликом, не разворачивая всю
+        // карточку заказа. См. wireOrderCards() — там же обработчик клика.
+        orderClarificationHistoryPreviewHtml(o)
       }
       ${
         o.status === 'collecting_details'
