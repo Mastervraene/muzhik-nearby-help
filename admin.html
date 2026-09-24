@@ -1673,6 +1673,24 @@ function formatEtaTextAdmin(etaMinutes, etaAt) {
   return `${time} ${date}`;
 }
 
+/**
+ * Обработчик onerror для миниатюр фото заказа (order-photo-thumb и
+ * order-photo-thumb-quality) — когда-нибудь старые фото будут выгружены в
+ * архив и убраны из Storage (см. схему архивных имён a.name —
+ * buildArchiveFileName в index.html, обсуждение с Sg 24.09.2026), и ссылка
+ * a.url перестанет открываться. Вместо сломанной иконки — понятная плашка
+ * того же размера, что и миниатюра (клика/лайтбокса у неё уже нет — смотреть
+ * там нечего).
+ */
+function onArchivedPhotoError(imgEl) {
+  if (!imgEl || imgEl.dataset.archiveFallbackApplied) return;
+  imgEl.dataset.archiveFallbackApplied = '1';
+  const ph = document.createElement('div');
+  ph.style.cssText = 'width:72px;height:72px;border-radius:8px;border:1px dashed var(--gray-200,#ccc);display:flex;align-items:center;justify-content:center;text-align:center;font-size:10px;line-height:1.2;color:var(--gray-400,#888);padding:2px;box-sizing:border-box;flex-shrink:0;';
+  ph.textContent = '📁 фото в архиве';
+  imgEl.replaceWith(ph);
+}
+
 /** Фото «до»/«после» работы мастером (order.beforePhotos/afterPhotos) — те же миниатюры-лайтбокс, что и у фото заявки. */
 function orderQualityPhotosHtml(o, kind, label) {
   const photos = (kind === 'before' ? o.beforePhotos : o.afterPhotos) || [];
@@ -1683,7 +1701,7 @@ function orderQualityPhotosHtml(o, kind, label) {
       <div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;">${photos
         .map(
           (a, idx) =>
-            `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb-quality" data-order-id="${o.id}" data-photo-kind="${kind}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" />`
+            `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb-quality" data-order-id="${o.id}" data-photo-kind="${kind}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" onerror="onArchivedPhotoError(this)" />`
         )
         .join('')}</div>
     </div>
@@ -1789,7 +1807,7 @@ function orderFormHtml(o) {
         ? `<div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${o.attachments
             .map(
               (a, idx) =>
-                `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb" data-order-id="${o.id}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" />`
+                `<img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name || '')}" class="order-photo-thumb" data-order-id="${o.id}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" onerror="onArchivedPhotoError(this)" />`
             )
             .join('')}</div>`
         : ''}
