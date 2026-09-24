@@ -981,8 +981,15 @@ function dbOrderToOrder(row) {
     createdAt: row.created_at,
     // Вопрос администратора клиенту на модерации и (когда есть) ответ —
     // { question, askedAt, answer, answeredAt } или null, если уточнений
-    // не было. См. requestClarification()/STATUS_LABELS.clarification_requested.
+    // не было. Оставлено для старых заказов с одним раундом уточнения —
+    // текущий код читает и пишет только clarificationHistory ниже (см.
+    // orderClarificationHistory()), см. requestClarification().
     clarification: row.clarification || null,
+    // История ВСЕХ раундов уточнения — копится, а не перезаписывается (см.
+    // orderClarificationHistory()/requestClarification() ниже). Просьба Sg
+    // 24.09.2026 (заказ №72): предыдущие вопрос+ответ не должны теряться
+    // при новом «Уточнить», и история должна быть видна и мастерам.
+    clarificationHistory: row.clarification_history || [],
     // Структурированное ТЗ для исполнителя, сформированное ассистентом при
     // создании заказа (см. requestFormattedBrief() в index.html). Может
     // быть null — ассистент не настроен, сбой запроса, или заказ создан
@@ -1569,8 +1576,27 @@ async function approveOrder(o) {
 // клиент не ответит на сайте (см. submitClarificationAnswer в index.html) —
 // после ответа заказ САМ возвращается в collecting_details, и админ снова
 // видит кнопку «✓ Одобрить», уже с ответом клиента в карточке.
+// Полная история уточнений по заказу — новые раунды ДОБАВЛЯЮТСЯ
+// (requestClarification), а не заменяют предыдущие (просьба Sg 24.09.2026,
+// заказ №72: старый вопрос и ответ клиента не должны теряться при новом
+// «Уточнить», и история должна быть видна не только админу, но и
+// мастерам — см. index.html clarificationHistoryHtml). Для заказов,
+// созданных до появления clarification_history, единственный раунд лежит
+// в старом поле order.clarification — оборачиваем его в массив на лету,
+// ничего не перезаписывая в базе.
+function orderClarificationHistory(o) {
+  if (o.clarificationHistory && o.clarificationHistory.length) return o.clarificationHistory;
+  return o.clarification && o.clarification.question ? [o.clarification] : [];
+}
+
 async function requestClarification(o) {
-  const questionRaw = prompt('Какой вопрос отправить клиенту?', o.clarification?.question || '');
+  // Пустое поле, а не старый вопрос (как было раньше) — кнопка «Уточнить»
+  // видна только когда предыдущий раунд уже закрыт (см. orderCardHtml:
+  // кнопка есть лишь при status === 'collecting_details'), так что это
+  // ВСЕГДА новый вопрос, а не правка старого. Раньше сюда подставлялся
+  // прошлый текст, и если админ его не стирал, старый раунд перезаписывал
+  // новый вместе с ответом клиента — жалоба Sg 24.09.2026 (заказ №72).
+  const questionRaw = prompt('Какой вопрос отправить клиенту?', '');
   if (questionRaw === null) return; // отменено
   const question = questionRaw.trim();
   if (!question) {
@@ -1586,8 +1612,18 @@ async function requestClarification(o) {
 
   try {
     const timeline = [...(o.timeline || []), { status: 'clarification_requested', at: new Date().toISOString() }];
-    const clarification = { question, askedAt: new Date().toISOString(), answer: null, answeredAt: null };
-    await updateRow('orders', o.id, { status: 'clarification_requested', clarification, timeline });
+    // Новый раунд ДОБАВЛЯЕТСЯ к истории (см. orderClarificationHistory),
+    // а не заменяет order.clarification целиком — иначе предыдущий вопрос
+    // и ответ клиента терялись без следа.
+    const clarificationHistory = [
+      ...orderClarificationHistory(o),
+      { question, askedAt: new Date().toISOString(), answer: null, answeredAt: null },
+    ];
+    await updateRow('orders', o.id, {
+      status: 'clarification_requested',
+      clarification_history: clarificationHistory,
+      timeline,
+    });
 
     // Уведомление клиенту в Telegram — best-effort: без него заказ всё
     // равно ждёт ответа, просто клиент узнает об этом, только зайдя на
@@ -1677,14 +1713,22 @@ function orderCardHtml(o) {
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
       ${
-        o.clarification
+        orderClarificationHistory(o).length
           ? `<div class="card-clarification-block">
-               <p><b>Вопрос клиенту:</b> ${escapeHtml(o.clarification.question || '')}</p>
-               ${
-                 o.clarification.answer
-                   ? `<p><b>Ответ клиента:</b> ${escapeHtml(o.clarification.answer)}</p>`
-                   : `<p><i>Ждём ответ клиента…</i></p>`
-               }
+               ${orderClarificationHistory(o)
+                 .map(
+                   (c, i, arr) => `
+               <div${i > 0 ? ' style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,.08);"' : ''}>
+                 ${arr.length > 1 ? `<p class="order-meta"><span>Уточнение ${i + 1} из ${arr.length}</span></p>` : ''}
+                 <p><b>Вопрос клиенту:</b> ${escapeHtml(c.question || '')}</p>
+                 ${
+                   c.answer
+                     ? `<p><b>Ответ клиента:</b> ${escapeHtml(c.answer)}</p>`
+                     : `<p><i>Ждём ответ клиента…</i></p>`
+                 }
+               </div>`
+                 )
+                 .join('')}
              </div>`
           : ''
       }
