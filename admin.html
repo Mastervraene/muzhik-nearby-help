@@ -634,6 +634,17 @@ const ADMIN_NOTIFY_SECRET = '4c47682400cf37bf55c5ef4da657c87c63a6bcc7091e695a';
 // только бухгалтерская запись поверх заказа (см. worker_payouts).
 const ADMIN_PAYOUTS_SECRET = 'fbda3ba71e622775d4247798e2a96060f1c3b72bd36f2d48';
 
+// Секрет для Edge Function admin-notes (приватные заметки администратора —
+// под карточкой заказа/клиента/мастера, просьба Sg 24.09.2026: «поле для
+// комментариев админа, которые не видны никому кроме админа»). Тот же
+// принцип, что у ADMIN_NOTIFY_SECRET/ADMIN_PAYOUTS_SECRET выше: значение
+// ДОЛЖНО совпадать с тем, что задано на сервере через
+// `supabase secrets set ADMIN_NOTES_SECRET=...`. Заметки хранятся в
+// ОТДЕЛЬНОЙ таблице admin_notes (не колонкой в orders/users — те целиком
+// читает анон-ключом ещё и index.html, см. 008_admin_notes.sql), доступ к
+// ней — только отсюда, через эту функцию.
+const ADMIN_NOTES_SECRET = 'f77f801e094152c12513bc20f3abdf6062013aed18c39883ac';
+
 // Ключ JS API Яндекс.Карт — ОТДЕЛЬНЫЙ от YANDEX_GEOCODER_API_KEY в
 // index.html (это разные продукты в одном кабинете разработчика Яндекса,
 // developer.tech.yandex.ru — геокодер и JavaScript API подключаются и
@@ -874,6 +885,29 @@ async function callAdminPayouts(action, extra) {
   if (!res.ok || !data || !data.ok) {
     const reason = data?.error === 'forbidden'
       ? 'секрет ADMIN_PAYOUTS_SECRET не совпадает с настройкой сервера'
+      : data?.error || `HTTP ${res.status}`;
+    throw new Error(`не удалось выполнить (${reason})`);
+  }
+  return data;
+}
+
+// Вызов Edge Function admin-notes (приватные заметки администратора — см.
+// adminNoteHtml/wireAdminNote ниже). action: 'list' | 'set'.
+async function callAdminNotes(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-notes`, {
+    method: 'POST',
+    headers: sbHeaders({ 'x-admin-notes-secret': ADMIN_NOTES_SECRET }),
+    body: JSON.stringify(Object.assign({ action }, extra || {})),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || !data || !data.ok) {
+    const reason = data?.error === 'forbidden'
+      ? 'секрет ADMIN_NOTES_SECRET не совпадает с настройкой сервера'
       : data?.error || `HTTP ${res.status}`;
     throw new Error(`не удалось выполнить (${reason})`);
   }
@@ -1279,6 +1313,11 @@ let mastersFilter = 'workers';
 let mastersSearchQuery = '';
 let openOrderId = null;
 let openMasterId = null;
+// Приватные заметки администратора (admin_notes, см. admin-notes.ts) —
+// ключ `${entityType}:${entityId}` → текст. openAdminNoteKeys — какие из
+// них сейчас раскрыты в режим редактирования (см. adminNoteHtml ниже).
+let adminNotes = new Map();
+let openAdminNoteKeys = new Set();
 let mapLoaded = false;
 // Выбранная «зона действия» на карте — либо мастер (кружок = его радиус
 // по умолчанию, используется только когда у заказа своего радиуса нет),
@@ -1819,6 +1858,90 @@ function refundsHtml(o) {
   `;
 }
 
+/**
+ * Приватная заметка администратора — по заказу (entityType: 'order') или
+ * по пользователю (entityType: 'user', одна и та же заметка что для
+ * «карточки клиента», что для «карточки мастера» — в этом файле это одна
+ * форма, masterFormHtml, см. ниже). Не видна ни на сайте, ни в мобильном
+ * приложении — хранится в отдельной таблице admin_notes, закрытой для
+ * анон-ключа (см. 008_admin_notes.sql), читается/пишется только через
+ * Edge Function admin-notes (см. callAdminNotes). Свёрнуто по умолчанию:
+ * значок ✏️ открывает textarea для правки, «Сохранить»/«Отмена» — сворачивают
+ * обратно (см. wireAdminNote).
+ */
+function adminNoteHtml(entityType, entityId) {
+  const key = `${entityType}:${entityId}`;
+  const note = adminNotes.get(key) || '';
+  const open = openAdminNoteKeys.has(key);
+  const safeKey = key.replace(/[^a-zA-Z0-9]/g, '-');
+  return `
+    <div class="field-sm">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <label style="margin-bottom:0;">Заметка администратора <span style="font-weight:400;color:var(--gray-400);">(видна только здесь)</span></label>
+        <button type="button" class="btn-sm ghost" id="admin-note-toggle-${safeKey}" title="Написать/изменить заметку">✏️</button>
+      </div>
+      ${
+        open
+          ? `
+            <textarea id="admin-note-text-${safeKey}" rows="2" placeholder="Например: перезвонил, извинился, дал скидку 300₽…" style="margin-top:6px;">${escapeHtml(note)}</textarea>
+            <div class="row-actions">
+              <button class="btn-sm primary" type="button" id="admin-note-save-${safeKey}">Сохранить</button>
+              <button class="btn-sm ghost" type="button" id="admin-note-cancel-${safeKey}">Отмена</button>
+              <span class="save-hint" id="admin-note-hint-${safeKey}">Сохранено ✓</span>
+            </div>
+          `
+          : note
+          ? `<p style="margin:4px 0 0;font-size:13px;color:var(--gray-600);white-space:pre-wrap;">${escapeHtml(note)}</p>`
+          : ''
+      }
+    </div>
+  `;
+}
+
+/** Навешивает обработчики на разметку adminNoteHtml(entityType, entityId). onChange — как перерисовать список после изменения (renderOrders/renderMasters). */
+function wireAdminNote(entityType, entityId, onChange) {
+  const key = `${entityType}:${entityId}`;
+  const safeKey = key.replace(/[^a-zA-Z0-9]/g, '-');
+  const toggleBtn = document.getElementById(`admin-note-toggle-${safeKey}`);
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (openAdminNoteKeys.has(key)) openAdminNoteKeys.delete(key);
+      else openAdminNoteKeys.add(key);
+      onChange();
+    });
+  }
+  const saveBtn = document.getElementById(`admin-note-save-${safeKey}`);
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const textarea = document.getElementById(`admin-note-text-${safeKey}`);
+      const note = (textarea?.value || '').trim();
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Сохраняю…';
+      try {
+        await callAdminNotes('set', { entityType, entityId, note });
+        if (note) adminNotes.set(key, note);
+        else adminNotes.delete(key);
+        openAdminNoteKeys.delete(key);
+        onChange();
+      } catch (err) {
+        alert('Не удалось сохранить заметку: ' + err.message);
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Сохранить';
+      }
+    });
+  }
+  const cancelBtn = document.getElementById(`admin-note-cancel-${safeKey}`);
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAdminNoteKeys.delete(key);
+      onChange();
+    });
+  }
+}
+
 function orderFormHtml(o) {
   const statusOptions = STATUS_KEYS.map(
     (k) => `<option value="${k}" ${k === o.status ? 'selected' : ''} style="color:${statusColor(k).fg};">${escapeHtml(STATUS_LABELS[k])}</option>`
@@ -1912,6 +2035,7 @@ function orderFormHtml(o) {
       ${orderQualityPhotosHtml(o, 'before', 'Фото до')}
       ${orderQualityPhotosHtml(o, 'after', 'Фото после')}
       ${orderReviewsHtml(o)}
+      ${adminNoteHtml('order', o.id)}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
       <div class="row-actions">
         <button class="btn-sm primary" id="save-order-${o.id}">Сохранить</button>
@@ -2102,6 +2226,8 @@ function wireOrderForm(o) {
       }
     });
   }
+
+  wireAdminNote('order', o.id, renderOrders);
 }
 
 // -----------------------------------------------------------------------
@@ -2254,6 +2380,8 @@ function masterFormHtml(u) {
           <input type="text" disabled value="${escapeHtml(fmtDate(u.createdAt))}" />
         </div>
       </div>
+
+      ${adminNoteHtml('user', u.id)}
 
       <p class="form-section-label">Навыки</p>
       <div class="skills-list">
@@ -2463,6 +2591,8 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Удалить пользователя'; }
     }
   });
+
+  wireAdminNote('user', u.id, renderMasters);
 }
 
 // -----------------------------------------------------------------------
@@ -3235,7 +3365,7 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows, messageRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows, notesData] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
@@ -3245,12 +3375,21 @@ async function loadData(opts) {
     // показывается, а не ломает всю страницу (тот же принцип, что и у
     // daily_stats/skills выше).
     getRows('telegram_messages', 'select=*&order=created_at.asc').catch(() => []),
+    // Приватные заметки администратора (см. adminNoteHtml) — отдельная
+    // защищённая функция, не обычная таблица; если ADMIN_NOTES_SECRET ещё
+    // не настроен на сервере (функция не задеплоена/секрет не совпадает),
+    // просто не показываем заметки, а не ломаем всю страницу.
+    callAdminNotes('list').catch((err) => {
+      console.warn('[admin-notes] не удалось загрузить заметки', err);
+      return { notes: [] };
+    }),
   ]);
   allUsers = userRows.map(dbUserToUser);
   allOrders = orderRows.map(dbOrderToOrder);
   allStats = statRows.map(dbDailyStatToStat);
   allSkills = skillRows.map(dbSkillToSkill);
   allMessages = messageRows.map(dbMessageToMessage);
+  adminNotes = new Map((notesData.notes || []).map((n) => [`${n.entity_type}:${n.entity_id}`, n.note]));
   renderOrders();
   renderMasters();
   renderNotify();
