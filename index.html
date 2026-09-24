@@ -2794,9 +2794,17 @@ function dbOrderToOrder(row) {
     // создан до появления этой функции.
     formattedBrief: row.formatted_brief || null,
     // Вопрос администратора клиенту на модерации и (когда есть) ответ —
-    // { question, askedAt, answer, answeredAt } или null. См. STATUS_LABELS
-    // .clarification_requested и submitClarificationAnswer().
+    // { question, askedAt, answer, answeredAt } или null. Оставлено для
+    // старых заказов с одним раундом уточнения — текущий код читает и
+    // пишет только clarificationHistory ниже (см. orderClarificationHistory()).
+    // См. также STATUS_LABELS.clarification_requested.
     clarification: row.clarification || null,
+    // История ВСЕХ раундов уточнения — копится, а не перезаписывается (см.
+    // orderClarificationHistory()/submitClarificationAnswer() ниже). Просьба
+    // Sg 24.09.2026 (заказ №72): предыдущие вопрос+ответ не должны
+    // теряться при новом уточнении, и история видна не только заказчику
+    // и админу, но и мастерам (см. clarificationHistoryHtml).
+    clarificationHistory: row.clarification_history || [],
     // Время прибытия мастера, которое он сам указал при «Буду через» (см.
     // advanceWorkerStatus/en_route-форму) — либо готовый пресет в минутах
     // (etaMinutes: 5/10/20), либо точное время (etaMinutes: null,
@@ -2867,6 +2875,7 @@ function orderToDbOrder(order) {
     worker_review_seen_by_admin: order.workerReviewSeenByAdmin ?? false,
     formatted_brief: order.formattedBrief || null,
     clarification: order.clarification || null,
+    clarification_history: order.clarificationHistory || [],
     eta_minutes: order.etaMinutes ?? null,
     eta_at: order.etaAt || null,
     before_photos: order.beforePhotos || [],
@@ -5318,6 +5327,19 @@ async function createWorkerPayout(orderId) {
 // статус меняем и тост показываем только при подтверждённом успехе, а при
 // сбое текст остаётся в поле и кнопка снова активна — можно просто нажать
 // «Отправить» ещё раз, не перепечатывая ответ.
+// Полная история уточнений по заказу — новые раунды ДОБАВЛЯЮТСЯ (см.
+// admin.html requestClarification), а не заменяют предыдущие (просьба Sg
+// 24.09.2026, заказ №72: старый вопрос и ответ не должны теряться при
+// новом «Уточнить»). Для заказов, созданных до появления
+// clarification_history, единственный раунд лежит в старом поле
+// order.clarification — оборачиваем его в массив на лету, ничего не
+// перезаписывая в базе. Та же функция (скопирована 1-в-1) есть в
+// admin.html.
+function orderClarificationHistory(order) {
+  if (order.clarificationHistory && order.clarificationHistory.length) return order.clarificationHistory;
+  return order.clarification && order.clarification.question ? [order.clarification] : [];
+}
+
 async function submitClarificationAnswer(orderId) {
   const textarea = document.getElementById(`clarification-answer-${orderId}`);
   const answer = textarea ? textarea.value.trim() : '';
@@ -5336,10 +5358,12 @@ async function submitClarificationAnswer(orderId) {
     submitBtn.textContent = 'Отправляем…';
   }
 
-  const updated = transition(
-    { ...order, clarification: { ...(order.clarification || {}), answer, answeredAt: new Date().toISOString() } },
-    'collecting_details'
-  );
+  // Отвечаем на ПОСЛЕДНИЙ (текущий, ещё неотвеченный) раунд истории —
+  // остальные раунды не трогаем, они уже отвечены раньше.
+  const history = orderClarificationHistory(order);
+  const answeredAt = new Date().toISOString();
+  const clarificationHistory = history.map((c, i) => (i === history.length - 1 ? { ...c, answer, answeredAt } : c));
+  const updated = transition({ ...order, clarificationHistory }, 'collecting_details');
 
   if (isSupabaseConfigured()) {
     try {
@@ -7062,6 +7086,40 @@ function diagnosisLogHtml(order) {
   `;
 }
 
+/**
+ * Полная история уточнений администратора по заказу (вопрос — ответ,
+ * возможно несколько раундов подряд) — открыта и видна не только
+ * заказчику и админу, но и мастеру, в том числе кандидату, ещё не
+ * взявшему заказ (тот же принцип, что и лента диагностики выше, продумано
+ * с Sg 24.09.2026, заказ №72: «должны быть видны не только
+ * администратору, но и мастерам»). Только для чтения — вопросы
+ * добавляются через requestClarification в admin.html, ответы — через
+ * submitClarificationAnswer выше.
+ */
+function clarificationHistoryHtml(order) {
+  const history = orderClarificationHistory(order);
+  if (!history.length) return '';
+  return `
+    <div class="field-card" style="margin:8px 0;">
+      <p class="order-meta"><b>История уточнений</b></p>
+      ${history
+        .map(
+          (c) => `
+        <div style="margin-bottom:6px;">
+          <p class="order-meta"><span><b>Админ</b>${c.askedAt ? ' — ' + new Date(c.askedAt).toLocaleString('ru-RU') : ''}</span></p>
+          <p style="margin:2px 0 0;">${escapeHtml(c.question || '')}</p>
+          ${
+            c.answer
+              ? `<p class="order-meta" style="margin-top:4px;"><span><b>Заказчик</b>${c.answeredAt ? ' — ' + new Date(c.answeredAt).toLocaleString('ru-RU') : ''}</span></p><p style="margin:2px 0 0;">${escapeHtml(c.answer)}</p>`
+              : `<p style="margin:2px 0 0;"><i>Ждём ответ заказчика…</i></p>`
+          }
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
 /** Короткий превью последней записи ленты диагностики — для карточки в списке (см. orderCardHtml), в том числе видна мастеру ДО того, как он взял заказ. */
 function diagnosisLogPreviewHtml(order) {
   const log = order.diagnosisLog || [];
@@ -7606,7 +7664,7 @@ function renderOrderDetail() {
       // ответа ещё не готов.
       actions = `
         <p class="order-meta"><b>Администратору нужно уточнение:</b></p>
-        <p>${escapeHtml(order.clarification?.question || '')}</p>
+        <p>${escapeHtml((orderClarificationHistory(order).slice(-1)[0] || {}).question || '')}</p>
         <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2">${escapeHtml(clarificationAnswerDrafts[order.id] || '')}</textarea>
         <div id="clarification-photos-${order.id}" class="attachment-preview">
           ${(order.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
@@ -7752,6 +7810,7 @@ function renderOrderDetail() {
             : ''
         }
         ${diagnosisLogHtml(order)}
+        ${clarificationHistoryHtml(order)}
         ${
           // Заказчик может добавить свою догадку о причине поломки в любой
           // момент (не только по требованию) — доступно всегда, а не
