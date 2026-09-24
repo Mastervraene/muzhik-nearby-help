@@ -1643,6 +1643,18 @@ function markOrderReviewsSeen(o) {
   updateRow('orders', o.id, patch).catch((err) => console.warn('[reviews] не удалось пометить прочитанным', err));
 }
 
+// Дата рядом с бейджем статуса в карточке заказа — раньше всегда была
+// createdAt (дата создания), из-за чего после «Уточнить» → ответ клиента
+// дата у «На проверке» не менялась, хотя статус только что обновился.
+// Просьба Sg 24.09.2026 (заказ №72, Анастасия): «Надо чтобы дата менялась
+// на ту, когда прошло обновление статуса». Готовое поле для этого уже
+// есть — o.timeline пишется в transition()/requestClarification() на
+// КАЖДЫЙ переход статуса (см. index.html), берём время последней записи;
+// если таймлайна ещё нет (старые заказы) — откатываемся на createdAt.
+function orderLastActivityAt(o) {
+  return o.timeline && o.timeline.length ? o.timeline[o.timeline.length - 1].at : o.createdAt;
+}
+
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
@@ -1659,7 +1671,7 @@ function orderCardHtml(o) {
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
-            <span>${fmtDate(o.createdAt)}</span>
+            <span>${fmtDate(orderLastActivityAt(o))}</span>
           </div>
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
