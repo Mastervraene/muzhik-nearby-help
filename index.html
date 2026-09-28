@@ -1796,6 +1796,15 @@ const ALLOWED_TRANSITIONS = {
   // с сохранённой лентой диагностики (diagnosis_log), так что новый (или
   // тот же) мастер видит всю историю, а не начинает разбираться с нуля.
   awaiting_part: ['searching', 'cancelled'],
+  // part_purchase_requested — админ на ПЕРВИЧНОЙ модерации попросил купить
+  // деталь (см. admin.html requestPartPurchase), ещё до назначения мастера.
+  // В этот статус заказ переводит ТОЛЬКО админ напрямую в базе (минуя эту
+  // машину состояний, как и clarification_requested выше). Обратно —
+  // заказчик одной из двух кнопок (см. index.html confirmPartPurchased /
+  // confirmPartPurchasedWithQuestion): «Деталь куплена» → сразу searching,
+  // минуя повторную модерацию; «есть вопрос» → назад в collecting_details,
+  // как обычное уточнение. Просьба Sg 25.09.2026.
+  part_purchase_requested: ['collecting_details', 'searching', 'cancelled'],
 };
 
 class InvalidTransitionError extends Error {
@@ -2805,6 +2814,13 @@ function dbOrderToOrder(row) {
     // теряться при новом уточнении, и история видна не только заказчику
     // и админу, но и мастерам (см. clarificationHistoryHtml).
     clarificationHistory: row.clarification_history || [],
+    // История «нужна деталь» — админ на первичной модерации просит купить
+    // конкретную деталь (см. admin.html requestPartPurchase), заказчик
+    // отвечает «Деталь куплена» (пропуская повторную модерацию) или
+    // «Деталь куплена, есть вопрос» (тогда заказ возвращается на
+    // модерацию). Копится так же, как clarificationHistory выше — см.
+    // orderPartPurchaseHistory(). Просьба Sg 25.09.2026.
+    partPurchaseHistory: row.part_purchase_history || [],
     // Время прибытия мастера, которое он сам указал при «Буду через» (см.
     // advanceWorkerStatus/en_route-форму) — либо готовый пресет в минутах
     // (etaMinutes: 5/10/20), либо точное время (etaMinutes: null,
@@ -2876,6 +2892,7 @@ function orderToDbOrder(order) {
     formatted_brief: order.formattedBrief || null,
     clarification: order.clarification || null,
     clarification_history: order.clarificationHistory || [],
+    part_purchase_history: order.partPurchaseHistory || [],
     eta_minutes: order.etaMinutes ?? null,
     eta_at: order.etaAt || null,
     before_photos: order.beforePhotos || [],
@@ -3684,6 +3701,10 @@ const STATUS_LABELS = {
   cancelled: 'Отменено',
   issue_reported: 'Есть проблема',
   awaiting_part: 'Ждём деталь от заказчика',
+  // Не путать с awaiting_part выше — там мастер уже выехал, а тут админ
+  // ещё на первичной модерации решил, что нужна деталь (см. admin.html
+  // requestPartPurchase). См. renderOrderDetail (isCustomer) ниже.
+  part_purchase_requested: 'Нужно купить деталь',
 };
 
 // Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
@@ -5382,6 +5403,94 @@ async function submitClarificationAnswer(orderId) {
   delete clarificationAnswerDrafts[orderId]; // отправлено — черновик текста больше не нужен
   saveOrder(updated);
   showToast('Ответ отправлен — заказ снова на проверке у администратора');
+  render();
+}
+
+// -----------------------------------------------------------------------
+// «Нужно купить деталь» — админ на ПЕРВИЧНОЙ модерации (collecting_details,
+// до назначения мастера) просит купить конкретную деталь (см. admin.html
+// requestPartPurchase). Не путать с awaiting_part/reportDiagnosisOnly ниже —
+// там мастер уже выезжал и деталь не подошла на месте. Копится так же, как
+// orderClarificationHistory выше (та же функция скопирована 1-в-1 есть и в
+// admin.html), и видна не только заказчику и админу, но и мастерам (см.
+// partPurchaseHistoryHtml). Просьба Sg 25.09.2026.
+// -----------------------------------------------------------------------
+
+function orderPartPurchaseHistory(order) {
+  return order.partPurchaseHistory || [];
+}
+
+/**
+ * Заказчик подтверждает: деталь куплена, вопросов нет — пропускаем
+ * повторное одобрение админом и сразу возвращаемся в общий поиск мастера
+ * (просьба Sg 25.09.2026). Нет текста для ввода — простой клик, поэтому
+ * без явного await updateRow (как в confirmPartPurchasedWithQuestion ниже),
+ * тот же паттерн, что и у confirmPartReady выше.
+ */
+function confirmPartPurchased(orderId) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.status !== 'part_purchase_requested') return;
+  const history = orderPartPurchaseHistory(order);
+  const answeredAt = new Date().toISOString();
+  const partPurchaseHistory = history.map((c, i) =>
+    i === history.length - 1 ? { ...c, resolution: 'bought', answerComment: null, answeredAt } : c
+  );
+  order = transition({ ...order, partPurchaseHistory }, 'searching');
+  saveOrder(order);
+  showToast('Отлично — снова ищем мастера');
+  render();
+}
+
+/**
+ * То же, но заказчик добавляет вопрос — тогда пропустить модерацию нельзя,
+ * заказ возвращается на обычную проверку админом (collecting_details), а
+ * вопрос виден в истории (см. partPurchaseHistoryHtml). Явный await
+ * updateRow (как в submitClarificationAnswer выше) — если запрос не
+ * пройдёт, текст вопроса останется в поле и кнопка снова станет активной,
+ * а не потеряется молча (тот же урок, что и с ответом на уточнение,
+ * жалоба Sg от 19.09.2026).
+ */
+async function confirmPartPurchasedWithQuestion(orderId) {
+  const textarea = document.getElementById(`part-purchase-question-${orderId}`);
+  const question = textarea ? textarea.value.trim() : '';
+  if (!question) {
+    showToast('Опишите вопрос перед отправкой');
+    return;
+  }
+  const order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.status !== 'part_purchase_requested') return;
+
+  const submitBtn = document.querySelector(
+    `[data-action="confirm-part-purchased-with-question"][data-value="${orderId}"]`
+  );
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Отправляем…';
+  }
+
+  const history = orderPartPurchaseHistory(order);
+  const answeredAt = new Date().toISOString();
+  const partPurchaseHistory = history.map((c, i) =>
+    i === history.length - 1 ? { ...c, resolution: 'bought_with_question', answerComment: question, answeredAt } : c
+  );
+  const updated = transition({ ...order, partPurchaseHistory }, 'collecting_details');
+
+  if (isSupabaseConfigured()) {
+    try {
+      await updateRow('orders', orderId, orderToDbOrder(updated));
+    } catch (err) {
+      console.error('[confirmPartPurchasedWithQuestion] не удалось отправить', err);
+      showToast('Не удалось отправить — проверьте соединение и нажмите ещё раз');
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Деталь куплена, есть вопрос';
+      }
+      return; // статус и текст вопроса не трогаем — он остаётся в поле
+    }
+  }
+
+  saveOrder(updated);
+  showToast('Отправлено — заказ снова на проверке у администратора');
   render();
 }
 
@@ -7120,6 +7229,40 @@ function clarificationHistoryHtml(order) {
   `;
 }
 
+/**
+ * Полная история «нужна деталь» (см. admin.html requestPartPurchase) —
+ * так же, как clarificationHistoryHtml выше, открыта и видна не только
+ * заказчику и админу, но и мастеру, в том числе кандидату, ещё не
+ * взявшему заказ. Только для чтения — записи добавляются через
+ * requestPartPurchase в admin.html, ответы — через confirmPartPurchased /
+ * confirmPartPurchasedWithQuestion выше.
+ */
+function partPurchaseHistoryHtml(order) {
+  const history = orderPartPurchaseHistory(order);
+  if (!history.length) return '';
+  return `
+    <div class="field-card" style="margin:8px 0;">
+      <p class="order-meta"><b>История «нужна деталь»</b></p>
+      ${history
+        .map(
+          (c) => `
+        <div style="margin-bottom:6px;">
+          <p class="order-meta"><span><b>Админ</b>${c.askedAt ? ' — ' + new Date(c.askedAt).toLocaleString('ru-RU') : ''}</span></p>
+          <p style="margin:2px 0 0;">${escapeHtml(c.comment || '')}</p>
+          ${
+            c.resolution === 'bought'
+              ? `<p class="order-meta" style="margin-top:4px;"><span><b>Заказчик</b>${c.answeredAt ? ' — ' + new Date(c.answeredAt).toLocaleString('ru-RU') : ''}</span></p><p style="margin:2px 0 0;">Деталь куплена</p>`
+              : c.resolution === 'bought_with_question'
+              ? `<p class="order-meta" style="margin-top:4px;"><span><b>Заказчик</b>${c.answeredAt ? ' — ' + new Date(c.answeredAt).toLocaleString('ru-RU') : ''}</span></p><p style="margin:2px 0 0;">Деталь куплена, есть вопрос: ${escapeHtml(c.answerComment || '')}</p>`
+              : `<p style="margin:2px 0 0;"><i>Ждём заказчика…</i></p>`
+          }
+        </div>`
+        )
+        .join('')}
+    </div>
+  `;
+}
+
 /** Короткий превью последней записи ленты диагностики — для карточки в списке (см. orderCardHtml), в том числе видна мастеру ДО того, как он взял заказ. */
 function diagnosisLogPreviewHtml(order) {
   const log = order.diagnosisLog || [];
@@ -7707,6 +7850,19 @@ function renderOrderDetail() {
         <p class="order-meta">Как только деталь куплена и на руках, нажмите кнопку — мы снова начнём подбирать мастера, и он увидит всю историю.</p>
         <button class="primary-button" data-action="confirm-part-ready" data-value="${order.id}">Деталь готова — искать мастера</button>
       `;
+    } else if (order.status === 'part_purchase_requested') {
+      // Админ на первичной модерации попросил купить деталь (см. admin.html
+      // requestPartPurchase, история — partPurchaseHistoryHtml выше). Две
+      // кнопки: без вопроса — сразу в поиск мастера, минуя повторную
+      // модерацию; с вопросом — на модерацию, как обычное уточнение.
+      const lastPartRequest = orderPartPurchaseHistory(order).slice(-1)[0] || {};
+      actions = `
+        <p class="order-meta"><b>Нужно купить деталь:</b></p>
+        <p>${escapeHtml(lastPartRequest.comment || '')}</p>
+        <textarea id="part-purchase-question-${order.id}" class="composer-textarea" placeholder="Если по детали есть вопрос — напишите здесь (необязательно)…" rows="2"></textarea>
+        <button class="primary-button" data-action="confirm-part-purchased" data-value="${order.id}">Деталь куплена</button>
+        <button class="secondary-button" data-action="confirm-part-purchased-with-question" data-value="${order.id}">Деталь куплена, есть вопрос</button>
+      `;
     }
   }
 
@@ -7811,6 +7967,7 @@ function renderOrderDetail() {
         }
         ${diagnosisLogHtml(order)}
         ${clarificationHistoryHtml(order)}
+        ${partPurchaseHistoryHtml(order)}
         ${
           // Заказчик может добавить свою догадку о причине поломки в любой
           // момент (не только по требованию) — доступно всегда, а не
@@ -9628,6 +9785,10 @@ async function handleAction(action, value) {
     }
     case 'confirm-part-ready':
       return confirmPartReady(value);
+    case 'confirm-part-purchased':
+      return confirmPartPurchased(value);
+    case 'confirm-part-purchased-with-question':
+      return confirmPartPurchasedWithQuestion(value);
     case 'add-diagnosis-note':
       return submitCustomerDiagnosisNote(value);
     case 'rate-order': {
