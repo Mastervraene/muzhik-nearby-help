@@ -137,6 +137,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   padding-top: 10px;
   border-top: 1px dashed var(--gray-200);
   display: flex;
+  flex-wrap: wrap; /* третья кнопка («Купить деталь») не вылезает за карточку на узком экране */
   justify-content: flex-end;
   gap: 8px;
 }
@@ -699,6 +700,11 @@ const STATUS_LABELS = {
   cancelled: 'Отменено',
   issue_reported: 'Есть проблема',
   awaiting_part: 'Ждём деталь от заказчика',
+  // Отдельно от awaiting_part выше: это НЕ мастер на месте обнаружил, что
+  // деталь не подходит, а АДМИН ещё на первичной модерации решил, что
+  // заказчику сначала нужно купить деталь — до назначения мастера (см.
+  // requestPartPurchase, кнопка рядом с «Уточнить»). Просьба Sg 25.09.2026.
+  part_purchase_requested: 'Нужно купить деталь',
 };
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
 
@@ -736,6 +742,11 @@ STATUS_COLORS.clarification_requested = { bg: '#fef3c7', fg: '#92400e', dot: '#f
 // (issue_reported) и не «ждём ответа на вопрос» (clarification_requested,
 // амбер), а «ждём покупку детали» — голубой, чтобы визуально не путать.
 STATUS_COLORS.awaiting_part = { bg: '#e0f2fe', fg: '#075985', dot: '#0ea5e9' };
+// «Нужно купить деталь» — ещё одна боковая ветка, но с САМОГО начала
+// (из collecting_details, до назначения мастера — см. requestPartPurchase),
+// а не после выезда мастера, как awaiting_part (голубой) — фиолетовый,
+// чтобы не путать ни с ним, ни с обычным уточнением (амбер).
+STATUS_COLORS.part_purchase_requested = { bg: '#ede9fe', fg: '#5b21b6', dot: '#8b5cf6' };
 
 function statusColor(status) {
   return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
@@ -990,6 +1001,13 @@ function dbOrderToOrder(row) {
     // 24.09.2026 (заказ №72): предыдущие вопрос+ответ не должны теряться
     // при новом «Уточнить», и история должна быть видна и мастерам.
     clarificationHistory: row.clarification_history || [],
+    // История «нужна деталь» — АДМИН на первичной модерации просит купить
+    // конкретную деталь (requestPartPurchase, кнопка рядом с «Уточнить»),
+    // заказчик отвечает «Деталь куплена» (пропуская повторную модерацию) или
+    // «Деталь куплена, есть вопрос» (тогда заказ возвращается на модерацию).
+    // Копится так же, как clarificationHistory выше (просьба Sg 25.09.2026).
+    // См. orderPartPurchaseHistory().
+    partPurchaseHistory: row.part_purchase_history || [],
     // Структурированное ТЗ для исполнителя, сформированное ассистентом при
     // создании заказа (см. requestFormattedBrief() в index.html). Может
     // быть null — ассистент не настроен, сбой запроса, или заказ создан
@@ -1326,6 +1344,10 @@ let openMasterId = null;
 // всей карточкой заказа и не захламлял список (просьба Sg 24.09.2026,
 // заказ №72 — длинная инструкция по диагностике заняла весь экран списка).
 let expandedClarificationIds = new Set();
+// То же самое, но для истории «нужна деталь» (см. orderPartPurchaseHistoryPreviewHtml,
+// requestPartPurchase) — отдельный Set, сворачивается/разворачивается независимо
+// от истории уточнений и от самой карточки заказа (просьба Sg 25.09.2026).
+let expandedPartPurchaseIds = new Set();
 // Приватные заметки администратора (admin_notes, см. admin-notes.ts) —
 // ключ `${entityType}:${entityId}` → текст. openAdminNoteKeys — какие из
 // них сейчас раскрыты в режим редактирования (см. adminNoteHtml ниже).
@@ -1509,6 +1531,22 @@ function wireOrderCards(list) {
         renderOrders();
       });
     }
+    const buyPartBtn = document.getElementById(`buy-part-order-${o.id}`);
+    if (buyPartBtn) {
+      buyPartBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        requestPartPurchase(o);
+      });
+    }
+    const partPurchaseToggle = document.getElementById(`part-purchase-toggle-${o.id}`);
+    if (partPurchaseToggle) {
+      partPurchaseToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (expandedPartPurchaseIds.has(o.id)) expandedPartPurchaseIds.delete(o.id);
+        else expandedPartPurchaseIds.add(o.id);
+        renderOrders();
+      });
+    }
   });
 }
 
@@ -1649,6 +1687,141 @@ function orderClarificationHistoryPreviewHtml(o) {
   `;
 }
 
+// -----------------------------------------------------------------------
+// «Нужно купить деталь» — админ на ПЕРВИЧНОЙ модерации (collecting_details,
+// до назначения мастера) просит заказчика купить конкретную деталь, прежде
+// чем заказ пойдёт в поиск (не путать с awaiting_part — та ветка про
+// мастера, который уже выехал и деталь не подошла на месте, см.
+// index.html reportDiagnosisOnly). Копится так же, как история уточнений
+// выше (см. orderClarificationHistory), и точно так же свёрнута в списке
+// заказов по умолчанию. Просьба Sg 25.09.2026.
+// -----------------------------------------------------------------------
+
+function orderPartPurchaseHistory(o) {
+  return o.partPurchaseHistory || [];
+}
+
+/**
+ * Блок истории «нужна деталь» в СВЁРНУТОЙ карточке заказа — тот же паттерн,
+ * что и orderClarificationHistoryPreviewHtml выше: заголовок-переключатель
+ * виден всегда, сам текст раскрывается отдельным кликом по нему (см.
+ * wireOrderCards, expandedPartPurchaseIds), не разворачивая карточку заказа.
+ */
+function orderPartPurchaseHistoryPreviewHtml(o) {
+  const history = orderPartPurchaseHistory(o);
+  if (!history.length) return '';
+  const expanded = expandedPartPurchaseIds.has(o.id);
+  const last = history[history.length - 1];
+  const summary = history.length > 1 ? `Покупка детали (${history.length})` : 'Покупка детали';
+  const statusHint =
+    last.resolution === 'bought'
+      ? ' · деталь куплена'
+      : last.resolution === 'bought_with_question'
+      ? ' · куплена, есть вопрос'
+      : ' · ждём заказчика';
+  return `
+    <div class="card-clarification-block">
+      <div class="card-clarification-toggle" id="part-purchase-toggle-${o.id}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span><b>${summary}</b>${statusHint}</span>
+        <span class="chevron">${expanded ? '▲' : '▼'}</span>
+      </div>
+      ${
+        expanded
+          ? history
+              .map(
+                (c, i, arr) => `
+               <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,.08);">
+                 ${arr.length > 1 ? `<p class="order-meta"><span>Раунд ${i + 1} из ${arr.length}</span></p>` : ''}
+                 <p><b>Нужно купить:</b> ${escapeHtml(c.comment || '')}</p>
+                 ${
+                   c.resolution === 'bought'
+                     ? `<p><b>Заказчик:</b> Деталь куплена</p>`
+                     : c.resolution === 'bought_with_question'
+                     ? `<p><b>Заказчик:</b> Деталь куплена, есть вопрос: ${escapeHtml(c.answerComment || '')}</p>`
+                     : `<p><i>Ждём заказчика…</i></p>`
+                 }
+               </div>`
+              )
+              .join('')
+          : ''
+      }
+    </div>
+  `;
+}
+
+/**
+ * Админ просит заказчика купить деталь — до назначения мастера, отдельно
+ * от «Уточнить» (см. requestClarification ниже, тот же паттерн: пустое
+ * поле, новый раунд ДОБАВЛЯЕТСЯ к истории, не перезаписывает предыдущий).
+ * Заказ переходит в part_purchase_requested — заказчик отвечает одной из
+ * двух кнопок на сайте (см. index.html confirmPartPurchased /
+ * confirmPartPurchasedWithQuestion): «Деталь куплена» сразу возвращает
+ * заказ в поиск мастера, минуя повторную модерацию; «есть вопрос» — на
+ * модерацию (collecting_details), как обычное уточнение.
+ */
+async function requestPartPurchase(o) {
+  const commentRaw = prompt('Какую деталь нужно купить заказчику?', '');
+  if (commentRaw === null) return; // отменено
+  const comment = commentRaw.trim();
+  if (!comment) {
+    alert('Введите, что нужно купить');
+    return;
+  }
+
+  const btn = document.getElementById(`buy-part-order-${o.id}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Отправляем…';
+  }
+
+  try {
+    const timeline = [...(o.timeline || []), { status: 'part_purchase_requested', at: new Date().toISOString() }];
+    const partPurchaseHistory = [
+      ...orderPartPurchaseHistory(o),
+      { comment, askedAt: new Date().toISOString(), resolution: null, answerComment: null, answeredAt: null },
+    ];
+    await updateRow('orders', o.id, {
+      status: 'part_purchase_requested',
+      part_purchase_history: partPurchaseHistory,
+      timeline,
+    });
+
+    // Уведомление клиенту в Telegram — best-effort, тот же принцип, что и
+    // у requestClarification ниже.
+    const customer = allUsers.find((u) => u.id === o.customerId);
+    if (customer && customer.telegramId) {
+      const orderLabel = o.title || o.description || 'Заказ';
+      const text = `По заказу «${orderLabel}» нужно купить деталь:\n\n${comment}\n\nКогда купите — отметьте это в разделе «Заказы» на сайте: https://мастерврайоне.рф/`;
+      try {
+        const res = await sendAdminNotification([customer.telegramId], text);
+        if (res.configured && res.sent > 0) {
+          try {
+            await insertRow('telegram_messages', {
+              user_id: customer.id,
+              telegram_id: customer.telegramId,
+              direction: 'out',
+              text,
+            });
+          } catch (logErr) {
+            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn('Не удалось отправить уведомление о покупке детали:', notifyErr);
+      }
+    }
+
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось отправить: ' + err.message);
+    const freshBtn = document.getElementById(`buy-part-order-${o.id}`);
+    if (freshBtn) {
+      freshBtn.disabled = false;
+      freshBtn.textContent = '🧩 Купить деталь';
+    }
+  }
+}
+
 async function requestClarification(o) {
   // Пустое поле, а не старый вопрос (как было раньше) — кнопка «Уточнить»
   // видна только когда предыдущий раунд уже закрыт (см. orderCardHtml:
@@ -1780,9 +1953,15 @@ function orderCardHtml(o) {
         orderClarificationHistoryPreviewHtml(o)
       }
       ${
+        // Та же логика, для истории «нужна деталь» (см. requestPartPurchase
+        // ниже) — своё сворачивание, независимое от истории уточнений выше.
+        orderPartPurchaseHistoryPreviewHtml(o)
+      }
+      ${
         o.status === 'collecting_details'
           ? `<div class="card-moderation-bar">
                <button type="button" class="btn-sm ghost" id="clarify-order-${o.id}">✏️ Уточнить</button>
+               <button type="button" class="btn-sm ghost" id="buy-part-order-${o.id}">🧩 Купить деталь</button>
                <button type="button" class="btn-sm primary" id="approve-order-${o.id}">✓ Одобрить</button>
              </div>`
           : ''
