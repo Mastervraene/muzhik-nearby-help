@@ -611,40 +611,17 @@ let adminSessionToken = null;
 const SUPABASE_URL = 'https://youyvbqdxuigvjciklfk.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
 
-// Секрет для Edge Function admin-notify (рассылка сообщений в Telegram-бот
-// из вкладки «Рассылка» и из карточки пользователя). Значение здесь
-// ДОЛЖНО совпадать с тем, что задано на сервере через
-// `supabase secrets set ADMIN_NOTIFY_SECRET=...` — иначе рассылка будет
-// отвечать «доступ запрещён». См. README ассистента, раздел про рассылку.
-// Как и весь остальной «секрет» в этом файле (пароль админки, anon-ключ) —
-// это барьер от случайного использования, а не криптографическая защита:
-// смотри честное пояснение про уровень защиты MVP выше по файлу.
-// Значение заменено 18.09.2026 (Sg) — прежнее (907fc13e...) успело
-// засветиться в истории ПУБЛИЧНОГО репозитория, см. аудит секретов в чате;
-// старое значение больше не действует ни в этом файле, ни в секрете на
-// сервере (поменяны синхронно).
-const ADMIN_NOTIFY_SECRET = '4c47682400cf37bf55c5ef4da657c87c63a6bcc7091e695a';
-
-// Секрет для Edge Function admin-payouts (вкладка «Выплаты» — список
-// начислений мастерам и отметка «оплачено»). Тот же принцип, что и у
-// ADMIN_NOTIFY_SECRET выше: значение ДОЛЖНО совпадать с тем, что задано на
-// сервере через `supabase secrets set ADMIN_PAYOUTS_SECRET=...`, иначе
-// вкладка будет отвечать «доступ запрещён». Не настоящая защита данных
-// (см. пояснение выше) — барьер от вызова функции напрямую с публичным
-// anon-ключом; сами деньги вообще не проходят через эту функцию, это
-// только бухгалтерская запись поверх заказа (см. worker_payouts).
-const ADMIN_PAYOUTS_SECRET = 'fbda3ba71e622775d4247798e2a96060f1c3b72bd36f2d48';
-
-// Секрет для Edge Function admin-notes (приватные заметки администратора —
-// под карточкой заказа/клиента/мастера, просьба Sg 24.09.2026: «поле для
-// комментариев админа, которые не видны никому кроме админа»). Тот же
-// принцип, что у ADMIN_NOTIFY_SECRET/ADMIN_PAYOUTS_SECRET выше: значение
-// ДОЛЖНО совпадать с тем, что задано на сервере через
-// `supabase secrets set ADMIN_NOTES_SECRET=...`. Заметки хранятся в
-// ОТДЕЛЬНОЙ таблице admin_notes (не колонкой в orders/users — те целиком
-// читает анон-ключом ещё и index.html, см. 008_admin_notes.sql), доступ к
-// ней — только отсюда, через эту функцию.
-const ADMIN_NOTES_SECRET = 'f77f801e094152c12513bc20f3abdf6062013aed18c39883ac';
+// ПРАВКА БЕЗОПАСНОСТИ 28.09.2026 (Sg): раньше admin-notify/admin-payouts/
+// admin-notes/admin-reset-password проверяли статический секрет, зашитый
+// прямо в этом файле открытым текстом (ADMIN_NOTIFY_SECRET и т.п.).
+// Репозиторий публичный — значит, такой секрет мог прочитать в исходниках
+// на GitHub кто угодно и дёргать эти функции напрямую, в обход настоящего
+// входа по паролю. Статические секреты убраны совсем — вместо них все
+// четыре функции теперь проверяют НАСТОЯЩИЙ токен сессии (adminSessionToken,
+// тот же самый, что выдаёт admin-login-with-password и что уже проверяет
+// admin-change-password через таблицу public.admin_sessions). Без валидного
+// токена сессии — то есть без реального входа по паролю администратора —
+// эти функции теперь ничего не делают, даже если знать URL и anon-ключ.
 
 // Ключ JS API Яндекс.Карт — ОТДЕЛЬНЫЙ от YANDEX_GEOCODER_API_KEY в
 // index.html (это разные продукты в одном кабинете разработчика Яндекса,
@@ -860,8 +837,8 @@ async function updateRow(table, id, patch) {
 async function sendAdminNotification(chatIds, text) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-notify`, {
     method: 'POST',
-    headers: sbHeaders({ 'x-admin-notify-secret': ADMIN_NOTIFY_SECRET }),
-    body: JSON.stringify({ chatIds, text }),
+    headers: sbHeaders(),
+    body: JSON.stringify({ token: adminSessionToken, chatIds, text }),
   });
   let data;
   try {
@@ -870,8 +847,8 @@ async function sendAdminNotification(chatIds, text) {
     data = null;
   }
   if (!res.ok) {
-    const reason = data?.error === 'forbidden'
-      ? 'секрет ADMIN_NOTIFY_SECRET не совпадает с настройкой сервера'
+    const reason = data?.error === 'invalid_session'
+      ? 'сессия истекла — войдите заново'
       : data?.error || `HTTP ${res.status}`;
     throw new Error(`не удалось отправить (${reason})`);
   }
@@ -884,8 +861,8 @@ async function sendAdminNotification(chatIds, text) {
 async function callAdminPayouts(action, extra) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-payouts`, {
     method: 'POST',
-    headers: sbHeaders({ 'x-admin-payouts-secret': ADMIN_PAYOUTS_SECRET }),
-    body: JSON.stringify(Object.assign({ action }, extra || {})),
+    headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ action, token: adminSessionToken }, extra || {})),
   });
   let data;
   try {
@@ -894,8 +871,8 @@ async function callAdminPayouts(action, extra) {
     data = null;
   }
   if (!res.ok || !data || !data.ok) {
-    const reason = data?.error === 'forbidden'
-      ? 'секрет ADMIN_PAYOUTS_SECRET не совпадает с настройкой сервера'
+    const reason = data?.error === 'invalid_session'
+      ? 'сессия истекла — войдите заново'
       : data?.error || `HTTP ${res.status}`;
     throw new Error(`не удалось выполнить (${reason})`);
   }
@@ -907,8 +884,8 @@ async function callAdminPayouts(action, extra) {
 async function callAdminNotes(action, extra) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-notes`, {
     method: 'POST',
-    headers: sbHeaders({ 'x-admin-notes-secret': ADMIN_NOTES_SECRET }),
-    body: JSON.stringify(Object.assign({ action }, extra || {})),
+    headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ action, token: adminSessionToken }, extra || {})),
   });
   let data;
   try {
@@ -917,10 +894,42 @@ async function callAdminNotes(action, extra) {
     data = null;
   }
   if (!res.ok || !data || !data.ok) {
-    const reason = data?.error === 'forbidden'
-      ? 'секрет ADMIN_NOTES_SECRET не совпадает с настройкой сервера'
+    const reason = data?.error === 'invalid_session'
+      ? 'сессия истекла — войдите заново'
       : data?.error || `HTTP ${res.status}`;
     throw new Error(`не удалось выполнить (${reason})`);
+  }
+  return data;
+}
+
+// Вызов Edge Function admin-reset-password (кнопка «Сбросить пароль» в
+// карточке пользователя — см. masterFormHtml/wireMasterForm ниже).
+// ВАЖНО (уточнение Sg 28.09.2026): функция НЕ трогает пароль клиента —
+// она генерирует одноразовый код (10 символов, 30 минут на использование)
+// и возвращает его нам один-единственный раз. Дальше мы сами передаём
+// код клиенту голосом/в чате, а он вводит телефон+код+новый пароль на
+// сайте («Есть код от поддержки?» в форме входа) — сверку и саму смену
+// пароля делает Edge Function redeem-reset-code, см. подробности в
+// _auth_migration/admin-reset-password.ts и redeem-reset-code.ts.
+async function callAdminResetPassword(userId) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-reset-password`, {
+    method: 'POST',
+    headers: sbHeaders(),
+    body: JSON.stringify({ token: adminSessionToken, userId }),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || !data || !data.ok) {
+    const reason = data?.error === 'invalid_session'
+      ? 'сессия истекла — войдите заново'
+      : data?.error === 'user_not_found'
+        ? 'пользователь не найден'
+        : data?.error || `HTTP ${res.status}`;
+    throw new Error(`не удалось сбросить пароль (${reason})`);
   }
   return data;
 }
@@ -2699,6 +2708,19 @@ function masterFormHtml(u) {
       </div>
 
       <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
+        <button class="btn-sm ghost" id="reset-password-master-${u.id}">Выдать код сброса пароля</button>
+        <span class="save-hint" id="reset-password-master-hint-${u.id}" style="color:var(--gray-500);"></span>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100); flex-wrap:wrap;">
+        <select id="bulk-status-master-${u.id}" style="max-width:220px;">
+          ${STATUS_KEYS.map((k) => `<option value="${escapeHtml(k)}" ${k === 'cancelled' ? 'selected' : ''}>${escapeHtml(STATUS_LABELS[k])}</option>`).join('')}
+        </select>
+        <button class="btn-sm danger" id="bulk-status-apply-master-${u.id}">Применить ко всем заказам</button>
+        <span class="save-hint" id="bulk-status-master-hint-${u.id}" style="color:var(--gray-500);"></span>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
         <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" id="toggle-block-master-${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
         <span class="save-hint" id="toggle-block-master-hint-${u.id}" style="color:var(--gray-500);"></span>
       </div>
@@ -2744,6 +2766,91 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
     }
   });
+
+  const resetPasswordBtn = document.getElementById(`reset-password-master-${u.id}`);
+  if (resetPasswordBtn) {
+    resetPasswordBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = u.displayName || u.phone || u.id;
+      // Просьба Sg 28.09.2026, уточнение той же даты: перед нажатием админ
+      // сам убеждается, кто пишет/звонит (вне системы). Кнопка выдаёт
+      // одноразовый код (10 символов, 30 минут), который нужно
+      // продиктовать/переслать клиенту — он вводит его вместе с телефоном
+      // и новым паролем на сайте («Есть код от поддержки?» в форме входа).
+      // Пароль/хэш здесь не меняется — только после того, как клиент сам
+      // введёт код (см. Edge Function redeem-reset-code).
+      const ok = confirm(
+        `Выдать одноразовый код сброса пароля для «${label}»?\n\nУбедитесь, что вы уже поговорили с этим человеком и он ждёт код. Код будет действовать 30 минут и подойдёт один раз.`
+      );
+      if (!ok) return;
+      resetPasswordBtn.disabled = true;
+      resetPasswordBtn.textContent = 'Генерирую…';
+      const hint = document.getElementById(`reset-password-master-hint-${u.id}`);
+      try {
+        const data = await callAdminResetPassword(u.id);
+        const until = new Date(data.expiresAt);
+        const untilStr = until.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        alert(
+          `Код для «${label}»: ${data.code}\n\nДействует до ${untilStr} (30 минут), подходит один раз. Продиктуйте или перешлите его клиенту вместе с номером, на который заходит сайт — он введёт код в форме входа, по ссылке «Есть код от поддержки?».`
+        );
+        if (hint) {
+          hint.textContent = `Код: ${data.code} (до ${untilStr})`;
+          hint.style.color = 'var(--green)';
+          hint.style.display = 'inline';
+        }
+      } catch (err) {
+        alert('Не удалось выдать код: ' + err.message);
+      } finally {
+        const freshBtn = document.getElementById(`reset-password-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Выдать код сброса пароля'; }
+      }
+    });
+  }
+
+  const bulkStatusBtn = document.getElementById(`bulk-status-apply-master-${u.id}`);
+  if (bulkStatusBtn) {
+    bulkStatusBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const select = document.getElementById(`bulk-status-master-${u.id}`);
+      const newStatus = select.value;
+      const userOrders = allOrders.filter((o) => o.customerId === u.id);
+      if (!userOrders.length) {
+        alert('У этого пользователя нет заказов.');
+        return;
+      }
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(
+        `Перевести ВСЕ заказы пользователя «${label}» (${userOrders.length} шт.) в статус «${STATUS_LABELS[newStatus]}»?\n\nСтатус меняется напрямую, в обход обычных проверок перехода — используйте осторожно (например, для тестовых заказов).`
+      );
+      if (!ok) return;
+      bulkStatusBtn.disabled = true;
+      bulkStatusBtn.textContent = 'Применяю…';
+      let okCount = 0;
+      let failCount = 0;
+      for (const o of userOrders) {
+        try {
+          const timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
+          await updateRow('orders', o.id, { status: newStatus, timeline });
+          okCount++;
+        } catch (err) {
+          failCount++;
+          console.warn(`Не удалось изменить статус заказа ${o.id}:`, err);
+        }
+      }
+      try {
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        console.warn('Не удалось обновить данные после смены статусов:', err);
+      }
+      alert(
+        failCount
+          ? `Изменено ${okCount} из ${userOrders.length} заказов. Не удалось изменить: ${failCount} — см. консоль.`
+          : `Готово: статус изменён у ${okCount} заказ(ов).`
+      );
+      const freshBtn = document.getElementById(`bulk-status-apply-master-${u.id}`);
+      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Применить ко всем заказам'; }
+    });
+  }
 
   document.getElementById(`toggle-block-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -3658,9 +3765,9 @@ async function loadData(opts) {
     // daily_stats/skills выше).
     getRows('telegram_messages', 'select=*&order=created_at.asc').catch(() => []),
     // Приватные заметки администратора (см. adminNoteHtml) — отдельная
-    // защищённая функция, не обычная таблица; если ADMIN_NOTES_SECRET ещё
-    // не настроен на сервере (функция не задеплоена/секрет не совпадает),
-    // просто не показываем заметки, а не ломаем всю страницу.
+    // защищённая функция, не обычная таблица; если она ещё не задеплоена
+    // или токен сессии истёк, просто не показываем заметки, а не ломаем
+    // всю страницу.
     callAdminNotes('list').catch((err) => {
       console.warn('[admin-notes] не удалось загрузить заметки', err);
       return { notes: [] };
