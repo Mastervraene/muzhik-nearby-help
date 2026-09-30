@@ -812,21 +812,46 @@ async function fetchRetry(url, options, retries = 1) {
   }
 }
 
+// ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: getRows/updateRow/insertRow/insertRows/
+// deleteRow ниже раньше слали запросы напрямую на /rest/v1/... анонимным
+// ключом (см. sbHeaders выше) — тем же самым ключом, что открытым текстом
+// лежит в этом же ПУБЛИЧНОМ репозитории на GitHub. При «анон full access»
+// RLS на users/orders/... это означало, что кто угодно, прочитав ключ в
+// исходниках, мог напрямую (в обход сайта и входа администратора) читать и
+// писать все данные — персональные данные заказчиков и мастеров включая
+// телефоны и точные адреса. Теперь все пять функций идут через один и тот
+// же прокси — Edge Function admin-db: она принимает НАСТОЯЩИЙ токен сессии
+// администратора (adminSessionToken, тот же, что выдаёт
+// admin-login-with-password) и сама, сервисным ключом (в обход RLS),
+// выполняет операцию — но только после проверки токена и что этому
+// пользователю реально выставлен is_admin/is_moderator. Без валидного
+// входа администратора по паролю эти функции теперь не дают ничего.
+async function callAdminDb(body) {
+  const res = await fetchRetry(`${SUPABASE_URL}/functions/v1/admin-db`, {
+    method: 'POST',
+    headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ token: adminSessionToken }, body)),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || (data && data.ok === false)) {
+    const reason = data?.error === 'invalid_session' || data?.error === 'forbidden'
+      ? 'сессия истекла — войдите заново'
+      : data?.error || `HTTP ${res.status}`;
+    throw new Error(`${body.op} ${body.table} failed: ${reason}`);
+  }
+  return data;
+}
+
 async function getRows(table, query) {
-  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?${query || 'select=*'}`, { headers: sbHeaders() });
-  if (!res.ok) throw new Error(`GET ${table} failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  const params = new URLSearchParams(query || '');
+  const body = { op: 'select', table };
+  if (params.has('order')) body.order = params.get('order');
+  if (params.has('limit')) body.limit = Number(params.get('limit'));
+  return callAdminDb(body);
 }
 
 async function updateRow(table, id, patch) {
-  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: sbHeaders({ Prefer: 'return=representation' }),
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) throw new Error(`PATCH ${table} failed: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data[0] : data;
+  return callAdminDb({ op: 'update', table, id, patch });
 }
 
 // Рассылка через Edge Function admin-notify (см. supabase/functions/admin-notify —
@@ -938,36 +963,18 @@ async function callAdminResetPassword(userId) {
 // telegram_messages — входящие пишет сама Edge Function telegram-webhook
 // сервисным ключом, это для симметрии видно в истории переписки).
 async function insertRow(table, data) {
-  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: sbHeaders({ Prefer: 'return=representation' }),
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error(`POST ${table} failed: ${res.status} ${await res.text()}`);
-  const result = await res.json();
-  return Array.isArray(result) ? result[0] : result;
+  return callAdminDb({ op: 'insert', table, data });
 }
 
 // Массовая вставка (для рассылки — одно исходящее сообщение на каждого
 // успешного получателя за один запрос вместо N).
 async function insertRows(table, rows) {
   if (!rows.length) return [];
-  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: sbHeaders({ Prefer: 'return=representation' }),
-    body: JSON.stringify(rows),
-  });
-  if (!res.ok) throw new Error(`POST ${table} (bulk) failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  return callAdminDb({ op: 'insertMany', table, rows });
 }
 
 async function deleteRow(table, id, byField) {
-  const field = byField || 'id';
-  const res = await fetchRetry(`${SUPABASE_URL}/rest/v1/${table}?${field}=eq.${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: sbHeaders({ Prefer: 'return=minimal' }),
-  });
-  if (!res.ok) throw new Error(`DELETE ${table} failed: ${res.status} ${await res.text()}`);
+  await callAdminDb({ op: 'delete', table, id, byField: byField || 'id' });
 }
 
 // -----------------------------------------------------------------------

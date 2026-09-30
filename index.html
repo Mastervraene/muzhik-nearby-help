@@ -2359,12 +2359,16 @@ function loadSessionToken() {
 }
 
 /**
- * Запрашивает новый сессионный токен для уже определённого id пользователя
- * (после ensureUserByPhone или при восстановлении сессии без токена —
- * см. bootstrap). Сам вызов ничего не проверяет о владении телефоном
- * (тем же ограничением обладает и ensureUserByPhone), но без результата
- * этого вызова available-orders/accept-order не отдадут данные и не примут
- * заказ от имени этого пользователя.
+ * НЕ ИСПОЛЬЗУЕТСЯ (ПРАВКА БЕЗОПАСНОСТИ 30.09.2026) — Edge Function
+ * issue-session-token, которую эта функция вызывала, полностью отключена
+ * на сервере (возвращает 410 при любом теле запроса): раньше она выдавала
+ * настоящий токен сессии по одному лишь userId, без пароля и вообще какой-
+ * либо проверки — то есть, зная или подобрав id пользователя, можно было
+ * полностью войти под ним. Единственные вызывающие (refreshAvailableOrders/
+ * refreshWorkerPayouts) переписаны — при отсутствии/невалидности токена
+ * теперь просто показывают ошибку и просят войти заново по паролю, а не
+ * тихо перевыпускают токен. Функция оставлена в файле (не удалена) как
+ * задокументированная история решения — вызывать её больше неоткуда.
  * @param {string} userId
  */
 async function issueSessionToken(userId) {
@@ -2386,6 +2390,34 @@ async function issueSessionToken(userId) {
     console.error('[session-token] не удалось получить токен', err);
   }
   return null;
+}
+
+/**
+ * Общий вызов «узких» Edge Functions, закрывающих прямой доступ к
+ * персональным данным через анонимный ключ (get-my-profile/save-profile/
+ * get-contact-info/resolve-user-by-phone/rate-user/create-order/
+ * update-order-sensitive, 30.09.2026) — каждая сама проверяет sessionToken
+ * (по таблице user_sessions) и/или отношение пользователя к заказу, а не
+ * просто принимает анонимный ключ. Возвращает распарсенный JSON-ответ
+ * функции; бросает Error, если res.ok===false или data.ok===false (текст —
+ * из data.error, иначе HTTP-статус).
+ * @param {string} name
+ * @param {Object} body
+ */
+async function callSecureFn(name, body) {
+  const { url } = getConfig();
+  const res = await fetchRetry(`${url}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || data.ok === false) {
+    const err = new Error((data && data.error) || `HTTP ${res.status}`);
+    err.code = data && data.error;
+    throw err;
+  }
+  return data;
 }
 
 
@@ -3007,11 +3039,23 @@ async function initDb(localSeed) {
     // настоящей таблицы users — иначе у собственного профиля пропали бы
     // телефон, telegram_id и координаты (users_public их не содержит).
     const savedSessionUserId = loadSession();
-    if (savedSessionUserId) {
+    const savedSessionToken = loadSessionToken();
+    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой getRows('users',
+    // `id=eq.${savedSessionUserId}&select=*`) анонимным ключом — без проверки
+    // sessionToken. Зная/подобрав чужой id можно было прочитать телефон,
+    // точные координаты и telegram_id ЛЮБОГО пользователя напрямую через
+    // REST API, в обход сайта (id — не секрет, виден в куче мест). Теперь —
+    // через get-my-profile, которая отдаёт полную строку только при
+    // совпадении sessionToken с тем, что реально выдан этому userId. Без
+    // токена (старая сессия без пароля — см. boot()) просто не пытаемся.
+    if (savedSessionUserId && savedSessionToken) {
       try {
-        const selfRows = await getRows('users', `id=eq.${encodeURIComponent(savedSessionUserId)}&select=*`);
-        if (selfRows && selfRows[0]) {
-          const selfUser = dbUserToUser(selfRows[0], skillsByUser);
+        const { user: selfRow } = await callSecureFn('get-my-profile', {
+          userId: savedSessionUserId,
+          sessionToken: savedSessionToken,
+        });
+        if (selfRow) {
+          const selfUser = dbUserToUser(selfRow, skillsByUser);
           const i = cache.users.findIndex((u) => u.id === selfUser.id);
           if (i >= 0) cache.users[i] = selfUser;
           else cache.users.push(selfUser);
@@ -3068,11 +3112,13 @@ const contactCache = {}; // userId -> { displayName, phone } | 'loading' | 'erro
  * Синхронно возвращает то, что уже известно о контакте пользователя
  * (или null, если запрос ещё не запускали) и в фоне запускает загрузку,
  * если её ещё не было — по завершении вызывает render() ещё раз.
- * @param {string} userId
+ * @param {Object} order — заказ из карточки (нужен order.id и order.customerId,
+ *   сервер сверяет, что state.currentUserId реально назначенный мастер order.id)
  * @returns {{displayName: string, phone: string} | 'loading' | 'error' | null}
  */
-function ensureCustomerContact(userId) {
-  if (!userId) return null;
+function ensureCustomerContact(order) {
+  const userId = order && order.customerId;
+  if (!userId || !order.id) return null;
   const existing = contactCache[userId];
   if (existing) return existing;
 
@@ -3083,12 +3129,31 @@ function ensureCustomerContact(userId) {
     return contactCache[userId];
   }
 
+  const sessionToken = loadSessionToken();
+  if (!sessionToken) {
+    contactCache[userId] = 'error';
+    return contactCache[userId];
+  }
+
   contactCache[userId] = 'loading';
-  getRows('users', `id=eq.${encodeURIComponent(userId)}&select=display_name,phone`)
-    .then((rows) => {
-      contactCache[userId] = rows && rows[0]
-        ? { displayName: rows[0].display_name || '', phone: rows[0].phone || '' }
-        : 'error';
+  // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой getRows('users',
+  // `id=eq.${userId}&select=display_name,phone`) анонимным ключом, БЕЗ
+  // какой-либо проверки. Любой человек с анонимным ключом (он лежит открытым
+  // текстом в этом же публичном репозитории на GitHub) мог получить имя и
+  // телефон ЛЮБОГО пользователя сайта напрямую через REST API, просто зная
+  // его id — в обход сайта и вообще без отношения к какому-либо заказу.
+  // Теперь — через get-contact-info: на сервере проверяется (1) sessionToken
+  // запрашивающего и (2) что этот пользователь реально назначенный мастер
+  // (assigned_worker_id) именно заказа order.id, чей заказчик — order.customerId.
+  // Без этого — 403, контакт не отдаётся.
+  callSecureFn('get-contact-info', {
+    userId: state.currentUserId,
+    sessionToken,
+    orderId: order.id,
+    counterpartUserId: userId,
+  })
+    .then((data) => {
+      contactCache[userId] = { displayName: data.displayName || '', phone: data.phone || '' };
       render();
     })
     .catch((err) => {
@@ -3117,6 +3182,9 @@ function saveUser(user) {
   const payload = userToDbUser(user);
 
   if (isNew) {
+    // Живых вызовов этой ветки в проде нет (регистрация идёт через
+    // ensureUserByPhone → resolve-user-by-phone, см. ниже) — оставлена как
+    // была, на случай локального/демо-объекта без id.
     insertRow('users', payload)
       .then((row) => {
         const created = dbUserToUser(row, {});
@@ -3126,7 +3194,32 @@ function saveUser(user) {
       })
       .catch((err) => reportError('сохранение пользователя', err));
   } else {
-    updateRow('users', user.id, payload).catch((err) => reportError('сохранение пользователя', err));
+    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой updateRow('users',
+    // user.id, payload) анонимным ключом — БЕЗ проверки sessionToken, и мог
+    // перезаписать любое поле строки, включая is_admin/is_moderator/blocked/
+    // phone/рейтинги (всё, что возвращает userToDbUser). Теперь — через
+    // save-profile: (1) проверяется sessionToken владельца профиля, (2) на
+    // сервере пропускаются только «безопасные» поля (ALLOWED_FIELDS: имя,
+    // аватар, район, радиус поиска, доступность как мастер, координаты) —
+    // остальные этим путём больше не поменять.
+    const sessionToken = loadSessionToken();
+    if (!sessionToken) {
+      reportError('сохранение пользователя', new Error('нет sessionToken — войдите заново'));
+    } else {
+      callSecureFn('save-profile', {
+        userId: user.id,
+        sessionToken,
+        patch: {
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+          district: user.district,
+          searchRadiusKm: user.searchRadiusKm,
+          availableAsWorker: user.availableAsWorker,
+          lat: user.location?.lat,
+          lng: user.location?.lng,
+        },
+      }).catch((err) => reportError('сохранение пользователя', err));
+    }
   }
   return user;
 }
@@ -3222,12 +3315,24 @@ function saveOrder(order) {
   }
 
   const isNew = idx < 0 || String(order.id).startsWith('o-');
-  const payload = orderToDbOrder(order);
+  const sessionToken = loadSessionToken();
 
   if (isNew) {
-    return insertRow('orders', payload)
-      .then((row) => {
-        const created = dbOrderToOrder(row);
+    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой insertRow('orders',
+    // orderToDbOrder(order)) анонимным ключом — заказ (включая точный адрес,
+    // геопозицию и объект оплаты) писался без всякой проверки, что заказчик
+    // реально вошёл в систему. Теперь — через create-order: проверяет
+    // sessionToken и сама подставляет customer_id из проверенной сессии
+    // (не из тела запроса).
+    if (!sessionToken) {
+      reportError('сохранение заказа', new Error('нет sessionToken — войдите заново'));
+      const i = cache.orders.findIndex((o) => o === order);
+      if (i >= 0) cache.orders.splice(i, 1);
+      return Promise.resolve(null);
+    }
+    return callSecureFn('create-order', { userId: state.currentUserId, sessionToken, order })
+      .then((data) => {
+        const created = dbOrderToOrder(data.order);
         const i = cache.orders.findIndex((o) => o === order);
         if (i >= 0) cache.orders[i] = created; return created;
       })
@@ -3245,9 +3350,34 @@ function saveOrder(order) {
         return null;
       });
   } else {
-    return updateRow('orders', order.id, payload).then(() => order).catch((err) => { reportError('сохранение заказа', err); return order; });
+    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: 5 полей (exact_lat/exact_lng/
+    // full_address/payment/voice_transcript) анонимному ключу больше не
+    // доступны ни на чтение, ни на запись (см. column-level REVOKE в
+    // миграции) — их обновляет отдельно update-order-sensitive, которая
+    // проверяет sessionToken и что userId — участник именно этого заказа
+    // (заказчик или назначенный мастер). Остальные поля заказа — как
+    // раньше, прямым PATCH анонимным ключом.
+    const payload = orderToDbOrder(order);
+    const { exact_lat, exact_lng, full_address, payment, voice_transcript, ...safePayload } = payload;
+    const safeUpdate = updateRow('orders', order.id, safePayload).catch((err) => {
+      reportError('сохранение заказа', err);
+    });
+    let sensitiveUpdate = Promise.resolve();
+    if (sessionToken) {
+      sensitiveUpdate = callSecureFn('update-order-sensitive', {
+        userId: state.currentUserId,
+        sessionToken,
+        orderId: order.id,
+        patch: {
+          exactLocation: order.exactLocation,
+          fullAddress: order.fullAddress,
+          payment: order.payment,
+          voiceTranscript: order.voiceTranscript,
+        },
+      }).catch((err) => reportError('сохранение защищённых полей заказа', err));
+    }
+    return Promise.all([safeUpdate, sensitiveUpdate]).then(() => order);
   }
-  return order;
 }
 
 function saveService(service) {
@@ -3930,47 +4060,65 @@ async function ensureUserByPhone(phone, extra = {}) {
 
   if (isSupabaseConfigured()) {
     try {
-      // Один и тот же номер в базе мог осесть в разных начертаниях —
-      // не только в двух «текущих» (канонический без +/пробелов и
-      // «человеческий» с пробелами из formatPhoneRu), но и в любом другом,
-      // в котором его когда-либо мог записать старый код, ручная правка в
-      // базе или импорт: «+7» слитно с цифрами, через «8», голыми 10
-      // цифрами без кода страны и т.п. Раньше в OR-запросе проверялись
-      // только 2 первых варианта — если существующая запись была в любом
-      // ином начертании, поиск её не находил, и вход молча заводил ВТОРОЙ,
-      // дублирующий аккаунт на тот же телефон вместо того, чтобы попасть в
-      // уже существующий (см. переписку с Sg, 17-18.09.2026 — так возник
-      // дубль для 70000000001/+70000000001). Если после этого исправления
-      // в базе всё равно найдутся записи в нескольких начертаниях сразу
-      // (исторический дубль) — отдаём предпочтение той, где уже привязан
-      // Telegram, а при прочих равных — более старой.
-      const humanPhone = formatPhoneRu(local10);
-      const phoneVariants = Array.from(
-        new Set([
-          canonicalPhone, // 79165339588
-          humanPhone, // +7 916 533 95 88
-          '+' + canonicalPhone, // +79165339588
-          '8' + local10, // 89165339588
-          local10, // 9165339588 (без кода страны)
-        ])
-      );
-      const orClause = phoneVariants.map((v) => `phone.eq.${encodeURIComponent(v)}`).join(',');
-      const query = `or=(${orClause})&order=telegram_id.nullslast,created_at.asc&limit=1&select=*`;
-      const rows = await getRows('users', query);
-      if (rows[0]) {
-        const skillRows = await getRows('skills', `user_id=eq.${rows[0].id}`);
-        const skillsByUser = {};
-        skillRows.forEach((row) => {
-          const skill = dbSkillToSkill(row);
-          if (!skillsByUser[row.user_id]) skillsByUser[row.user_id] = [];
-          skillsByUser[row.user_id].push(skill);
-        });
-        user = dbUserToUser(rows[0], skillsByUser);
-        cache.users.push(user);
-        return user;
+      // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой getRows('users',
+      // 'or=(phone.eq....)&...&select=*') анонимным ключом — по ЧУЖОМУ номеру
+      // телефона можно было получить ПОЛНУЮ строку пользователя (точные
+      // координаты, telegram_id и т.п.) в обход сайта, а регистрация нового
+      // пользователя шла отдельным прямым insertRow('users', ...) с
+      // произвольными полями из черновика. Теперь обе операции — внутри
+      // одной серверной функции resolve-user-by-phone: она сама перебирает
+      // те же варианты начертания номера, что раньше собирались здесь (см.
+      // историю про дубль 70000000001/+70000000001), и возвращает только
+      // «безопасный» набор полей (id/displayName/avatarUrl/hasPassword/
+      // phoneVerified/availableAsWorker/blocked/createdAt — БЕЗ phone/
+      // telegram_id/lat/lng/рейтингов), а для нового пользователя сама
+      // выставляет безопасные дефолты на сервере, не доверяя телу запроса.
+      // Свой телефон человек и так только что ввёл — подставляем его
+      // локально; полный профиль (координаты, telegram_id и т.п.)
+      // подтягивается отдельно сразу после входа по паролю, см.
+      // completePasswordLogin.
+      const data = await callSecureFn('resolve-user-by-phone', { phone: canonicalPhone });
+      const safe = data.user;
+      let skills = [];
+      if (!data.created) {
+        try {
+          const skillRows = await getRows('skills', `user_id=eq.${encodeURIComponent(safe.id)}`);
+          skills = skillRows.map(dbSkillToSkill);
+        } catch (err) {
+          console.error('[ensureUserByPhone] не удалось загрузить навыки', err);
+        }
       }
+      user = {
+        id: safe.id,
+        telegramId: '',
+        displayName: safe.displayName || (data.created ? 'Гость' : ''),
+        phone: canonicalPhone,
+        phoneVerified: Boolean(safe.phoneVerified),
+        avatarUrl: safe.avatarUrl || '',
+        // CENTER раньше маскировал «адреса ещё нет» под настоящую точку в
+        // центре города — теперь честный сентинел {0,0} (см. hasValidLocation):
+        // и в профиле, и на карте админки будет видно, что место не определено.
+        location: hasValidLocation(extra.location) ? extra.location : { lat: 0, lng: 0 },
+        district: extra.district || '',
+        searchRadiusKm: 3,
+        skills,
+        availableAsWorker: Boolean(safe.availableAsWorker),
+        rating: 0,
+        ratingCount: 0,
+        customerRating: 0,
+        customerRatingCount: 0,
+        blocked: Boolean(safe.blocked),
+        createdAt: safe.createdAt || new Date().toISOString(),
+        hasPassword: Boolean(safe.hasPassword),
+      };
+      cache.users.push(user);
+      return user;
     } catch (err) {
-      reportError('поиск пользователя по телефону', err);
+      reportError('поиск/создание пользователя по телефону', err);
+      // Раньше отсюда был ещё один анонимный insertRow('users', ...) как
+      // запасной путь — после блокировки анонимного доступа к users он бы
+      // всё равно не сработал, так что просто возвращаем несохранённый
+      // черновик (см. ниже) и даём человеку попробовать ещё раз.
     }
   }
 
@@ -3997,23 +4145,8 @@ async function ensureUserByPhone(phone, extra = {}) {
     createdAt: new Date().toISOString(),
   };
   cache.users.push(draft);
-
-  if (!isSupabaseConfigured()) {
-    local.saveUser(draft);
-    return draft;
-  }
-
-  try {
-    const row = await insertRow('users', userToDbUser(draft));
-    const created = dbUserToUser(row, {});
-    created.skills = [];
-    const i = cache.users.findIndex((u) => u === draft);
-    if (i >= 0) cache.users[i] = created;
-    return created;
-  } catch (err) {
-    reportError('создание пользователя по телефону', err);
-    return draft;
-  }
+  if (!isSupabaseConfigured()) local.saveUser(draft);
+  return draft;
 }
 
 // ---------------------------------------------------------------------
@@ -4117,6 +4250,26 @@ function completePasswordLogin(userId, token) {
   if (idx >= 0) cache.users[idx] = { ...cache.users[idx], hasPassword: true };
   render();
   if (typeof onComplete === 'function') onComplete();
+  // Полный профиль (телефон уже есть локально — человек его только что
+  // ввёл, но координаты/telegram_id/рейтинги ещё нет, см. ensureUserByPhone
+  // → resolve-user-by-phone, ПРАВКА БЕЗОПАСНОСТИ 30.09.2026) — подтягиваем
+  // отдельно, теперь уже с настоящим sessionToken после проверки пароля.
+  if (isSupabaseConfigured()) {
+    callSecureFn('get-my-profile', { userId, sessionToken: token })
+      .then((data) => {
+        if (!data.user) return;
+        const i = cache.users.findIndex((u) => u.id === userId);
+        const fresh = dbUserToUser(data.user, {});
+        if (i >= 0) {
+          fresh.skills = cache.users[i].skills || [];
+          cache.users[i] = fresh;
+        } else {
+          cache.users.push(fresh);
+        }
+        render();
+      })
+      .catch((err) => console.error('[completePasswordLogin] не удалось подгрузить полный профиль', err));
+  }
 }
 
 /** Закрывает экран пароля без входа — как «Ввести другой номер» у phone-verify. */
@@ -4183,6 +4336,62 @@ async function submitPasswordStep(passwordValue, confirmValue) {
     passwordStepState.submitting = false;
     passwordStepState.error = 'Не получилось соединиться — попробуйте ещё раз';
     reportError('вход по паролю', err);
+    render();
+  }
+}
+
+/**
+ * Сброс пароля по одноразовому коду от поддержки (кнопка «Есть код от
+ * поддержки?» — см. renderPasswordStepOverlay, mode 'reset'). Код выдаёт
+ * админ в admin.html (Edge Function admin-reset-password), а саму смену
+ * пароля делает Edge Function redeem-reset-code — она же сверяет код.
+ * @param {string} codeValue
+ * @param {string} passwordValue
+ * @param {string} [confirmValue]
+ */
+async function submitResetCodeStep(codeValue, passwordValue, confirmValue) {
+  if (!passwordStepState || passwordStepState.submitting) return;
+  const { phone } = passwordStepState;
+  if (!codeValue || !codeValue.trim()) {
+    passwordStepState.error = 'Введите код';
+    return render();
+  }
+  if (!passwordValue || passwordValue.length < 6) {
+    passwordStepState.error = 'Пароль должен быть не короче 6 символов';
+    return render();
+  }
+  if (passwordValue !== confirmValue) {
+    passwordStepState.error = 'Пароли не совпадают';
+    return render();
+  }
+  passwordStepState.submitting = true;
+  passwordStepState.error = '';
+  render();
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/redeem-reset-code`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ phone, code: codeValue.trim(), newPassword: passwordValue }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok) {
+      const messages = {
+        invalid_or_expired_code: 'Код неверный или уже не действует — уточните новый у поддержки',
+        password_too_short: 'Пароль должен быть не короче 6 символов',
+        bad_phone: 'Не получилось определить номер — начните заново',
+      };
+      if (!passwordStepState) return;
+      passwordStepState.submitting = false;
+      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      return render();
+    }
+    completePasswordLogin(passwordStepState.userId, data.token);
+  } catch (err) {
+    if (!passwordStepState) return;
+    passwordStepState.submitting = false;
+    passwordStepState.error = 'Не получилось соединиться — попробуйте ещё раз';
+    reportError('сброс пароля по коду', err);
     render();
   }
 }
@@ -4951,13 +5160,15 @@ async function refreshAvailableOrders(isRetry) {
     cache.availableOrdersLoading = true;
     if (state.screen === 'orders') render();
   }
-  let token = loadSessionToken();
+  // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше при отсутствии/невалидности
+  // токена здесь тихо запрашивался новый через issue-session-token — без
+  // пароля, по одному лишь id (та функция теперь полностью отключена на
+  // сервере, см. её комментарий). Теперь без валидного токена — только
+  // явная ошибка; токен восстанавливается обычным входом по паролю.
+  const token = loadSessionToken();
   if (!token) {
-    token = await issueSessionToken(user.id);
-  }
-  if (!token) {
-    // Пустой список тут не значит «заказов рядом нет» — значит не удалось
-    // даже получить токен сессии, поэтому не трогаем cache.availableOrders
+    // Пустой список тут не значит «заказов рядом нет» — значит нет
+    // валидного токена сессии, поэтому не трогаем cache.availableOrders
     // (пусть останется прошлый успешный результат) и явно помечаем ошибку,
     // см. комментарий у объявления availableOrdersError.
     cache.availableOrdersError = true;
@@ -4972,15 +5183,6 @@ async function refreshAvailableOrders(isRetry) {
       headers: headers(),
       body: JSON.stringify({ workerId: user.id, sessionToken: token }),
     });
-    // 401 здесь означает, что сохранённый токен разошёлся с тем, что
-    // сейчас в user_sessions (например, вход был на другом устройстве и
-    // выдал новый токен) — старый токен в localStorage тихо переживал
-    // сам себя. Выпускаем новый и пробуем один раз ещё, вместо того чтобы
-    // просто молча остаться с пустым списком.
-    if (res.status === 401 && !isRetry) {
-      const freshToken = await issueSessionToken(user.id);
-      if (freshToken) return refreshAvailableOrders(true);
-    }
     if (!res.ok) throw new Error(`available-orders failed: ${res.status}`);
     const data = await res.json();
     cache.availableOrders = (data.orders || []).map((o) => ({
@@ -5038,8 +5240,10 @@ async function refreshWorkerPayouts(isRetry) {
     cache.workerPayoutsLoading = true;
     if (state.screen === 'workerBalance') render();
   }
-  let token = loadSessionToken();
-  if (!token) token = await issueSessionToken(user.id);
+  // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: см. тот же комментарий в
+  // refreshAvailableOrders() выше — тихий перевыпуск токена через
+  // issue-session-token убран (функция отключена на сервере).
+  const token = loadSessionToken();
   if (!token) {
     cache.workerPayoutsError = true;
     cache.workerPayoutsLoading = false;
@@ -5053,10 +5257,6 @@ async function refreshWorkerPayouts(isRetry) {
       headers: headers(),
       body: JSON.stringify({ workerId: user.id, sessionToken: token }),
     });
-    if (res.status === 401 && !isRetry) {
-      const freshToken = await issueSessionToken(user.id);
-      if (freshToken) return refreshWorkerPayouts(true);
-    }
     if (!res.ok) throw new Error(`worker-balance failed: ${res.status}`);
     const data = await res.json();
     cache.workerPayouts = (data.payouts || []).map((p) => ({
@@ -5619,13 +5819,39 @@ function rateOrder(orderId, rating) {
   saveOrder(order);
   if (order.assignedWorkerId) {
     const worker = getUsers().find((u) => u.id === order.assignedWorkerId);
-    if (worker) {
-      const newCount = worker.ratingCount + 1;
-      const newRating = (worker.rating * worker.ratingCount + rating) / newCount;
-      // Точечно (см. patchUserFields) — worker в кэше теперь может быть
-      // урезанной users_public-версией чужого пользователя, и полный
-      // saveUser() затёр бы его phone/telegram_id/координаты.
-      patchUserFields(worker.id, { rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
+    if (!isSupabaseConfigured()) {
+      if (worker) {
+        const newCount = worker.ratingCount + 1;
+        const newRating = (worker.rating * worker.ratingCount + rating) / newCount;
+        patchUserFields(worker.id, { rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
+      }
+    } else {
+      // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше среднее считалось на клиенте
+      // (значение можно было подделать через консоль браузера) и писалось
+      // прямым PATCH users анонимным ключом (patchUserFields), без всякой
+      // проверки, что оценивающий вообще имеет отношение к этому заказу.
+      // Теперь — Edge Function rate-user: проверяет sessionToken, что userId —
+      // заказчик именно этого заказа, что мастер назначен и ещё не оценён
+      // с этой стороны, и сама считает среднее на сервере из текущих
+      // значений в БД.
+      const sessionToken = loadSessionToken();
+      if (sessionToken) {
+        callSecureFn('rate-user', {
+          userId: state.currentUserId,
+          sessionToken,
+          orderId,
+          role: 'worker',
+          ratingValue: rating,
+        })
+          .then((data) => {
+            if (worker) {
+              worker.rating = data.rating;
+              worker.ratingCount = data.ratingCount;
+              render();
+            }
+          })
+          .catch((err) => reportError('оценка мастера', err));
+      }
     }
   }
   showToast('Спасибо за оценку!');
@@ -5648,13 +5874,34 @@ function rateCustomer(orderId, rating) {
   }
   saveOrder(order);
   const customer = getUsers().find((u) => u.id === order.customerId);
-  if (customer) {
-    const newCount = (customer.customerRatingCount || 0) + 1;
-    const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
-    // Точечно (см. patchUserFields) — customer в кэше теперь может быть
-    // урезанной users_public-версией чужого пользователя, и полный
-    // saveUser() затёр бы его phone/telegram_id/координаты.
-    patchUserFields(customer.id, { customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
+  if (!isSupabaseConfigured()) {
+    if (customer) {
+      const newCount = (customer.customerRatingCount || 0) + 1;
+      const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
+      patchUserFields(customer.id, { customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
+    }
+  } else {
+    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: см. тот же комментарий в rateOrder()
+    // выше — здесь та же замена клиентского расчёта и прямого PATCH на
+    // Edge Function rate-user (role: 'customer').
+    const sessionToken = loadSessionToken();
+    if (sessionToken) {
+      callSecureFn('rate-user', {
+        userId: state.currentUserId,
+        sessionToken,
+        orderId,
+        role: 'customer',
+        ratingValue: rating,
+      })
+        .then((data) => {
+          if (customer) {
+            customer.customerRating = data.rating;
+            customer.customerRatingCount = data.ratingCount;
+            render();
+          }
+        })
+        .catch((err) => reportError('оценка заказчика', err));
+    }
   }
   showToast('Спасибо за оценку заказчика!');
   render();
@@ -6345,6 +6592,29 @@ function renderMapPickerOverlay() {
  */
 function renderPasswordStepOverlay(st) {
   const isCreate = st.mode === 'create';
+  const isReset = st.mode === 'reset';
+  if (isReset) {
+    return `
+      <div class="map-picker-overlay">
+        <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
+          <p><b>Код от поддержки</b></p>
+          <p class="order-meta">Введите код, который вам продиктовали или прислали, и новый пароль для номера ${escapeHtml(displayPhone(st.phone))}.</p>
+          ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
+          <label>Код</label>
+          <input type="text" id="password-step-code" autocomplete="one-time-code" autocapitalize="characters" ${st.submitting ? 'disabled' : ''} />
+          <label style="margin-top:10px;">Новый пароль</label>
+          <input type="password" id="password-step-input" autocomplete="new-password" ${st.submitting ? 'disabled' : ''} />
+          <label style="margin-top:10px;">Повторите пароль</label>
+          <input type="password" id="password-step-confirm" autocomplete="new-password" ${st.submitting ? 'disabled' : ''} />
+          <button class="primary-button" id="password-step-submit" style="margin-top:14px;" ${st.submitting ? 'disabled' : ''}>${
+      st.submitting ? 'Проверяем…' : 'Сохранить пароль'
+    }</button>
+          <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-back-to-login">Назад, у меня есть пароль</button>
+          <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-cancel">Отмена</button>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="map-picker-overlay">
       <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
@@ -6365,7 +6635,12 @@ function renderPasswordStepOverlay(st) {
         <button class="primary-button" id="password-step-submit" style="margin-top:14px;" ${st.submitting ? 'disabled' : ''}>${
     st.submitting ? 'Проверяем…' : isCreate ? 'Сохранить пароль' : 'Войти'
   }</button>
-        ${!isCreate ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Забыли пароль? Напишите в поддержку</button>` : ''}
+        ${
+          !isCreate
+            ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-use-code">Есть код от поддержки?</button>
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Забыли пароль? Напишите в поддержку</button>`
+            : ''
+        }
         <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-cancel">Отмена</button>
       </div>
     </div>
@@ -7315,7 +7590,7 @@ function orderCardHtml(order, { viewer }) {
         // и вызовет render() по готовности.
         viewer === 'worker' && order.assignedWorkerId === state.currentUserId
           ? (() => {
-              const contact = ensureCustomerContact(order.customerId);
+              const contact = ensureCustomerContact(order);
               if (contact === 'loading' || contact === null) {
                 return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
               }
@@ -7921,7 +8196,7 @@ function renderOrderDetail() {
                 // (см. initDb). Запрашиваем контакт отдельно и по требованию
                 // (см. ensureCustomerContact) — как только ответ придёт,
                 // ensureCustomerContact сам вызовет render().
-                const contact = ensureCustomerContact(order.customerId);
+                const contact = ensureCustomerContact(order);
                 if (contact === 'loading' || contact === null) {
                   return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
                 }
@@ -9181,15 +9456,20 @@ function wireEvents() {
   const passwordStepInput = document.getElementById('password-step-input');
   if (passwordStepInput) {
     const passwordStepConfirm = document.getElementById('password-step-confirm');
+    const passwordStepCode = document.getElementById('password-step-code');
     const passwordStepSubmit = document.getElementById('password-step-submit');
-    const submit = () => submitPasswordStep(passwordStepInput.value, passwordStepConfirm ? passwordStepConfirm.value : undefined);
+    const submit = () =>
+      passwordStepCode
+        ? submitResetCodeStep(passwordStepCode.value, passwordStepInput.value, passwordStepConfirm ? passwordStepConfirm.value : undefined)
+        : submitPasswordStep(passwordStepInput.value, passwordStepConfirm ? passwordStepConfirm.value : undefined);
     if (passwordStepSubmit) passwordStepSubmit.addEventListener('click', submit);
     const onEnter = (e) => {
       if (e.key === 'Enter') submit();
     };
     passwordStepInput.addEventListener('keydown', onEnter);
     if (passwordStepConfirm) passwordStepConfirm.addEventListener('keydown', onEnter);
-    passwordStepInput.focus();
+    if (passwordStepCode) passwordStepCode.addEventListener('keydown', onEnter);
+    (passwordStepCode || passwordStepInput).focus();
   }
 
   const editNameInput = document.getElementById('edit-name-input');
@@ -9621,6 +9901,16 @@ async function handleAction(action, value) {
 
     case 'password-step-cancel':
       return cancelPasswordStep();
+    case 'password-step-use-code':
+      if (!passwordStepState) return;
+      passwordStepState.mode = 'reset';
+      passwordStepState.error = '';
+      return render();
+    case 'password-step-back-to-login':
+      if (!passwordStepState) return;
+      passwordStepState.mode = 'login';
+      passwordStepState.error = '';
+      return render();
 
     case 'edit-name':
       return openEditName();
