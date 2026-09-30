@@ -2277,17 +2277,29 @@ async function insertRow(table, row) {
  * @param {string} table
  * @param {string} id
  * @param {Object} patch
+ * @param {{minimal?: boolean}} [opts] — minimal: true отправляет
+ *   Prefer: return=minimal вместо return=representation и возвращает null,
+ *   не читая строку обратно. Нужно для таблиц, где у анонимного/
+ *   авторизованного ключа явно НЕТ SELECT на все колонки (например, users —
+ *   см. памятку по безопасности БД): PostgREST реализует
+ *   return=representation через RETURNING *, а это требует SELECT сразу на
+ *   ВСЕ колонки таблицы, даже если patch трогает всего одно поле — иначе
+ *   PATCH целиком падает с 42501 permission denied. Вызывающий код,
+ *   которому нужна только «получилось/не получилось» (или уже знающий,
+ *   что он записал), должен передавать { minimal: true }.
  */
-async function updateRow(table, id, patch) {
+async function updateRow(table, id, patch, opts = {}) {
   const { url } = getConfig();
+  const minimal = opts.minimal === true;
   const res = await fetchRetry(`${url}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
-    headers: headers({ Prefer: 'return=representation' }),
+    headers: headers({ Prefer: minimal ? 'return=minimal' : 'return=representation' }),
     body: JSON.stringify(patch),
   });
   if (!res.ok) {
     throw new Error(`Supabase UPDATE ${table} failed: ${res.status} ${await res.text()}`);
   }
+  if (minimal) return null;
   const data = await res.json();
   return Array.isArray(data) ? data[0] : data;
 }
@@ -4532,7 +4544,9 @@ async function pollPhoneCallVerification(forState) {
     forState.status = 'confirmed';
     render();
     try {
-      await updateRow('users', forState.userId, { phone_verified: true });
+      // minimal: true — см. памятку у updateRow(): анонимному ключу больше
+      // не выдан SELECT на users, return=representation тут упал бы 42501.
+      await updateRow('users', forState.userId, { phone_verified: true }, { minimal: true });
       const idx = cache.users.findIndex((u) => u.id === forState.userId);
       if (idx >= 0) cache.users[idx] = { ...cache.users[idx], phoneVerified: true };
     } catch (err) {
@@ -4740,9 +4754,13 @@ async function submitTelegramLinkCode(rawCode) {
     if (!wasLoggedIn) {
       user = await ensureUserByPhone(gatePhone.value, {});
     }
-    const updated = await updateRow('users', user.id, { telegram_id: row.telegram_id });
+    // minimal: true — см. памятку у updateRow(): анонимному ключу больше не
+    // выдан SELECT на users, return=representation тут упал бы 42501.
+    // Значение и так уже известно (row.telegram_id), читать его обратно не
+    // нужно.
+    await updateRow('users', user.id, { telegram_id: row.telegram_id }, { minimal: true });
     const idx = cache.users.findIndex((u) => u.id === user.id);
-    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: updated.telegram_id || row.telegram_id };
+    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: row.telegram_id };
     if (!wasLoggedIn) {
       // Как и у phone-gate — вход по Telegram-коду тоже теперь ведёт на
       // обязательный экран пароля, а не сразу выдаёт сессию.
