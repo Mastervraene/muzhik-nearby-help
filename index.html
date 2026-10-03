@@ -2523,8 +2523,12 @@ const MASTER_APPLICATION_MISSING_LABELS = {
 /** Обработчик кнопки «Отправить заявку» в renderMasterPanel. */
 async function handleSubmitMasterApplication() {
   try {
-    await submitMasterApplication();
-    showToast('Заявка отправлена и проверяется — мы уведомим вас о решении.');
+    const data = await submitMasterApplication();
+    if (data && data.mode === 'task_resolved') {
+      showToast('Отмечено как выполнено — администратор проверит и снимет задание.');
+    } else {
+      showToast('Заявка отправлена и проверяется — мы уведомим вас о решении.');
+    }
     render();
   } catch (err) {
     if (err.code === 'incomplete' && Array.isArray(err.missing) && err.missing.length) {
@@ -2868,6 +2872,12 @@ function dbUserToUser(row, skillsByUser) {
     masterStatus: row.master_status || 'none',
     masterReviewComment: row.master_review_comment || '',
     masterAppliedAt: row.master_applied_at || null,
+    // Активное задание с дедлайном (см. renderMasterPanel) — пока срок не
+    // истёк, профиль работает без ограничений; после истечения фоновый
+    // pg_cron job переводит master_status в 'paused' (поле само не чистится,
+    // чтобы было видно, что именно нужно исправить).
+    masterTaskComment: row.master_task_comment || '',
+    masterTaskDueAt: row.master_task_due_at || null,
   };
 }
 
@@ -7407,15 +7417,20 @@ function pluralizeNew(n) {
 // renderTopbar). «Заявка» добавлена сюда же самым первым пунктом — страховка
 // для тех, кто не сможет/не поймёт, что по логотипу можно нажать.
 function renderAvatarMenu(user, unreadCount) {
-  const isApprovedMaster = user.masterStatus === 'approved';
+  // «На паузе» (master_status==='paused') — это уже одобренный мастер, у
+  // которого истёк срок задания (см. renderMasterPanel и фоновый pg_cron
+  // job expire-master-tasks): доступ к панели мастера и балансу остаётся,
+  // просто новые заказы не приходят, пока он не пройдёт повторную проверку
+  // (по явному решению Sg от 03.10.2026 — «Баланс» остаётся видимым).
+  const hasMasterAccess = user.masterStatus === 'approved' || user.masterStatus === 'paused';
   const items = [
     { action: 'go-home', icon: '✍︎', label: 'Заявка' },
     { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-profile', icon: '◍', label: 'Профиль' },
     // «Панель мастера» и «Баланс» — только после одобрения заявки в
     // мастера (см. renderProfile/renderMasterPanel и submit-master-application).
-    ...(isApprovedMaster ? [{ action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' }] : []),
-    ...(isApprovedMaster ? [{ action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
+    ...(hasMasterAccess ? [{ action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' }] : []),
+    ...(hasMasterAccess ? [{ action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
   ];
@@ -8629,9 +8644,10 @@ function renderProfile() {
       <div class="section-title">Для мастеров</div>
       <div class="field-card">
         ${
-          user.masterStatus === 'approved'
+          user.masterStatus === 'approved' || user.masterStatus === 'paused'
             ? `
         <p class="order-meta" style="margin-bottom:10px;">Локация, специализации и уведомления о новых заказах рядом — в отдельной панели, чтобы не мешать тем, кто просто оставляет заявки.</p>
+        ${user.masterStatus === 'paused' ? `<div class="order-warning" style="margin-bottom:10px;">Профиль на паузе — срок на выполнение задания истёк, новые заказы не приходят. Подробности и дальнейшие шаги — в панели мастера.</div>` : ''}
         <button type="button" class="secondary-button" data-action="go-master-panel">🛠 Панель мастера</button>
         `
             : user.masterStatus === 'pending'
@@ -8664,7 +8680,23 @@ function renderMasterPanel() {
       <div class="section-title">Панель мастера</div>
       <button type="button" class="secondary-button" data-action="go-profile" style="margin-bottom:14px;box-sizing:border-box;">← Назад в профиль</button>
 
-      ${user.masterStatus !== 'approved' ? `<div class="section-title">Аватарка</div>
+      ${user.masterStatus === 'approved' && user.masterTaskComment ? `
+      <div class="section-title">Задание от администратора</div>
+      <div class="field-card">
+        <p class="order-meta" style="margin-bottom:8px;">${escapeHtml(user.masterTaskComment)}</p>
+        <p class="order-meta" style="margin-bottom:10px;">Срок — до ${user.masterTaskDueAt ? escapeHtml(new Date(user.masterTaskDueAt).toLocaleString('ru-RU')) : '—'}. Пока срок не истёк, профиль работает как обычно, без ограничений и без потери заказов.</p>
+        <button type="button" class="secondary-button" data-action="submit-master-application">Я выполнил(а) — отправить на проверку</button>
+      </div>
+      ` : ''}
+      ${user.masterStatus === 'paused' ? `
+      <div class="section-title">Профиль на паузе</div>
+      <div class="field-card">
+        <div class="order-warning" style="margin-bottom:10px;">Срок на выполнение задания истёк — новые заказы не приходят, пока профиль не пройдёт повторную проверку.${user.masterTaskComment ? ` Что нужно исправить: ${escapeHtml(user.masterTaskComment)}` : ''}</div>
+        <button type="button" class="secondary-button" data-action="submit-master-application">Отправить профиль на проверку</button>
+      </div>
+      ` : ''}
+
+      ${user.masterStatus !== 'approved' && user.masterStatus !== 'paused' ? `<div class="section-title">Аватарка</div>
       <div class="field-card">
         <p class="order-meta" style="margin-bottom:10px;">Фото профиля — заказчики охотнее доверяют мастерам с аватаркой.</p>
         <div style="display:flex; align-items:center; gap:14px;">
@@ -8765,8 +8797,9 @@ function renderMasterPanel() {
         <p class="order-meta">Заявка на рассмотрении у администратора — обычно это быстро. Как только её проверят, панель мастера откроется полностью, а в меню появится «Баланс».</p>
       </div>
       `
-          : user.masterStatus !== 'approved'
-          ? `
+          : user.masterStatus === 'approved' || user.masterStatus === 'paused'
+          ? ''
+          : `
       <div class="section-title">Заявка в мастера</div>
       <div class="field-card">
         ${
@@ -8777,7 +8810,6 @@ function renderMasterPanel() {
         <button type="button" class="secondary-button" data-action="submit-master-application">Отправить заявку</button>
       </div>
       `
-          : ''
       }
     </div>
   `;

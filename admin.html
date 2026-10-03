@@ -426,6 +426,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="all">Все пользователи</option>
         <option value="workers" selected>Только мастера</option>
         <option value="applicants">Заявки в мастера</option>
+        <option value="paused">На паузе</option>
         <option value="blocked">Заблокированные</option>
       </select>
       <input type="text" id="masters-search" placeholder="Поиск по любому полю…" />
@@ -1080,6 +1081,11 @@ function dbUserToUser(row) {
     masterStatus: row.master_status || 'none',
     masterReviewComment: row.master_review_comment || '',
     masterAppliedAt: row.master_applied_at || null,
+    // Активное задание с дедлайном у уже одобренного мастера (см.
+    // masterFormHtml/wireMasterForm) — пока срок не истёк, профиль работает
+    // без ограничений; истечение обрабатывает фоновый pg_cron job.
+    masterTaskComment: row.master_task_comment || '',
+    masterTaskDueAt: row.master_task_due_at || null,
   };
 }
 
@@ -2574,7 +2580,7 @@ function masterCardHtml(u) {
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''} ${u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : ''} ${u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : ''}</p>
+          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''} ${u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : ''} ${u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : ''} ${u.masterStatus === 'paused' ? '<span class="pill warn">на паузе</span>' : ''} ${u.masterStatus === 'approved' && u.masterTaskComment ? `<span class="pill warn">⏳ задание до ${escapeHtml(fmtDate(u.masterTaskDueAt))}</span>` : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>${!u.avatarUrl ? '<span class="pill warn">без фото</span>' : ''}` : '<span class="pill muted">клиент</span>'}
@@ -2616,7 +2622,7 @@ function masterFormHtml(u) {
       <p class="form-section-label">Заявка в мастера</p>
       <div class="field-sm dense" style="margin-bottom:10px;">
         <p style="margin:0 0 6px;">
-          Статус: <b>${{ pending: 'на рассмотрении', approved: 'одобрена', rejected: 'отклонена' }[u.masterStatus] || u.masterStatus}</b>
+          Статус: <b>${{ pending: 'на рассмотрении', approved: 'одобрена', rejected: 'отклонена', paused: 'на паузе (срок задания истёк)' }[u.masterStatus] || u.masterStatus}</b>
           ${u.masterAppliedAt ? ` · подана ${escapeHtml(fmtDate(u.masterAppliedAt))}` : ''}
         </p>
         ${u.masterReviewComment ? `<p class="order-meta" style="margin:0 0 8px;">Комментарий админа: ${escapeHtml(u.masterReviewComment)}</p>` : ''}
@@ -2627,6 +2633,30 @@ function masterFormHtml(u) {
           <span class="save-hint" id="master-moderation-hint-${u.id}" style="color:var(--gray-500);"></span>
         </div>
         ` : ''}
+      </div>
+      ` : ''}
+      ${u.masterStatus === 'approved' || u.masterStatus === 'paused' ? `
+      <p class="form-section-label">Задание и срок</p>
+      <div class="field-sm dense" style="margin-bottom:14px;">
+        ${u.masterTaskComment ? `
+        <p style="margin:0 0 6px;">${escapeHtml(u.masterTaskComment)}</p>
+        <p class="order-meta" style="margin:0 0 8px;">
+          Срок: ${u.masterTaskDueAt ? escapeHtml(fmtDate(u.masterTaskDueAt)) : '—'}
+          ${u.masterStatus === 'paused' ? ' — срок истёк, профиль на паузе, новые заказы не приходят' : ' — пока срок не истёк, профиль работает без ограничений'}
+        </p>
+        <div class="row-actions">
+          ${u.masterStatus === 'approved' ? `<button class="btn-sm ghost" id="edit-task-master-${u.id}">✎ Изменить</button>` : ''}
+          ${u.masterStatus === 'approved' ? `<button class="btn-sm ghost" id="clear-task-master-${u.id}">✕ Снять задание</button>` : ''}
+          ${u.masterStatus === 'paused' ? `<button class="btn-sm primary" id="unpause-master-${u.id}">▶ Снять паузу</button>` : ''}
+          <span class="save-hint" id="master-task-hint-${u.id}" style="color:var(--gray-500);"></span>
+        </div>
+        ` : `
+        <p class="order-meta" style="margin:0 0 8px;">Активного задания нет — профиль работает как обычно.</p>
+        <div class="row-actions">
+          <button class="btn-sm ghost" id="set-task-master-${u.id}">⏳ Дать задание</button>
+          <span class="save-hint" id="master-task-hint-${u.id}" style="color:var(--gray-500);"></span>
+        </div>
+        `}
       </div>
       ` : ''}
       <p class="form-section-label">Профиль</p>
@@ -2797,6 +2827,148 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
     }
   });
+
+  // Задание с дедлайном (см. masterFormHtml выше): пока срок не истёк,
+  // профиль работает полностью без ограничений — available_as_worker/
+  // master_status здесь не трогаем, это только master_task_comment/
+  // master_task_due_at. Истечение срока и перевод в paused делает фоновый
+  // pg_cron job (expire-master-tasks), не этот код.
+  async function askTaskAndDays(defaultText) {
+    const task = prompt('Что нужно исправить/сделать мастеру? Текст увидит мастер в панели мастера и в Telegram.\n\nПока срок не истёк, профиль работает как обычно, без ограничений.', defaultText || '');
+    if (task === null) return null;
+    const taskTrimmed = task.trim();
+    if (!taskTrimmed) {
+      alert('Опишите, что нужно исправить — без текста задание не поставить.');
+      return null;
+    }
+    const daysRaw = prompt('Сколько дней даём на выполнение?', '7');
+    if (daysRaw === null) return null;
+    const days = Number(daysRaw.replace(',', '.'));
+    if (!Number.isFinite(days) || days <= 0) {
+      alert('Укажите положительное число дней.');
+      return null;
+    }
+    const dueAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    return { taskTrimmed, dueAt };
+  }
+
+  const setTaskMasterBtn = document.getElementById(`set-task-master-${u.id}`);
+  if (setTaskMasterBtn) {
+    setTaskMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const result = await askTaskAndDays('');
+      if (!result) return;
+      setTaskMasterBtn.disabled = true;
+      setTaskMasterBtn.textContent = 'Сохраняем…';
+      try {
+        await updateRow('users', u.id, {
+          master_task_comment: result.taskTrimmed,
+          master_task_due_at: result.dueAt,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: `Вам поставлено задание по профилю мастера: ${result.taskTrimmed}. Срок — до ${fmtDate(result.dueAt)}. До этого момента профиль работает как обычно, без ограничений; если не выполнить в срок, профиль будет поставлен на паузу и новые заказы приходить не будут. Выполнив задание, отметьте это в панели мастера.`,
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[setTaskMaster] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось сохранить задание: ' + err.message);
+        const freshBtn = document.getElementById(`set-task-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '⏳ Дать задание'; }
+      }
+    });
+  }
+
+  const editTaskMasterBtn = document.getElementById(`edit-task-master-${u.id}`);
+  if (editTaskMasterBtn) {
+    editTaskMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const result = await askTaskAndDays(u.masterTaskComment || '');
+      if (!result) return;
+      editTaskMasterBtn.disabled = true;
+      try {
+        await updateRow('users', u.id, {
+          master_task_comment: result.taskTrimmed,
+          master_task_due_at: result.dueAt,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: `Задание по профилю мастера обновлено: ${result.taskTrimmed}. Новый срок — до ${fmtDate(result.dueAt)}.`,
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[editTaskMaster] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось сохранить задание: ' + err.message);
+        const freshBtn = document.getElementById(`edit-task-master-${u.id}`);
+        if (freshBtn) freshBtn.disabled = false;
+      }
+    });
+  }
+
+  const clearTaskMasterBtn = document.getElementById(`clear-task-master-${u.id}`);
+  if (clearTaskMasterBtn) {
+    clearTaskMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(`Снять задание с «${label}» без уведомления о его выполнении?`);
+      if (!ok) return;
+      clearTaskMasterBtn.disabled = true;
+      try {
+        await updateRow('users', u.id, { master_task_comment: null, master_task_due_at: null });
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось снять задание: ' + err.message);
+        const freshBtn = document.getElementById(`clear-task-master-${u.id}`);
+        if (freshBtn) freshBtn.disabled = false;
+      }
+    });
+  }
+
+  const unpauseMasterBtn = document.getElementById(`unpause-master-${u.id}`);
+  if (unpauseMasterBtn) {
+    unpauseMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(`Снять паузу с «${label}» и сразу вернуть в работающие мастера, без отправки заявки самим мастером?`);
+      if (!ok) return;
+      unpauseMasterBtn.disabled = true;
+      unpauseMasterBtn.textContent = 'Снимаем паузу…';
+      try {
+        await updateRow('users', u.id, {
+          master_status: 'approved',
+          available_as_worker: true,
+          master_review_comment: null,
+          master_task_comment: null,
+          master_task_due_at: null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: 'Пауза с профиля мастера снята администратором — снова можно получать заказы.',
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[unpauseMaster] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось снять паузу: ' + err.message);
+        const freshBtn = document.getElementById(`unpause-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '▶ Снять паузу'; }
+      }
+    });
+  }
 
   const approveMasterBtn = document.getElementById(`approve-master-${u.id}`);
   if (approveMasterBtn) {
