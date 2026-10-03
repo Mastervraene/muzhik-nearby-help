@@ -401,7 +401,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   </div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="orders">Заказы</button>
-    <button class="tab-btn" data-tab="masters">Мастера</button>
+    <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="payouts">Выплаты</button>
@@ -425,6 +425,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <select id="masters-filter">
         <option value="all">Все пользователи</option>
         <option value="workers" selected>Только мастера</option>
+        <option value="applicants">Заявки в мастера</option>
         <option value="blocked">Заблокированные</option>
       </select>
       <input type="text" id="masters-search" placeholder="Поиск по любому полю…" />
@@ -1074,6 +1075,11 @@ function dbUserToUser(row) {
     customerRatingCount: Number(row.customer_rating_count ?? 0),
     blocked: Boolean(row.blocked),
     createdAt: row.created_at,
+    // Статус заявки «стать мастером» — модерация (см. masterFormHtml/
+    // wireMasterForm и approveMasterApplication/rejectMasterApplication).
+    masterStatus: row.master_status || 'none',
+    masterReviewComment: row.master_review_comment || '',
+    masterAppliedAt: row.master_applied_at || null,
   };
 }
 
@@ -2534,6 +2540,7 @@ function wireOrderForm(o) {
 function renderMasters() {
   let list = allUsers;
   if (mastersFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
+  else if (mastersFilter === 'applicants') list = list.filter((u) => u.masterStatus === 'pending');
   else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
   const q = mastersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((u) => userSearchHaystack(u).includes(q));
@@ -2567,7 +2574,7 @@ function masterCardHtml(u) {
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''}</p>
+          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''} ${u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : ''} ${u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>${!u.avatarUrl ? '<span class="pill warn">без фото</span>' : ''}` : '<span class="pill muted">клиент</span>'}
@@ -2605,6 +2612,23 @@ function masterFormHtml(u) {
   const skills = skillsForUser(u.id);
   return `
     <div class="card-body open" id="master-body-${u.id}">
+      ${u.masterStatus !== 'none' ? `
+      <p class="form-section-label">Заявка в мастера</p>
+      <div class="field-sm dense" style="margin-bottom:10px;">
+        <p style="margin:0 0 6px;">
+          Статус: <b>${{ pending: 'на рассмотрении', approved: 'одобрена', rejected: 'отклонена' }[u.masterStatus] || u.masterStatus}</b>
+          ${u.masterAppliedAt ? ` · подана ${escapeHtml(fmtDate(u.masterAppliedAt))}` : ''}
+        </p>
+        ${u.masterReviewComment ? `<p class="order-meta" style="margin:0 0 8px;">Комментарий админа: ${escapeHtml(u.masterReviewComment)}</p>` : ''}
+        ${u.masterStatus === 'pending' ? `
+        <div class="row-actions">
+          <button class="btn-sm primary" id="approve-master-${u.id}">✓ Одобрить</button>
+          <button class="btn-sm danger" id="reject-master-${u.id}">✕ Отклонить</button>
+          <span class="save-hint" id="master-moderation-hint-${u.id}" style="color:var(--gray-500);"></span>
+        </div>
+        ` : ''}
+      </div>
+      ` : ''}
       <p class="form-section-label">Профиль</p>
       <div class="grid-2-tight">
         <div class="field-sm dense">
@@ -2773,6 +2797,69 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Сохранить'; }
     }
   });
+
+  const approveMasterBtn = document.getElementById(`approve-master-${u.id}`);
+  if (approveMasterBtn) {
+    approveMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      approveMasterBtn.disabled = true;
+      approveMasterBtn.textContent = 'Одобряем…';
+      try {
+        await updateRow('users', u.id, {
+          master_status: 'approved',
+          available_as_worker: true,
+          master_review_comment: null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: 'Заявка в мастера одобрена — панель мастера и баланс теперь доступны в профиле.',
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[approveMasterApplication] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось одобрить заявку: ' + err.message);
+        const freshBtn = document.getElementById(`approve-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '✓ Одобрить'; }
+      }
+    });
+  }
+
+  const rejectMasterBtn = document.getElementById(`reject-master-${u.id}`);
+  if (rejectMasterBtn) {
+    rejectMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const comment = prompt('Что исправить претенденту перед повторной подачей заявки? (видно мастеру)');
+      if (comment === null) return; // отменено
+      rejectMasterBtn.disabled = true;
+      rejectMasterBtn.textContent = 'Отклоняем…';
+      try {
+        await updateRow('users', u.id, {
+          master_status: 'rejected',
+          master_review_comment: comment.trim() || null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: `Заявка в мастера отклонена${comment.trim() ? `: ${comment.trim()}` : ''}. Исправьте данные в панели мастера и отправьте заявку ещё раз.`,
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[rejectMasterApplication] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось отклонить заявку: ' + err.message);
+        const freshBtn = document.getElementById(`reject-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '✕ Отклонить'; }
+      }
+    });
+  }
 
   const resetPasswordBtn = document.getElementById(`reset-password-master-${u.id}`);
   if (resetPasswordBtn) {
@@ -3790,6 +3877,15 @@ async function loadData(opts) {
   renderMasters();
   renderNotify();
   renderStats();
+
+  // Счётчик заявок в мастера на табе (см. submit-master-application.ts —
+  // статус 'pending' выставляется только там, при подаче заявки).
+  const pendingMastersCount = allUsers.filter((u) => u.masterStatus === 'pending').length;
+  const pendingBadge = document.getElementById('masters-pending-badge');
+  if (pendingBadge) {
+    pendingBadge.textContent = pendingMastersCount > 9 ? '9+' : String(pendingMastersCount);
+    pendingBadge.style.display = pendingMastersCount ? 'inline-block' : 'none';
+  }
   if (!opts || !opts.keepOpen) {
     // ничего дополнительно
   }

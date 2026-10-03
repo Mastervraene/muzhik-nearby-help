@@ -2484,9 +2484,56 @@ async function callSecureFn(name, body) {
   if (!res.ok || !data || data.ok === false) {
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.code = data && data.error;
+    err.missing = data && data.missing;
     throw err;
   }
   return data;
+}
+
+/**
+ * Заявка «стать мастером» (см. renderMasterPanel). Сервер сам проверяет
+ * обязательные поля и сам переводит master_status в 'pending' — клиент
+ * ничего не решает, см. submit-master-application.ts. При ошибке
+ * error==='incomplete' на err.missing приходит массив незаполненных
+ * пунктов (location/skills/telegram/avatar).
+ */
+async function submitMasterApplication() {
+  const user = currentUser();
+  const sessionToken = loadSessionToken();
+  if (!sessionToken) throw new Error('нет sessionToken — войдите заново');
+  const data = await callSecureFn('submit-master-application', { userId: user.id, sessionToken });
+  if (data && data.user) {
+    const i = cache.users.findIndex((u) => u.id === user.id);
+    const fresh = dbUserToUser(data.user, {});
+    fresh.skills = user.skills;
+    if (i >= 0) cache.users[i] = fresh;
+    else cache.users.push(fresh);
+  }
+  return data;
+}
+
+/** Текст для недостающих пунктов в заявке «стать мастером» (см. err.missing). */
+const MASTER_APPLICATION_MISSING_LABELS = {
+  location: 'укажите район',
+  skills: 'добавьте хотя бы один навык',
+  telegram: 'привяжите Telegram',
+  avatar: 'загрузите аватарку',
+};
+
+/** Обработчик кнопки «Отправить заявку» в renderMasterPanel. */
+async function handleSubmitMasterApplication() {
+  try {
+    await submitMasterApplication();
+    showToast('Заявка отправлена и проверяется — мы уведомим вас о решении.');
+    render();
+  } catch (err) {
+    if (err.code === 'incomplete' && Array.isArray(err.missing) && err.missing.length) {
+      const items = err.missing.map((m) => MASTER_APPLICATION_MISSING_LABELS[m] || m).join(', ');
+      showToast(`Сначала заполните: ${items}`);
+    } else {
+      showToast('Не получилось отправить заявку — попробуйте ещё раз через минуту.');
+    }
+  }
 }
 
 
@@ -2814,6 +2861,13 @@ function dbUserToUser(row, skillsByUser) {
     // клиенту, но по этому булеву клиент понимает, какой экран показать:
     // «Придумайте пароль» или «Введите пароль» (см. enterPasswordStep).
     hasPassword: Boolean(row.has_password),
+    // Статус заявки «стать мастером»: none/pending/approved/rejected.
+    // Меняется ТОЛЬКО через submit-master-application (подача заявки) и
+    // админку (модерация) — в userToDbUser сознательно не добавляется,
+    // см. submit-master-application.ts.
+    masterStatus: row.master_status || 'none',
+    masterReviewComment: row.master_review_comment || '',
+    masterAppliedAt: row.master_applied_at || null,
   };
 }
 
@@ -3283,7 +3337,10 @@ function saveUser(user) {
           avatarUrl: user.avatarUrl,
           district: user.district,
           searchRadiusKm: user.searchRadiusKm,
-          availableAsWorker: user.availableAsWorker,
+          // availableAsWorker больше не отправляется отсюда: этот флаг теперь
+          // переключается ТОЛЬКО модерацией в админке (одобрение заявки
+          // «стать мастером», см. submit-master-application.ts и
+          // save-profile — available_as_worker убран из его ALLOWED_FIELDS).
           lat: user.location?.lat,
           lng: user.location?.lng,
         },
@@ -6000,9 +6057,10 @@ function setUserSkillLevel(categoryId, level) {
   if (existing) {
     updateSkillNoteForUser(user.id, existing, encodeSkillNote(level, ''));
   } else {
-    if (!user.availableAsWorker) {
-      saveUser({ ...user, availableAsWorker: true });
-    }
+    // availableAsWorker больше не выставляется автоматически при выборе
+    // первого навыка — теперь это происходит только после одобрения заявки
+    // «стать мастером» админом (см. submit-master-application.ts и
+    // renderMasterPanel).
     addSkillForUser(user.id, {
       categoryId,
       note: encodeSkillNote(level, ''),
@@ -7349,12 +7407,15 @@ function pluralizeNew(n) {
 // renderTopbar). «Заявка» добавлена сюда же самым первым пунктом — страховка
 // для тех, кто не сможет/не поймёт, что по логотипу можно нажать.
 function renderAvatarMenu(user, unreadCount) {
+  const isApprovedMaster = user.masterStatus === 'approved';
   const items = [
     { action: 'go-home', icon: '✍︎', label: 'Заявка' },
     { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-profile', icon: '◍', label: 'Профиль' },
-    { action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' },
-    { action: 'go-worker-balance', icon: '💰', label: 'Баланс' },
+    // «Панель мастера» и «Баланс» — только после одобрения заявки в
+    // мастера (см. renderProfile/renderMasterPanel и submit-master-application).
+    ...(isApprovedMaster ? [{ action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' }] : []),
+    ...(isApprovedMaster ? [{ action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
   ];
@@ -8567,8 +8628,23 @@ function renderProfile() {
 
       <div class="section-title">Для мастеров</div>
       <div class="field-card">
+        ${
+          user.masterStatus === 'approved'
+            ? `
         <p class="order-meta" style="margin-bottom:10px;">Локация, специализации и уведомления о новых заказах рядом — в отдельной панели, чтобы не мешать тем, кто просто оставляет заявки.</p>
         <button type="button" class="secondary-button" data-action="go-master-panel">🛠 Панель мастера</button>
+        `
+            : user.masterStatus === 'pending'
+            ? `
+        <p class="order-meta" style="margin-bottom:10px;">Ваша заявка на рассмотрении — обычно это быстро.</p>
+        <button type="button" class="secondary-button" data-action="go-master-panel">Посмотреть заявку</button>
+        `
+            : `
+        <p class="order-meta" style="margin-bottom:10px;">Хотите выполнять заказы рядом и зарабатывать? Укажите район, специализацию, Telegram и аватарку — и подайте заявку.</p>
+        ${user.masterStatus === 'rejected' ? `<div class="order-warning" style="margin-bottom:10px;">Заявка отклонена${user.masterReviewComment ? `: ${escapeHtml(user.masterReviewComment)}` : ''}. Исправьте данные и отправьте заявку ещё раз.</div>` : ''}
+        <button type="button" class="secondary-button" data-action="go-master-panel">🛠 Стать мастером</button>
+        `
+        }
       </div>
     </div>
   `;
@@ -8587,6 +8663,25 @@ function renderMasterPanel() {
     <div class="screen">
       <div class="section-title">Панель мастера</div>
       <button type="button" class="secondary-button" data-action="go-profile" style="margin-bottom:14px;box-sizing:border-box;">← Назад в профиль</button>
+
+      ${user.masterStatus !== 'approved' ? `<div class="section-title">Аватарка</div>
+      <div class="field-card">
+        <p class="order-meta" style="margin-bottom:10px;">Фото профиля — заказчики охотнее доверяют мастерам с аватаркой.</p>
+        <div style="display:flex; align-items:center; gap:14px;">
+          <div class="profile-avatar" style="width:64px;height:64px;border-radius:50%;overflow:visible;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;cursor:pointer;" data-action="pick-avatar" role="button" aria-label="${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}" title="${user.avatarUrl ? 'Изменить фото' : 'Добавить фото'}">
+            <div style="width:100%;height:100%;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+              ${
+                user.avatarUrl
+                  ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;min-width:64px;min-height:64px;object-fit:cover;" />`
+                  : `<span style="font-size:26px;">👤</span>`
+              }
+            </div>
+            <span class="profile-avatar-edit-badge" aria-hidden="true">${ICON_PENCIL}</span>
+          </div>
+          <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
+          <span class="order-meta">${user.avatarUrl ? 'Нажмите на фото, чтобы заменить' : 'Нажмите, чтобы загрузить фото'}</span>
+        </div>
+      </div>` : ''}
 
       <div class="field-card">
         <label>Район / адрес, где вы работаете</label>
@@ -8661,6 +8756,29 @@ function renderMasterPanel() {
 
       <div class="section-title">Документы</div>
       <a href="/oferta-dlya-ispolniteley.html" class="secondary-button" style="display:block; box-sizing:border-box; text-align:center; text-decoration:none;">Оферта для исполнителей</a>
+
+      ${
+        user.masterStatus === 'pending'
+          ? `
+      <div class="section-title">Заявка в мастера</div>
+      <div class="field-card">
+        <p class="order-meta">Заявка на рассмотрении у администратора — обычно это быстро. Как только её проверят, панель мастера откроется полностью, а в меню появится «Баланс».</p>
+      </div>
+      `
+          : user.masterStatus !== 'approved'
+          ? `
+      <div class="section-title">Заявка в мастера</div>
+      <div class="field-card">
+        ${
+          user.masterStatus === 'rejected'
+            ? `<div class="order-warning" style="margin-bottom:10px;">Заявка отклонена администратором${user.masterReviewComment ? `: ${escapeHtml(user.masterReviewComment)}` : ''}. Проверьте данные выше и отправьте заявку ещё раз.</div>`
+            : `<p class="order-meta" style="margin-bottom:10px;">Заполните район, минимум один навык, Telegram и аватарку выше — после этого можно отправить заявку на рассмотрение администратору.</p>`
+        }
+        <button type="button" class="secondary-button" data-action="submit-master-application">Отправить заявку</button>
+      </div>
+      `
+          : ''
+      }
     </div>
   `;
 }
@@ -10098,6 +10216,8 @@ async function handleAction(action, value) {
     case 'go-profile': return go('profile');
     case 'go-master-panel': return go('masterPanel');
     case 'go-worker-balance': return go('workerBalance');
+    case 'submit-master-application':
+      return handleSubmitMasterApplication();
     case 'open-order': return go('orderDetail', { openOrderId: value });
     case 'voice-toggle':
       return toggleVoiceRecording();
