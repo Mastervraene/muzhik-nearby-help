@@ -4941,6 +4941,27 @@ async function submitTelegramLinkCode(rawCode) {
   }
 }
 
+// Отвязка Telegram — по просьбе Sg (03.10.2026): кнопка в
+// renderTelegramOverlay. Старое значение telegram_id не теряется — его
+// подхватывает триггер log_user_contact_change (пишет в
+// public.user_contact_history ещё ДО того, как строка в users обновится),
+// так что история привязок остаётся в базе даже после отвязки. Сам же
+// экран остаётся открытым — после отвязки render() покажет в том же
+// попапе форму повторной привязки (см. renderTelegramLinkCard).
+async function unlinkTelegram() {
+  const user = currentUser();
+  if (!user || !user.telegramId) return;
+  try {
+    await updateRow('users', user.id, { telegram_id: null }, { minimal: true });
+    const idx = cache.users.findIndex((u) => u.id === user.id);
+    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: null };
+    showToast('Telegram отвязан');
+    render();
+  } catch (err) {
+    reportError('отвязка Telegram', err);
+  }
+}
+
 /**
  * Карточка привязки Telegram: статус "подключён" либо форма ввода кода,
  * который прислал бот.
@@ -4950,7 +4971,7 @@ function renderTelegramLinkCard(purposeText) {
   const user = currentUser();
   if (!user) return '';
   if (user.telegramId) {
-    return `<p class="order-meta"><span>✓ Telegram подключён — уведомления приходят туда</span></p>`;
+    return `<p class="order-meta"><span>✓ Telegram подключён — уведомления приходят туда</span> <small style="opacity:.7;">с 07:00 до 22:00 по вашему времени${hasValidLocation(user.location) ? '' : ', пока по Москве — укажите локацию в профиле'}</small></p>`;
   }
   const limit = getTelegramLinkLimitState();
   let hint = '';
@@ -4964,6 +4985,11 @@ function renderTelegramLinkCard(purposeText) {
   return `
     <div class="field-card">
       <p class="order-meta">Нажмите кнопку — откроется бот и пришлёт код в чат. Введите этот код здесь, чтобы подключить Telegram и ${escapeHtml(purposeText)}.</p>
+      <p class="order-meta">С 22:00 до 07:00 по вашему местному времени — время тишины: уведомления в Telegram в этот период приходить не будут, мы пришлём их утром. В приложении уведомления видны всегда.${
+        hasValidLocation(user.location)
+          ? ''
+          : ' Важно указать своё местоположение в профиле — иначе время тишины будет считаться по Москве; как только локация появится, часовой пояс пересчитается автоматически.'
+      }</p>
       <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
       ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
       ${
@@ -8687,6 +8713,7 @@ function renderProfile() {
           <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
         </div>
         <p class="order-meta"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span></p>
+        <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён' : 'Telegram не подключён'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
       </div>
 
       ${
@@ -8821,10 +8848,9 @@ function renderMasterPanel() {
         <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
       </div>
 
-      <div class="section-title">Уведомления в Telegram</div>
+      <div class="section-title">Telegram</div>
       <div class="field-card">
-        <p class="order-meta">Бесплатно и без SMS: пуши о новых подходящих заказах рядом, как только укажете навыки ниже.</p>
-        ${renderTelegramLinkCard('получать уведомления о новых заказах рядом')}
+        <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён — уведомления о новых заказах приходят туда' : 'Telegram не подключён — без него не будет уведомлений о новых заказах рядом'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
       </div>
 
       <div class="section-title">Мои навыки</div>
@@ -9097,7 +9123,7 @@ function render() {
         <div class="section-title">Нужен номер телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : ''}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     `;
     wireEvents();
@@ -9126,7 +9152,7 @@ function render() {
     ${renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
@@ -9415,6 +9441,39 @@ function renderSupportOverlay() {
               <span class="support-link-value">${escapeHtml(SUPPORT_PHONE_DISPLAY)}</span>
             </span>
           </a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Всплывающее окно привязки/отвязки Telegram — открывается карандашом
+// рядом со строкой статуса в профиле и в панели мастера (см.
+// data-action="open-telegram-overlay"). Если Telegram уже подключён,
+// внутри — короткий статус (renderTelegramLinkCard) и кнопка «Отвязать»;
+// если не подключён — та же форма ввода кода, что раньше была инлайн на
+// экране. Старые данные привязки при отвязке не теряются — остаются в
+// public.user_contact_history (см. триггер log_user_contact_change,
+// добавлен 03.10.2026 по просьбе Sg, «для безопасности»).
+function renderTelegramOverlay() {
+  const user = currentUser();
+  if (!user) return '';
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Telegram</h2>
+          ${renderTelegramLinkCard('получать уведомления')}
+          ${
+            user.telegramId
+              ? `
+          <button type="button" class="secondary-button" style="margin-top:14px;box-sizing:border-box;" data-action="unlink-telegram">Отвязать Telegram</button>
+          <p class="order-meta" style="margin-top:8px;">После отвязки уведомления в Telegram перестанут приходить, пока вы не подключите аккаунт заново — в приложении уведомления останутся как обычно.</p>
+          `
+              : ''
+          }
         </div>
       </div>
     </div>
@@ -10458,6 +10517,12 @@ async function handleAction(action, value) {
       const el = document.getElementById('telegram-link-code');
       return submitTelegramLinkCode(el ? el.value : '');
     }
+
+    case 'open-telegram-overlay':
+      state.infoOverlay = 'telegram';
+      return render();
+    case 'unlink-telegram':
+      return unlinkTelegram();
 
     case 'phone-verify-cancel':
       return cancelPhoneCallVerification();
