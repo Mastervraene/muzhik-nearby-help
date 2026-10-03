@@ -401,7 +401,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   </div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="orders">Заказы</button>
-    <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
+    <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span><span id="masters-task-review-badge" title="Ждут подтверждения задания" style="display:none; margin-left:6px; background:#e08a24; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="payouts">Выплаты</button>
@@ -426,6 +426,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="all">Все пользователи</option>
         <option value="workers" selected>Только мастера</option>
         <option value="applicants">Заявки в мастера</option>
+        <option value="task_review">Ждут подтверждения задания</option>
         <option value="paused">На паузе</option>
         <option value="blocked">Заблокированные</option>
       </select>
@@ -1086,6 +1087,10 @@ function dbUserToUser(row) {
     // без ограничений; истечение обрабатывает фоновый pg_cron job.
     masterTaskComment: row.master_task_comment || '',
     masterTaskDueAt: row.master_task_due_at || null,
+    // Мастер нажал «Я выполнил(а)» в панели мастера, но до подтверждения/
+    // уточнения админом задание не снимается (см. masterFormHtml/
+    // wireMasterForm, правка 03.10.2026 по просьбе Sg).
+    masterTaskSubmittedAt: row.master_task_submitted_at || null,
   };
 }
 
@@ -2547,6 +2552,10 @@ function renderMasters() {
   let list = allUsers;
   if (mastersFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
   else if (mastersFilter === 'applicants') list = list.filter((u) => u.masterStatus === 'pending');
+  else if (mastersFilter === 'task_review') list = list.filter((u) => u.masterStatus === 'approved' && u.masterTaskSubmittedAt);
+  // 'paused' раньше был в select, но не обрабатывался здесь (падал в общий
+  // список без фильтра) — попутно починено при добавлении task_review.
+  else if (mastersFilter === 'paused') list = list.filter((u) => u.masterStatus === 'paused');
   else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
   const q = mastersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((u) => userSearchHaystack(u).includes(q));
@@ -2580,7 +2589,7 @@ function masterCardHtml(u) {
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''} ${u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : ''} ${u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : ''} ${u.masterStatus === 'paused' ? '<span class="pill warn">на паузе</span>' : ''} ${u.masterStatus === 'approved' && u.masterTaskComment ? `<span class="pill warn">⏳ задание до ${escapeHtml(fmtDate(u.masterTaskDueAt))}</span>` : ''}</p>
+          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} ${u.blocked ? '<span class="pill warn">заблокирован</span>' : ''} ${u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : ''} ${u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : ''} ${u.masterStatus === 'paused' ? '<span class="pill warn">на паузе</span>' : ''} ${u.masterStatus === 'approved' && u.masterTaskComment ? (u.masterTaskSubmittedAt ? '<span class="pill ok">✅ задание выполнено — ждёт подтверждения</span>' : `<span class="pill warn">⏳ задание до ${escapeHtml(fmtDate(u.masterTaskDueAt))}</span>`) : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span><span>радиус ${u.searchRadiusKm} км</span>${!u.avatarUrl ? '<span class="pill warn">без фото</span>' : ''}` : '<span class="pill muted">клиент</span>'}
@@ -2638,7 +2647,17 @@ function masterFormHtml(u) {
       ${u.masterStatus === 'approved' || u.masterStatus === 'paused' ? `
       <p class="form-section-label">Задание и срок</p>
       <div class="field-sm dense" style="margin-bottom:14px;">
-        ${u.masterTaskComment ? `
+        ${u.masterTaskComment && u.masterTaskSubmittedAt ? `
+        <p style="margin:0 0 6px;">${escapeHtml(u.masterTaskComment)}</p>
+        <p class="order-meta" style="margin:0 0 8px;">
+          ✅ Мастер отметил выполненным ${escapeHtml(fmtDate(u.masterTaskSubmittedAt))} — проверьте и подтвердите, либо верните на доработку с комментарием.
+        </p>
+        <div class="row-actions">
+          <button class="btn-sm primary" id="confirm-task-master-${u.id}">✓ Подтвердить</button>
+          <button class="btn-sm ghost" id="clarify-task-master-${u.id}">✎ Уточнить</button>
+          <span class="save-hint" id="master-task-hint-${u.id}" style="color:var(--gray-500);"></span>
+        </div>
+        ` : u.masterTaskComment ? `
         <p style="margin:0 0 6px;">${escapeHtml(u.masterTaskComment)}</p>
         <p class="order-meta" style="margin:0 0 8px;">
           Срок: ${u.masterTaskDueAt ? escapeHtml(fmtDate(u.masterTaskDueAt)) : '—'}
@@ -2833,7 +2852,16 @@ function wireMasterForm(u) {
   // master_status здесь не трогаем, это только master_task_comment/
   // master_task_due_at. Истечение срока и перевод в paused делает фоновый
   // pg_cron job (expire-master-tasks), не этот код.
-  async function askTaskAndDays(defaultText) {
+  // currentDueAt передаётся только из кнопки «Уточнить» (см. clarifyTaskMasterBtn
+  // ниже) — если админ оставит поле со сроком пустым, прежний срок НЕ
+  // продлевается, а сохраняется как есть. Это осознанно: по просьбе Sg
+  // (03.10.2026) — если мастер несколько раз подряд жмёт «выполнено», хотя
+  // на деле не доделал, админ должен иметь возможность просто вернуть
+  // задание на доработку без автоматического продления дедлайна каждым
+  // уточнением (иначе мастер мог бы бесконечно оттягивать срок). «Дать
+  // задание» и «Изменить» currentDueAt не передают — там число дней всегда
+  // обязательно, как и раньше.
+  async function askTaskAndDays(defaultText, currentDueAt) {
     const task = prompt('Что нужно исправить/сделать мастеру? Текст увидит мастер в панели мастера и в Telegram.\n\nПока срок не истёк, профиль работает как обычно, без ограничений.', defaultText || '');
     if (task === null) return null;
     const taskTrimmed = task.trim();
@@ -2841,15 +2869,26 @@ function wireMasterForm(u) {
       alert('Опишите, что нужно исправить — без текста задание не поставить.');
       return null;
     }
-    const daysRaw = prompt('Сколько дней даём на выполнение?', '7');
+    const promptLabel = currentDueAt
+      ? `Сколько дней даём на выполнение? Оставьте поле пустым, чтобы НЕ продлевать и сохранить прежний срок — до ${fmtDate(currentDueAt)}.`
+      : 'Сколько дней даём на выполнение?';
+    const daysRaw = prompt(promptLabel, currentDueAt ? '' : '7');
     if (daysRaw === null) return null;
-    const days = Number(daysRaw.replace(',', '.'));
+    const daysTrimmed = daysRaw.trim();
+    if (!daysTrimmed) {
+      if (!currentDueAt) {
+        alert('Укажите положительное число дней.');
+        return null;
+      }
+      return { taskTrimmed, dueAt: currentDueAt, dueAtChanged: false };
+    }
+    const days = Number(daysTrimmed.replace(',', '.'));
     if (!Number.isFinite(days) || days <= 0) {
-      alert('Укажите положительное число дней.');
+      alert(currentDueAt ? 'Укажите положительное число дней или оставьте поле пустым, чтобы сохранить прежний срок.' : 'Укажите положительное число дней.');
       return null;
     }
     const dueAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-    return { taskTrimmed, dueAt };
+    return { taskTrimmed, dueAt, dueAtChanged: true };
   }
 
   const setTaskMasterBtn = document.getElementById(`set-task-master-${u.id}`);
@@ -2930,6 +2969,76 @@ function wireMasterForm(u) {
         alert('Не удалось снять задание: ' + err.message);
         const freshBtn = document.getElementById(`clear-task-master-${u.id}`);
         if (freshBtn) freshBtn.disabled = false;
+      }
+    });
+  }
+
+  // Подтверждение/уточнение выполненного задания (см. masterFormHtml —
+  // кнопки появляются только пока master_task_submitted_at не пусто, т.е.
+  // мастер уже нажал «Я выполнил(а)», но админ ещё не отреагировал).
+  const confirmTaskMasterBtn = document.getElementById(`confirm-task-master-${u.id}`);
+  if (confirmTaskMasterBtn) {
+    confirmTaskMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(`Подтвердить выполнение задания у «${label}»? Задание будет снято.`);
+      if (!ok) return;
+      confirmTaskMasterBtn.disabled = true;
+      confirmTaskMasterBtn.textContent = 'Подтверждаем…';
+      try {
+        await updateRow('users', u.id, {
+          master_task_comment: null,
+          master_task_due_at: null,
+          master_task_submitted_at: null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: 'Администратор проверил и подтвердил выполнение задания — оно снято, профиль работает как обычно.',
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[confirmTaskMaster] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось подтвердить: ' + err.message);
+        const freshBtn = document.getElementById(`confirm-task-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '✓ Подтвердить'; }
+      }
+    });
+  }
+
+  const clarifyTaskMasterBtn = document.getElementById(`clarify-task-master-${u.id}`);
+  if (clarifyTaskMasterBtn) {
+    clarifyTaskMasterBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const result = await askTaskAndDays(u.masterTaskComment || '', u.masterTaskDueAt);
+      if (!result) return;
+      clarifyTaskMasterBtn.disabled = true;
+      clarifyTaskMasterBtn.textContent = 'Отправляем…';
+      try {
+        await updateRow('users', u.id, {
+          master_task_comment: result.taskTrimmed,
+          master_task_due_at: result.dueAt,
+          master_task_submitted_at: null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: 'worker',
+            text: `Администратор проверил и вернул задание на доработку: ${result.taskTrimmed}. Срок — до ${fmtDate(result.dueAt)}.`,
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[clarifyTaskMaster] не удалось уведомить мастера', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось отправить на доработку: ' + err.message);
+        const freshBtn = document.getElementById(`clarify-task-master-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '✎ Уточнить'; }
       }
     });
   }
@@ -4057,6 +4166,16 @@ async function loadData(opts) {
   if (pendingBadge) {
     pendingBadge.textContent = pendingMastersCount > 9 ? '9+' : String(pendingMastersCount);
     pendingBadge.style.display = pendingMastersCount ? 'inline-block' : 'none';
+  }
+  // Счётчик заданий, отмеченных мастерами как выполненные и ждущих
+  // подтверждения/уточнения админом (см. masterFormHtml/wireMasterForm —
+  // правка от 03.10.2026 по просьбе Sg: раньше задание снималось
+  // автоматически без проверки).
+  const taskReviewCount = allUsers.filter((u) => u.masterStatus === 'approved' && u.masterTaskSubmittedAt).length;
+  const taskReviewBadge = document.getElementById('masters-task-review-badge');
+  if (taskReviewBadge) {
+    taskReviewBadge.textContent = taskReviewCount > 9 ? '9+' : String(taskReviewCount);
+    taskReviewBadge.style.display = taskReviewCount ? 'inline-block' : 'none';
   }
   if (!opts || !opts.keepOpen) {
     // ничего дополнительно
