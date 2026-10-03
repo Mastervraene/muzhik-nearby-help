@@ -8843,9 +8843,6 @@ function renderMasterPanel() {
         ${!hasValidLocation(user.location) ? `<div class="order-warning" style="margin-top:8px;">⚠ Точная точка на карте не определена — заказы рядом могут находиться неточно. Нажмите «Обновить геопозицию», укажите точку на карте, или сохраните адрес ещё раз.</div>` : ''}
         `
         }
-        <label style="margin-top:14px;">Радиус поиска заказов рядом (км)</label>
-        <input type="number" id="field-radius" value="${user.searchRadiusKm}" disabled style="opacity:0.6;" />
-        <p class="order-meta" style="margin-top:2px;">Пока нельзя изменить — базовый радиус 3 км. Настройка появится позже.</p>
       </div>
 
       <div class="section-title">Telegram</div>
