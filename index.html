@@ -766,6 +766,62 @@ body {
   flex: none;
 }
 
+/* Кликабельная «голова» заголовка блока заказов — сворачивает/разворачивает
+   список (см. expandedOrdersSections/toggle-orders-section рядом с
+   renderOrdersSectionHeader). Обычная кнопка без рамки/фона, чтобы не
+   выглядеть как действие, а не как часть заголовка; .section-title внутри
+   неё теряет свой верхний отступ (уже задан обёрткой .section-title-row). */
+.section-title-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.section-title-head .section-title {
+  margin: 0;
+}
+.section-title-head .chevron {
+  color: var(--gray-400);
+  font-size: 10px;
+  flex: none;
+}
+/* Серый кружок с числом рядом с названием блока — сколько заказов покажется
+   при разворачивании (см. count у renderOrdersSectionHeader). */
+.section-count-badge {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--gray-200);
+  color: var(--gray-700);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Красный маркер «N новых» — только у «Подходит вам рядом», см. newCount у
+   renderOrdersSectionHeader/countNewCandidateOrders. Гаснет по одному, когда
+   мастер открывает карточку конкретного заказа (см. markCandidateOrderSeen
+   в обработчике 'open-order'), а не целиком при любом действии с блоком. */
+.section-new-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: var(--gray-0);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* Маленькая кнопка сортировки/фильтра рядом с заголовком блока заказов
    (см. renderOrdersSectionHeader/ordersSortSettings рядом с renderOrders) —
    открывает полноэкранную модалку renderOrdersSortModal, по образцу
@@ -7241,6 +7297,69 @@ function getUnreadNotificationsCount(userId) {
   return list.filter((n) => new Date(n.createdAt).getTime() > seenTime).length;
 }
 
+// ---------------------------------------------------------------------
+// «Просмотренные» подходящие заказы — красный маркер «N новых» у блока
+// «Подходит вам рядом» (см. renderOrdersSectionHeader/renderOrders). Тот же
+// приём, что и NOTIFICATIONS_SEEN_KEY выше (только это устройство, без
+// read/unread на сервере). По просьбе Sg от 03.10.2026 «просмотрен» — это
+// НЕ клик в детали заказа (это оказалось лишним шагом), а просто факт, что
+// заказ показался мастеру на экране «Заказы»: как только он туда зашёл и
+// увидел список — всё, что в нём есть прямо сейчас, перестаёт быть «новым»
+// (см. markCandidateOrdersSeen, вызывается из renderOrders()).
+const SEEN_CANDIDATE_ORDERS_KEY = 'muzhik_seen_candidate_orders_v1';
+
+function loadSeenCandidateOrdersMap() {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(SEEN_CANDIDATE_ORDERS_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+// candidateOrders — полный (нефильтрованный ручным фильтром статусов)
+// список подходящих заказов мастеру, см. вызов в renderOrders().
+function countNewCandidateOrders(userId, candidateOrders) {
+  if (!userId || !candidateOrders.length) return 0;
+  const seenIds = new Set(loadSeenCandidateOrdersMap()[userId] || []);
+  return candidateOrders.filter((o) => !seenIds.has(o.id)).length;
+}
+
+// Помечает ВЕСЬ текущий список подходящих заказов просмотренным одним
+// махом — вызывается из renderOrders() при каждой отрисовке экрана
+// «Заказы», ПОСЛЕ того как newCandidatesCount для этого рендера уже
+// посчитан (иначе мастер не успел бы увидеть красный маркер — он погас бы
+// в тот же момент, что и появился). Намеренно не хук в go('orders'), а
+// прямо в renderOrders(): в режиме Supabase список кандидатов в момент
+// go() ещё может быть не обновлён (cache.availableOrders подтягивается
+// асинхронно, см. refreshAvailableOrders) — пометили бы «просмотренными»
+// не те заказы. renderOrders() же перерисовывается и после того, как
+// свежий список реально пришёл.
+function markCandidateOrdersSeen(userId, candidateOrders) {
+  if (!userId || !candidateOrders.length || typeof localStorage === 'undefined') return;
+  const map = loadSeenCandidateOrdersMap();
+  const seenIds = new Set(map[userId] || []);
+  let changed = false;
+  candidateOrders.forEach((o) => {
+    if (!seenIds.has(o.id)) {
+      seenIds.add(o.id);
+      changed = true;
+    }
+  });
+  if (!changed) return; // ничего нового — не трогаем localStorage зря
+  map[userId] = [...seenIds];
+  localStorage.setItem(SEEN_CANDIDATE_ORDERS_KEY, JSON.stringify(map));
+}
+
+// «1 новый», «2 новых», «5 новых», «21 новый», «22 новых» — короткое
+// прилагательное при числительном, без существительного (само слово
+// «заказ» не помещается в маленькую плашку).
+function pluralizeNew(n) {
+  const lastTwo = n % 100;
+  const last = n % 10;
+  return last === 1 && lastTwo !== 11 ? `${n} новый` : `${n} новых`;
+}
+
 // Попап аккаунта: пункты меню — те же места, куда раньше вела сама
 // иконка профиля (плюс заказы/уведомления/поддержка одним списком) и
 // выход из аккаунта. Бейдж с числом непрочитанных уведомлений дублируется
@@ -7705,6 +7824,14 @@ const ordersSortSettings = {
 // по затемнению, клавишей Esc или кнопкой «Готово».
 let ordersSortModalOpenFor = null;
 
+// Какие из трёх блоков сейчас развёрнуты (видны карточки заказов) — по
+// умолчанию все свёрнуты (пустой Set), видна только шапка со счётчиком и
+// шевроном, как в группах по заказчику в admin.html (см. toggle-orders-section
+// ниже и collapsedCustomerGroups в admin.html — тот же приём, но с
+// противоположным дефолтом: там по умолчанию развёрнуто, тут свёрнуто, по
+// просьбе Sg от 03.10.2026).
+let expandedOrdersSections = new Set();
+
 // Кнопка светится синим, если в блоке скрыт хотя бы один статус фильтром
 // и/или включена сортировка — см. .sort-btn.active.
 function isOrderSortActive(blockKey) {
@@ -7785,16 +7912,28 @@ function renderOrdersSortModal(blockKey) {
 }
 
 /**
- * Заголовок блока заказов с маленькой кнопкой сортировки/фильтра (и, для
- * «Подходит вам рядом», ещё и кнопкой «Обновить» — extraButtonHtml). Кнопка
+ * Заголовок блока заказов — сворачивается/разворачивается кликом (см.
+ * expandedOrdersSections/toggle-orders-section, по умолчанию свёрнут, по
+ * образцу групп по заказчику в admin.html), показывает серый счётчик
+ * количества заказов рядом с названием (сколько покажется при
+ * разворачивании — с учётом текущих фильтров блока) и, для «Подходит вам
+ * рядом», дополнительно красный маркер «N новых» (см. countNewCandidateOrders).
+ * Отдельно — маленькая кнопка сортировки/фильтра (и, для «Подходит вам
+ * рядом», ещё и кнопка «Обновить» — extraButtonHtml). Кнопка сортировки
  * светится синим (см. .sort-btn.active), когда в этом блоке скрыт хотя бы
  * один статус фильтром и/или включена сортировка, и остаётся нейтральной
- * (цвет панели, var(--gray-100)), когда ни то ни другое не активно.
+ * (цвет панели, var(--gray-100)), когда ни то ни другое не активно — эта
+ * подсветка намеренно никак не связана со свёрнутостью блока.
  */
-function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '', archivedCount = 0 } = {}) {
+function renderOrdersSectionHeader(
+  title,
+  blockKey,
+  { extraButtonHtml = '', archivedCount = 0, count = 0, newCount = 0 } = {}
+) {
   const active = isOrderSortActive(blockKey);
   const settings = ordersSortSettings[blockKey];
   const showArchived = Boolean(settings && settings.showArchived);
+  const expanded = expandedOrdersSections.has(blockKey);
   // Кнопка «Завершено ХХ» — появляется только когда в блоке реально есть
   // хоть один завершённый/отменённый заказ (archivedCount считается в
   // renderOrders по НЕотфильтрованному списку блока, см. вызов ниже), и
@@ -7805,9 +7944,16 @@ function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '', arch
     archivedCount > 0
       ? `<button type="button" class="archive-toggle-btn ${showArchived ? 'active' : ''}" data-action="toggle-orders-archive" data-value="${blockKey}">Завершено ${archivedCount}</button>`
       : '';
+  const countBadgeHtml = count > 0 ? `<span class="section-count-badge">${count}</span>` : '';
+  const newBadgeHtml = newCount > 0 ? `<span class="section-new-badge">${escapeHtml(pluralizeNew(newCount))}</span>` : '';
   return `
     <div class="section-title-row">
-      <div class="section-title">${escapeHtml(title)}</div>
+      <button type="button" class="section-title-head" data-action="toggle-orders-section" data-value="${blockKey}" aria-expanded="${expanded}">
+        <span class="section-title">${escapeHtml(title)}</span>
+        ${countBadgeHtml}
+        ${newBadgeHtml}
+        <span class="chevron">${expanded ? '▲' : '▼'}</span>
+      </button>
       <div class="section-title-row-actions">
         ${extraButtonHtml}
         ${archiveToggleHtml}
@@ -7866,20 +8012,43 @@ function renderOrders() {
   // кнопка, и не зависело от ручного фильтра статусов в модалке сортировки.
   const myArchivedCount = myOrders.filter((o) => ARCHIVED_ORDER_STATUSES.includes(o.status)).length;
 
+  // Серый счётчик в шапке каждого блока — сколько заказов покажется, если
+  // развернуть блок прямо сейчас (т.е. уже с учётом фильтра статусов и
+  // кнопки «Завершено ХХ» для «my»). Красный маркер «N новых» — только у
+  // «Подходит вам рядом», считается НЕ по текущему фильтру, а по полному
+  // списку подходящих заказов (candidateOrders), см. countNewCandidateOrders.
+  const myCount = myOrdersSorted.length;
+  const assignedCount = assignedSorted.length;
+  const candidatesCount = candidatesSorted.length;
+  const newCandidatesCount = countNewCandidateOrders(state.currentUserId, candidateOrders);
+  // Красный маркер посчитан строкой выше — именно для ЭТОГО рендера мастер
+  // ещё увидит «N новых». Помечаем список просмотренным уже ПОСЛЕ подсчёта,
+  // чтобы на следующей перерисовке (а не в этой же) эти заказы маркер больше
+  // не поднимали — ровно «зашёл в Заказы и увидел», без дополнительного клика.
+  markCandidateOrdersSeen(state.currentUserId, candidateOrders);
+
+  const myExpanded = expandedOrdersSections.has('my');
+  const assignedExpanded = expandedOrdersSections.has('assigned');
+  const candidatesExpanded = expandedOrdersSections.has('candidates');
+
   return `
     <div class="screen">
-      ${renderOrdersSectionHeader('Мои заказы', 'my', { archivedCount: myArchivedCount })}
+      ${renderOrdersSectionHeader('Мои заказы', 'my', { archivedCount: myArchivedCount, count: myCount })}
       ${
-        myOrdersSorted.length
+        !myExpanded
+          ? ''
+          : myOrdersSorted.length
           ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
           : myOrders.length
           ? hiddenByFilterNote('my')
           : `<div class="empty-state">Вы ещё не публиковали заказы</div>`
       }
 
-      ${renderOrdersSectionHeader('Заказы, которые я выполняю', 'assigned')}
+      ${renderOrdersSectionHeader('Заказы, которые я выполняю', 'assigned', { count: assignedCount })}
       ${
-        assignedSorted.length
+        !assignedExpanded
+          ? ''
+          : assignedSorted.length
           ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
           : assignedToMe.length
           ? hiddenByFilterNote('assigned')
@@ -7887,6 +8056,8 @@ function renderOrders() {
       }
 
       ${renderOrdersSectionHeader('Подходит вам рядом', 'candidates', {
+        count: candidatesCount,
+        newCount: newCandidatesCount,
         extraButtonHtml: showsServerList
           ? `<button class="section-refresh-btn" type="button" data-action="refresh-available-orders" ${
               cache.availableOrdersLoading ? 'disabled' : ''
@@ -7894,7 +8065,9 @@ function renderOrders() {
           : '',
       })}
       ${
-        !hasSkills
+        !candidatesExpanded
+          ? ''
+          : !hasSkills
           ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
           : showsServerList && cache.availableOrdersError && !candidatesSorted.length
           ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
@@ -9938,6 +10111,11 @@ async function handleAction(action, value) {
     case 'toggle-orders-archive': {
       const settings = ordersSortSettings[value];
       if (settings) settings.showArchived = !settings.showArchived;
+      return render();
+    }
+    case 'toggle-orders-section': {
+      if (expandedOrdersSections.has(value)) expandedOrdersSections.delete(value);
+      else expandedOrdersSections.add(value);
       return render();
     }
     case 'go-home':
