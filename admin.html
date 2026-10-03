@@ -2814,7 +2814,7 @@ function wireMasterForm(u) {
           await insertRow('notifications', {
             recipient_user_id: u.id,
             recipient_role: 'worker',
-            text: 'Заявка в мастера одобрена — панель мастера и баланс теперь доступны в профиле.',
+            text: 'Заявка в мастера одобрена — панель мастера и баланс теперь доступны в профиле. Обновите страницу сайта, чтобы увидеть новые пункты меню.',
             channel: 'telegram',
           });
         } catch (notifyErr) {
