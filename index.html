@@ -1075,15 +1075,15 @@ body {
   padding: 14px;
   margin-bottom: 10px;
   /* transition живёт здесь, а не только в .notification-unread — иначе при
-     снятии этого класса (угасание подсветки спустя 30 сек, см.
-     wireNotificationsScreen) новое состояние стиля не содержало бы
+     снятии этого класса (угасание подсветки спустя NOTIFICATION_UNREAD_FADE_MS,
+     см. wireNotificationsScreen) новое состояние стиля не содержало бы
      transition, и тень менялась бы скачком, а не плавно. */
   transition: box-shadow 1.4s ease;
 }
 
 /* Непрочитанное уведомление в renderNotifications — цветное свечение
-   вместо обычной нейтральной тени, пока уведомление не прочитано и ещё 30
-   секунд после (см. NOTIFICATION_UNREAD_FADE_MS), потом плавно гаснет до
+   вместо обычной нейтральной тени, пока уведомление не прочитано и ещё
+   NOTIFICATION_UNREAD_FADE_MS после прочтения, потом плавно гаснет до
    стандартной .order-card тени. */
 .order-card.notification-unread {
   box-shadow: var(--shadow-unread);
@@ -2542,7 +2542,9 @@ async function handleSubmitMasterApplication() {
   try {
     const data = await submitMasterApplication();
     if (data && data.mode === 'task_resolved') {
-      showToast('Отмечено как выполнено — администратор проверит и снимет задание.');
+      showToast('Отправлено на проверку — администратор подтвердит выполнение или сообщит, что доделать.');
+    } else if (data && data.mode === 'already_submitted') {
+      showToast('Уже отправлено на проверку — ждите решения администратора.');
     } else {
       showToast('Заявка отправлена и проверяется — мы уведомим вас о решении.');
     }
@@ -2768,8 +2770,11 @@ function getServices() {
   return getDb().services;
 }
 
+// Тот же фильтр, что и в боевом дата-сторе ниже (см. комментарий там) — в
+// демо-режиме (без Supabase) тоже не должны светиться служебные
+// уведомления для модератора.
 function getNotificationsFor(userId) {
-  return getDb().notifications.filter((n) => n.recipientUserId === userId);
+  return getDb().notifications.filter((n) => n.recipientUserId === userId && n.recipientRole !== 'moderator');
 }
 
   return { initDb, resetDb, getUsers, getOrders, getServices, getNotificationsFor, saveUser, saveOrder, saveService, pushNotification };
@@ -2895,6 +2900,11 @@ function dbUserToUser(row, skillsByUser) {
     // чтобы было видно, что именно нужно исправить).
     masterTaskComment: row.master_task_comment || '',
     masterTaskDueAt: row.master_task_due_at || null,
+    // Мастер отметил задание выполненным, но админ ещё не подтвердил/не
+    // вернул на доработку (см. renderMasterPanel, правка от 03.10.2026 —
+    // раньше задание снималось автоматически по нажатию «Я выполнил(а)»,
+    // без проверки админом; теперь это промежуточный статус).
+    masterTaskSubmittedAt: row.master_task_submitted_at || null,
   };
 }
 
@@ -3244,8 +3254,15 @@ function getOrders() {
 function getServices() {
   return cache.services;
 }
+// recipientRole === 'moderator' исключаем — это уведомления для админки
+// (см. submit-master-application), которые должны приходить только в
+// Telegram и быть видны в admin.html, а не на экране «Уведомления» самого
+// мастерского/клиентского приложения. Без этого фильтра человек, у которого
+// один и тот же аккаунт одновременно и мастер, и админ (is_admin=true),
+// видел бы у себя в профиле мастера служебные уведомления «проверьте в
+// админке» — просьба Sg от 03.10.2026.
 function getNotificationsFor(userId) {
-  return cache.notifications.filter((n) => n.recipientUserId === userId);
+  return cache.notifications.filter((n) => n.recipientUserId === userId && n.recipientRole !== 'moderator');
 }
 
 // ---------------------------------------------------------------------
@@ -7339,7 +7356,7 @@ let isPublishingDraft = false;
 // .notification-unread и таймер в wireNotificationsScreen).
 // ---------------------------------------------------------------------
 const NOTIFICATIONS_READ_KEY = 'muzhik_notifications_read_v1';
-const NOTIFICATION_UNREAD_FADE_MS = 30000;
+const NOTIFICATION_UNREAD_FADE_MS = 10000;
 
 function loadNotificationsReadMap() {
   if (typeof localStorage === 'undefined') return {};
@@ -8740,8 +8757,12 @@ function renderMasterPanel() {
       <div class="section-title">Задание от администратора</div>
       <div class="field-card">
         <p class="order-meta" style="margin-bottom:8px;">${escapeHtml(user.masterTaskComment)}</p>
+        ${user.masterTaskSubmittedAt ? `
+        <p class="order-meta" style="margin-bottom:10px;">✅ Отправлено на проверку ${escapeHtml(new Date(user.masterTaskSubmittedAt).toLocaleString('ru-RU'))}. Ждите решения администратора — он подтвердит выполнение или вернёт с комментарием, что ещё доделать.</p>
+        ` : `
         <p class="order-meta" style="margin-bottom:10px;">Срок — до ${user.masterTaskDueAt ? escapeHtml(new Date(user.masterTaskDueAt).toLocaleString('ru-RU')) : '—'}. Пока срок не истёк, профиль работает как обычно, без ограничений и без потери заказов.</p>
         <button type="button" class="secondary-button" data-action="submit-master-application">Я выполнил(а) — отправить на проверку</button>
+        `}
       </div>
       ` : ''}
       ${user.masterStatus === 'paused' ? `
@@ -10088,51 +10109,94 @@ function wireEvents() {
 // render()/уходе с экрана, иначе он продолжит держать ссылки на старые,
 // уже удалённые из DOM узлы.
 let notificationsObserver = null;
+// Таймер «подметания» угасших подсветок — см. комментарий внутри
+// wireNotificationsScreen про то, почему это интервал, а не разовый
+// setTimeout на конкретном узле.
+let notificationsFadeInterval = null;
 
 /**
  * Прочтение уведомления — не факт захода на экран «Уведомления», а факт,
- * что конкретная карточка реально целиком прошла через видимую область
- * (просьба Sg от 03.10.2026: если непрочитанных больше одного, экран не
- * должен тихо помечать прочитанными те, что ниже и ещё не попадали в
- * кадр). Карточка, уже видимая при открытии экрана (обычно самая верхняя,
- * самая новая), помечается прочитанной сразу — IntersectionObserver
- * сработает на неё в первый же момент наблюдения, без доп. логики.
+ * что конкретная карточка реально попала в видимую область (раньше был
+ * порог 0.9 — «карточка целиком прошла через кадр», просьба Sg от
+ * 03.10.2026, чтобы не помечать прочитанными те, что ниже и ещё не
+ * попадали в кадр; но у длинных уведомлений высота карточки может
+ * превышать высоту самого экрана на телефоне, и тогда 90% видимости
+ * недостижимо физически — карточка никогда не помечалась прочитанной. Порог
+ * снижен до 0.6: «основная часть карточки видна», тот же смысл, но
+ * достижимо для любой карточки). Карточка, уже видимая при открытии
+ * экрана (обычно самая верхняя, самая новая), помечается прочитанной сразу
+ * — IntersectionObserver сработает на неё в первый же момент наблюдения,
+ * без доп. логики.
  *
- * Как только карточка прочитана, её яркая подсветка остаётся ещё 30
- * секунд (см. NOTIFICATION_UNREAD_FADE_MS и renderNotifications) и только
- * потом гаснет плавно — класс notification-unread снимается, а переход
- * оформлен transition на .order-card в CSS.
+ * Как только карточка прочитана, её яркая подсветка остаётся ещё
+ * NOTIFICATION_UNREAD_FADE_MS и только потом гаснет плавно (класс
+ * notification-unread снимается, переход оформлен transition на
+ * .order-card в CSS). Раньше угасание планировалось разовым setTimeout на
+ * конкретном DOM-узле, пойманном в момент прочтения — если за это время
+ * где угодно в приложении срабатывал render() (а он полностью
+ * перестраивает #app.innerHTML), узел пересоздавался, старый таймер
+ * стрелял в уже отсоединённый от документа элемент, а новая карточка
+ * никакого таймера не получала — подсветка не гасла сама вообще, только
+ * после перезагрузки страницы, когда renderNotifications() заново
+ * пересчитывал её состояние с нуля (баг, отчёт Sg от 03.10.2026). Теперь
+ * вместо этого — лёгкий интервал, который каждую секунду сверяет все
+ * подсвеченные карточки, реально находящиеся в DOM прямо сейчас, с
+ * моментом прочтения из localStorage: он не привязан к конкретному узлу и
+ * переживает любые render() на экране «Уведомления».
  */
 function wireNotificationsScreen() {
   const container = document.getElementById('notifications-screen');
-  if (!container) return;
-  const userId = state.currentUserId;
   if (notificationsObserver) {
     notificationsObserver.disconnect();
     notificationsObserver = null;
   }
+  if (notificationsFadeInterval) {
+    clearInterval(notificationsFadeInterval);
+    notificationsFadeInterval = null;
+  }
+  if (!container) return;
+  const userId = state.currentUserId;
   const unreadCards = container.querySelectorAll('.order-card[data-unread="1"]');
-  if (!unreadCards.length) return;
-  notificationsObserver = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        const el = entry.target;
-        const id = el.getAttribute('data-notification-id');
-        if (!id) return;
-        markNotificationRead(userId, id);
-        el.setAttribute('data-unread', '0');
-        notificationsObserver.unobserve(el);
-        setTimeout(() => {
-          el.classList.remove('notification-unread');
-        }, NOTIFICATION_UNREAD_FADE_MS);
-      });
-    },
-    // root — сам экран (прокручиваемый контейнер, см. .screen), а не
-    // viewport целиком: у него свой scrollTop (см. render()).
-    { root: container, threshold: 0.9 }
-  );
-  unreadCards.forEach((el) => notificationsObserver.observe(el));
+  if (unreadCards.length) {
+    notificationsObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const el = entry.target;
+          const id = el.getAttribute('data-notification-id');
+          if (!id) return;
+          markNotificationRead(userId, id);
+          el.setAttribute('data-unread', '0');
+          notificationsObserver.unobserve(el);
+        });
+      },
+      // root — сам экран (прокручиваемый контейнер, см. .screen), а не
+      // viewport целиком: у него свой scrollTop (см. render()).
+      { root: container, threshold: 0.6 }
+    );
+    unreadCards.forEach((el) => notificationsObserver.observe(el));
+  }
+
+  const sweepFadedCards = () => {
+    const screenEl = document.getElementById('notifications-screen');
+    if (!screenEl) {
+      // Ушли с экрана «Уведомления» — сам себя останавливаем, новый
+      // интервал поставит следующий заход на этот экран.
+      clearInterval(notificationsFadeInterval);
+      notificationsFadeInterval = null;
+      return;
+    }
+    const readMap = loadNotificationsReadMap()[userId] || {};
+    const now = Date.now();
+    screenEl.querySelectorAll('.order-card.notification-unread[data-notification-id]').forEach((el) => {
+      const readAt = readMap[el.getAttribute('data-notification-id')];
+      if (readAt && now - new Date(readAt).getTime() >= NOTIFICATION_UNREAD_FADE_MS) {
+        el.classList.remove('notification-unread');
+      }
+    });
+  };
+  sweepFadedCards();
+  notificationsFadeInterval = setInterval(sweepFadedCards, 1000);
 }
 
 /**
