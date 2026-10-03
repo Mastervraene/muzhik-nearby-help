@@ -797,6 +797,29 @@ body {
   background: var(--accent);
   color: var(--gray-0);
 }
+
+/* Кнопка «Завершено ХХ» рядом с заголовком «Мои заказы» (см.
+   renderOrdersSectionHeader/showArchived) — показывает и переключает
+   видимость завершённых/отменённых заказов, скрытых по умолчанию. Та же
+   форма пилюли, что и .section-refresh-btn, но с двумя цветовыми
+   состояниями, как у .sort-btn: нейтральный фон панели, когда архив
+   скрыт, акцентный синий — когда показан. */
+.archive-toggle-btn {
+  flex: none;
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.archive-toggle-btn.active {
+  background: var(--accent);
+  color: var(--gray-0);
+}
 .orders-sort-card {
   width: 100%;
   max-width: 420px;
@@ -3848,6 +3871,12 @@ const STATUS_LABELS = {
   // requestPartPurchase). См. renderOrderDetail (isCustomer) ниже.
   part_purchase_requested: 'Нужно купить деталь',
 };
+
+// «Архивные» статусы заказа — скрыты по умолчанию в блоке «Мои заказы»
+// (см. ordersSortSettings/applyOrdersBlockSettings ниже, кнопка «Завершено
+// ХХ» рядом с renderOrdersSectionHeader) до тех пор, пока пользователь сам
+// не нажмёт кнопку, чтобы их показать.
+const ARCHIVED_ORDER_STATUSES = ['rated', 'cancelled'];
 
 // Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
 // вынесены сюда, а не в разметку карточки заказа, потому что после
@@ -7651,9 +7680,14 @@ const ORDERS_BLOCK_TITLES = {
 // statuses — Set статусов, которые нужно ПОКАЗЫВАТЬ (пустой Set — как
 // «ничего не выбрано — любой» в админской «Сортировке на карте» — значит
 // показывать все статусы, фильтр не активен). byStatus — включена ли
-// сортировка по статусу.
+// сортировка по статусу. showArchived — отдельный переключатель кнопки
+// «Завершено ХХ» (см. ниже): по умолчанию false, архивные статусы
+// (ARCHIVED_ORDER_STATUSES) скрыты независимо от settings.statuses — это
+// намеренно отдельный флаг, а не часть statuses, чтобы основная кнопка
+// сортировки (.sort-btn) не загоралась синим только из-за того, что
+// завершённые/отменённые заказы скрыты по умолчанию.
 function makeOrdersBlockSettings() {
-  return { statuses: new Set(), byStatus: false };
+  return { statuses: new Set(), byStatus: false, showArchived: false };
 }
 
 // Настройки по каждому из трёх блоков — независимо друг от друга (фильтр
@@ -7684,6 +7718,9 @@ function applyOrdersBlockSettings(list, blockKey) {
   let result = list;
   if (settings.statuses.size > 0) {
     result = result.filter((o) => settings.statuses.has(o.status));
+  }
+  if (!settings.showArchived) {
+    result = result.filter((o) => !ARCHIVED_ORDER_STATUSES.includes(o.status));
   }
   if (settings.byStatus) {
     // Сортировка стабильна (Array#sort в современных движках), поэтому
@@ -7754,13 +7791,26 @@ function renderOrdersSortModal(blockKey) {
  * один статус фильтром и/или включена сортировка, и остаётся нейтральной
  * (цвет панели, var(--gray-100)), когда ни то ни другое не активно.
  */
-function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '' } = {}) {
+function renderOrdersSectionHeader(title, blockKey, { extraButtonHtml = '', archivedCount = 0 } = {}) {
   const active = isOrderSortActive(blockKey);
+  const settings = ordersSortSettings[blockKey];
+  const showArchived = Boolean(settings && settings.showArchived);
+  // Кнопка «Завершено ХХ» — появляется только когда в блоке реально есть
+  // хоть один завершённый/отменённый заказ (archivedCount считается в
+  // renderOrders по НЕотфильтрованному списку блока, см. вызов ниже), и
+  // переключает showArchived в настройках этого блока (см.
+  // applyOrdersBlockSettings). Нейтральный цвет в выключенном состоянии,
+  // синий — во включённом (см. .archive-toggle-btn.active в CSS).
+  const archiveToggleHtml =
+    archivedCount > 0
+      ? `<button type="button" class="archive-toggle-btn ${showArchived ? 'active' : ''}" data-action="toggle-orders-archive" data-value="${blockKey}">Завершено ${archivedCount}</button>`
+      : '';
   return `
     <div class="section-title-row">
       <div class="section-title">${escapeHtml(title)}</div>
       <div class="section-title-row-actions">
         ${extraButtonHtml}
+        ${archiveToggleHtml}
         <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="open-orders-sort" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка">${ICON_SORT}</button>
       </div>
     </div>
@@ -7810,9 +7860,15 @@ function renderOrders() {
     <div class="empty-state">Все заказы скрыты фильтром статусов. <button type="button" style="border:none;background:none;padding:0;font:inherit;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer;" data-action="reset-order-sort" data-value="${blockKey}">Сбросить фильтр</button></div>
   `;
 
+  // Счётчик для кнопки «Завершено ХХ» — считаем по полному списку заказов
+  // блока (myOrders), а не по уже отфильтрованному myOrdersSorted, чтобы
+  // число не «прыгало» в зависимости от того, включена ли сейчас сама
+  // кнопка, и не зависело от ручного фильтра статусов в модалке сортировки.
+  const myArchivedCount = myOrders.filter((o) => ARCHIVED_ORDER_STATUSES.includes(o.status)).length;
+
   return `
     <div class="screen">
-      ${renderOrdersSectionHeader('Мои заказы', 'my')}
+      ${renderOrdersSectionHeader('Мои заказы', 'my', { archivedCount: myArchivedCount })}
       ${
         myOrdersSorted.length
           ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
@@ -9867,9 +9923,21 @@ async function handleAction(action, value) {
       return render();
     }
     case 'reset-order-sort': {
+      // «Сбросить всё» (и ссылка «Сбросить фильтр» в hiddenByFilterNote) —
+      // это «убери вообще любую фильтрацию в этом блоке», поэтому тут
+      // showArchived явно включаем, а не берём дефолт makeOrdersBlockSettings()
+      // (там showArchived: false, т.к. это дефолт обычной загрузки страницы).
+      // Без этого, если у пользователя ВСЕ заказы блока оказались архивными
+      // (завершены/отменены), кнопка «Сбросить фильтр» ничего бы не меняла —
+      // список остался бы пустым, хотя обещает показать заказы.
       if (ordersSortSettings[value]) {
-        ordersSortSettings[value] = makeOrdersBlockSettings();
+        ordersSortSettings[value] = { ...makeOrdersBlockSettings(), showArchived: true };
       }
+      return render();
+    }
+    case 'toggle-orders-archive': {
+      const settings = ordersSortSettings[value];
+      if (settings) settings.showArchived = !settings.showArchived;
       return render();
     }
     case 'go-home':
