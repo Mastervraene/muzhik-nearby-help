@@ -99,6 +99,10 @@
   --radius-sm: 14px;
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
   --shadow-md: 0 2px 6px rgba(15, 23, 42, 0.05), 0 14px 32px rgba(15, 23, 42, 0.08);
+  /* Подсветка непрочитанного уведомления (см. .notification-unread) — тот
+     же акцентный красный, что и --notify-badge, только в виде мягкого
+     цветного свечения вместо обычной нейтральной тени карточки. */
+  --shadow-unread: 0 2px 8px rgba(224, 36, 36, 0.22), 0 10px 28px rgba(224, 36, 36, 0.22);
   --danger: #6b6b6b; /* без цвета — предупреждения выделяются текстурой/жирностью, не цветом */
   --max-width: 480px;
 }
@@ -1070,6 +1074,19 @@ body {
   box-shadow: var(--shadow-md);
   padding: 14px;
   margin-bottom: 10px;
+  /* transition живёт здесь, а не только в .notification-unread — иначе при
+     снятии этого класса (угасание подсветки спустя 30 сек, см.
+     wireNotificationsScreen) новое состояние стиля не содержало бы
+     transition, и тень менялась бы скачком, а не плавно. */
+  transition: box-shadow 1.4s ease;
+}
+
+/* Непрочитанное уведомление в renderNotifications — цветное свечение
+   вместо обычной нейтральной тени, пока уведомление не прочитано и ещё 30
+   секунд после (см. NOTIFICATION_UNREAD_FADE_MS), потом плавно гаснет до
+   стандартной .order-card тени. */
+.order-card.notification-unread {
+  box-shadow: var(--shadow-unread);
 }
 
 .order-card-top {
@@ -4067,11 +4084,12 @@ function go(screen, extra = {}) {
     // середины редактирования, оставшейся с прошлого визита.
     profileAddressEditing = false;
   }
-  if (screen === 'notifications') {
-    // Заход на список уведомлений сразу гасит бейдж в шапке — см.
-    // markNotificationsSeen/getUnreadNotificationsCount у renderTopbar.
-    markNotificationsSeen(state.currentUserId);
-  }
+  // Бейдж в шапке больше не гасится целиком в момент захода на экран —
+  // каждое уведомление помечается прочитанным отдельно, когда реально
+  // прошло через видимую область (см. wireNotificationsScreen/
+  // markNotificationRead), иначе непрочитанные уведомления ниже экрана
+  // молча считались бы увиденными, даже если человек их не долистал
+  // (просьба Sg от 03.10.2026).
   render();
   if (screen === 'orders') {
     // Не блокируем сам переход на экран — список кандидатов дорисуется
@@ -7308,46 +7326,66 @@ let isPublishingDraft = false;
 
 // ---------------------------------------------------------------------
 // «Прочитанные» уведомления — только на этом устройстве: сервер не хранит
-// признак прочтения (таблица notifications его не знает), поэтому просто
-// запоминаем в localStorage момент последнего захода на экран
-// «Уведомления» для каждого пользователя и на бейдже в шапке показываем
-// количество уведомлений, пришедших после этого момента. Простая и
-// достаточная замена полноценному read/unread на сервере — бейдж и так
-// сбрасывается сразу, как только человек открыл список.
+// признак прочтения (таблица notifications его не знает). Раньше весь
+// список целиком помечался «просмотренным» одной временной меткой в
+// момент самого захода на экран «Уведомления» — из-за этого бейдж гас
+// мгновенно, даже если человек не долистал до нижних, ещё непрочитанных
+// уведомлений (просьба Sg от 03.10.2026). Теперь прочтение — по каждому
+// уведомлению отдельно: id считается прочитанным, только когда карточка
+// реально целиком прошла через видимую область экрана (см.
+// wireNotificationsScreen/IntersectionObserver у wireEvents). Храним не
+// только сам факт, но и момент прочтения — он нужен, чтобы подсветка
+// нового уведомления гасла не мгновенно, а спустя 30 секунд (см. CSS
+// .notification-unread и таймер в wireNotificationsScreen).
 // ---------------------------------------------------------------------
-const NOTIFICATIONS_SEEN_KEY = 'muzhik_notifications_seen_v1';
+const NOTIFICATIONS_READ_KEY = 'muzhik_notifications_read_v1';
+const NOTIFICATION_UNREAD_FADE_MS = 30000;
 
-function loadNotificationsSeenMap() {
+function loadNotificationsReadMap() {
   if (typeof localStorage === 'undefined') return {};
   try {
-    return JSON.parse(localStorage.getItem(NOTIFICATIONS_SEEN_KEY) || '{}');
+    return JSON.parse(localStorage.getItem(NOTIFICATIONS_READ_KEY) || '{}');
   } catch {
     return {};
   }
 }
 
-function markNotificationsSeen(userId) {
-  if (!userId || typeof localStorage === 'undefined') return;
-  const map = loadNotificationsSeenMap();
-  map[userId] = new Date().toISOString();
-  localStorage.setItem(NOTIFICATIONS_SEEN_KEY, JSON.stringify(map));
+function saveNotificationsReadMap(map) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(NOTIFICATIONS_READ_KEY, JSON.stringify(map));
+  } catch {
+    /* не критично — просто не запомнится между визитами */
+  }
+}
+
+// Помечает уведомление прочитанным. Не перезаписывает уже существующий
+// readAt — иначе повторное срабатывание IntersectionObserver (например,
+// после повторного захода на экран в течение тех же 30 секунд) сбрасывало
+// бы отсчёт угасания подсветки заново.
+function markNotificationRead(userId, notificationId) {
+  if (!userId || !notificationId || typeof localStorage === 'undefined') return;
+  const map = loadNotificationsReadMap();
+  if (!map[userId]) map[userId] = {};
+  if (map[userId][notificationId]) return;
+  map[userId][notificationId] = new Date().toISOString();
+  saveNotificationsReadMap(map);
 }
 
 function getUnreadNotificationsCount(userId) {
   if (!userId) return 0;
   const list = getNotificationsFor(userId);
   if (!list.length) return 0;
-  const seenAt = loadNotificationsSeenMap()[userId];
-  if (!seenAt) return list.length;
-  const seenTime = new Date(seenAt).getTime();
-  return list.filter((n) => new Date(n.createdAt).getTime() > seenTime).length;
+  const readMap = loadNotificationsReadMap()[userId] || {};
+  return list.filter((n) => !readMap[n.id]).length;
 }
 
 // ---------------------------------------------------------------------
 // «Просмотренные» подходящие заказы — красный маркер «N новых» у блока
 // «Подходит вам рядом» (см. renderOrdersSectionHeader/renderOrders). Тот же
-// приём, что и NOTIFICATIONS_SEEN_KEY выше (только это устройство, без
-// read/unread на сервере). По просьбе Sg от 03.10.2026 «просмотрен» — это
+// приём (localStorage, только это устройство, без read/unread на
+// сервере), что и NOTIFICATIONS_READ_KEY выше. По просьбе Sg от
+// 03.10.2026 «просмотрен» — это
 // НЕ клик в детали заказа (это оказалось лишним шагом), а просто факт, что
 // заказ показался мастеру на экране «Заказы»: как только он туда зашёл и
 // увидел список — всё, что в нём есть прямо сейчас, перестаёт быть «новым»
@@ -8571,21 +8609,40 @@ function renderOrderDetail() {
 }
 
 function renderNotifications() {
-  const list = getNotificationsFor(state.currentUserId).slice().reverse();
+  const userId = state.currentUserId;
+  // Новые сверху, старые снизу (раньше здесь был .reverse() поверх уже
+  // отсортированного по убыванию списка из кэша — на проде это
+  // переворачивало порядок на обратный; просьба Sg от 03.10.2026). Сортируем
+  // явно по дате, а не полагаемся на порядок в cache.notifications — он
+  // отличается между демо-режимом (накопление через push) и продом (запрос
+  // с order=created_at.desc).
+  const list = getNotificationsFor(userId)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const readMap = loadNotificationsReadMap()[userId] || {};
+  const now = Date.now();
   return `
-    <div class="screen">
+    <div class="screen" id="notifications-screen">
       <div class="section-title">Уведомления</div>
       <p class="demo-tag">Демо-режим: в проде эти же события будут приходить по SMS/пуш-уведомлениям</p>
       ${
         list.length
           ? list
-              .map(
-                (n) => `
-        <div class="order-card">
+              .map((n) => {
+                const readAt = readMap[n.id];
+                const isUnread = !readAt;
+                // Подсветка непрочитанного держится и ещё 30 секунд ПОСЛЕ
+                // прочтения (плавно гаснет на CSS-transition — см.
+                // wireNotificationsScreen), поэтому при самой отрисовке
+                // нужен не только факт «непрочитано», но и срок с момента
+                // прочтения.
+                const stillGlowing = isUnread || now - new Date(readAt).getTime() < NOTIFICATION_UNREAD_FADE_MS;
+                return `
+        <div class="order-card${stillGlowing ? ' notification-unread' : ''}" data-notification-id="${escapeHtml(n.id)}" data-unread="${isUnread ? '1' : '0'}">
           <p>${escapeHtml(n.text)}</p>
           <p class="order-meta"><span>${new Date(n.createdAt).toLocaleString('ru-RU')}</span></p>
-        </div>`
-              )
+        </div>`;
+              })
               .join('')
           : `<div class="empty-state">Пока нет уведомлений</div>`
       }
@@ -10016,6 +10073,67 @@ function wireEvents() {
   });
 
   wireOnboardingSwipe();
+  if (state.screen === 'notifications') {
+    wireNotificationsScreen();
+  } else if (notificationsObserver) {
+    // Ушли с экрана уведомлений — отключаем наблюдатель за карточками,
+    // которых уже нет в DOM (следующий заход пересоздаст его заново).
+    notificationsObserver.disconnect();
+    notificationsObserver = null;
+  }
+}
+
+// IntersectionObserver, следящий за карточками уведомлений на экране
+// «Уведомления» — см. wireNotificationsScreen. Модульная переменная, а не
+// локальная: нужно отключать предыдущий наблюдатель при каждом новом
+// render()/уходе с экрана, иначе он продолжит держать ссылки на старые,
+// уже удалённые из DOM узлы.
+let notificationsObserver = null;
+
+/**
+ * Прочтение уведомления — не факт захода на экран «Уведомления», а факт,
+ * что конкретная карточка реально целиком прошла через видимую область
+ * (просьба Sg от 03.10.2026: если непрочитанных больше одного, экран не
+ * должен тихо помечать прочитанными те, что ниже и ещё не попадали в
+ * кадр). Карточка, уже видимая при открытии экрана (обычно самая верхняя,
+ * самая новая), помечается прочитанной сразу — IntersectionObserver
+ * сработает на неё в первый же момент наблюдения, без доп. логики.
+ *
+ * Как только карточка прочитана, её яркая подсветка остаётся ещё 30
+ * секунд (см. NOTIFICATION_UNREAD_FADE_MS и renderNotifications) и только
+ * потом гаснет плавно — класс notification-unread снимается, а переход
+ * оформлен transition на .order-card в CSS.
+ */
+function wireNotificationsScreen() {
+  const container = document.getElementById('notifications-screen');
+  if (!container) return;
+  const userId = state.currentUserId;
+  if (notificationsObserver) {
+    notificationsObserver.disconnect();
+    notificationsObserver = null;
+  }
+  const unreadCards = container.querySelectorAll('.order-card[data-unread="1"]');
+  if (!unreadCards.length) return;
+  notificationsObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const el = entry.target;
+        const id = el.getAttribute('data-notification-id');
+        if (!id) return;
+        markNotificationRead(userId, id);
+        el.setAttribute('data-unread', '0');
+        notificationsObserver.unobserve(el);
+        setTimeout(() => {
+          el.classList.remove('notification-unread');
+        }, NOTIFICATION_UNREAD_FADE_MS);
+      });
+    },
+    // root — сам экран (прокручиваемый контейнер, см. .screen), а не
+    // viewport целиком: у него свой scrollTop (см. render()).
+    { root: container, threshold: 0.9 }
+  );
+  unreadCards.forEach((el) => notificationsObserver.observe(el));
 }
 
 /**
