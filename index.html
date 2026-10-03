@@ -720,19 +720,6 @@ body {
   margin: 22px 0 10px;
 }
 
-/* Заголовок секции с кнопкой ручного обновления рядом (см. «Подходит вам
-   рядом» на экране «Заказы») — сам .section-title остаётся как есть везде,
-   где кнопка не нужна. */
-.section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 22px 0 10px;
-}
-.section-title-row .section-title {
-  margin: 0;
-}
 .section-refresh-btn {
   flex: none;
   border: none;
@@ -756,9 +743,9 @@ body {
   margin-bottom: 6px;
 }
 
-/* Кнопки справа от заголовка секции (кнопка «Обновить» + кнопка сортировки,
-   см. section-title-row-actions ниже) — раньше в этом месте была только
-   одна кнопка, поэтому обёртка не требовалась. */
+/* Кнопки справа от шапки блока (кнопка «Обновить» + кнопка сортировки, см.
+   section-title-row-actions ниже) — раньше в этом месте была только одна
+   кнопка, поэтому обёртка не требовалась. */
 .section-title-row-actions {
   display: flex;
   align-items: center;
@@ -766,30 +753,56 @@ body {
   flex: none;
 }
 
-/* Кликабельная «голова» заголовка блока заказов — сворачивает/разворачивает
-   список (см. expandedOrdersSections/toggle-orders-section рядом с
-   renderOrdersSectionHeader). Обычная кнопка без рамки/фона, чтобы не
-   выглядеть как действие, а не как часть заголовка; .section-title внутри
-   неё теряет свой верхний отступ (уже задан обёрткой .section-title-row). */
-.section-title-head {
+/* Блок заказов целиком — единая скруглённая карточка (см. renderOrdersBlock
+   рядом с renderOrders): в свёрнутом виде это только шапка, в развёрнутом —
+   шапка и список заказов внутри одной и той же рамки, которая растягивается
+   вместе с содержимым, а не остаётся только вокруг заголовка (по просьбе Sg
+   от 03.10.2026). overflow:hidden — чтобы скруглённые углы подрезали шапку и
+   первую/последнюю карточку заказа внутри, а не торчали острыми краями. */
+.orders-block {
+  margin: 22px 0 10px;
+  background: var(--gray-0);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06), 0 16px 36px rgba(15, 23, 42, 0.1);
+  overflow: hidden;
+}
+/* Шапка — сама кликабельна целиком (data-action="toggle-orders-section" на
+   ней самой, а не на .orders-block), сворачивает/разворачивает блок. Кнопки
+   внутри нее (сортировка/«Завершено ХХ»/«Обновить») гасят всплытие клика
+   (onclick="event.stopPropagation()" в разметке), чтобы не дёргать заодно и
+   сворачивание — см. renderOrdersSectionHeader. */
+.orders-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px;
+  cursor: pointer;
+}
+.orders-block-head-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  cursor: pointer;
-  text-align: left;
   min-width: 0;
 }
-.section-title-head .section-title {
+.orders-block-head-title .section-title {
   margin: 0;
 }
-.section-title-head .chevron {
+.orders-block-head .chevron {
   color: var(--gray-400);
   font-size: 10px;
   flex: none;
+}
+/* Список заказов внутри развёрнутого блока — карточки заказов (.order-card)
+   уже белые со своей тенью, поэтому у тела блока фон чуть темнее белого
+   (унаследован от .orders-block, var(--gray-50)), чтобы карточки не сливались
+   с рамкой. */
+.orders-block-body {
+  padding: 0 12px 12px;
+}
+.orders-block-body .order-card:last-child {
+  margin-bottom: 0;
 }
 /* Серый кружок с числом рядом с названием блока — сколько заказов покажется
    при разворачивании (см. count у renderOrdersSectionHeader). */
@@ -7726,7 +7739,7 @@ function orderCardHtml(order, { viewer }) {
       ? distanceKm(currentUser().location, order.exactLocation).toFixed(1)
       : null;
   return `
-    <div class="order-card" data-action="open-order" data-value="${order.id}">
+    <div class="order-card" data-action="open-order" data-value="${order.id}" onclick="event.stopPropagation()">
       <div class="order-card-top">
         <div>
           ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
@@ -7912,18 +7925,21 @@ function renderOrdersSortModal(blockKey) {
 }
 
 /**
- * Заголовок блока заказов — сворачивается/разворачивается кликом (см.
- * expandedOrdersSections/toggle-orders-section, по умолчанию свёрнут, по
- * образцу групп по заказчику в admin.html), показывает серый счётчик
- * количества заказов рядом с названием (сколько покажется при
- * разворачивании — с учётом текущих фильтров блока) и, для «Подходит вам
- * рядом», дополнительно красный маркер «N новых» (см. countNewCandidateOrders).
- * Отдельно — маленькая кнопка сортировки/фильтра (и, для «Подходит вам
- * рядом», ещё и кнопка «Обновить» — extraButtonHtml). Кнопка сортировки
- * светится синим (см. .sort-btn.active), когда в этом блоке скрыт хотя бы
- * один статус фильтром и/или включена сортировка, и остаётся нейтральной
- * (цвет панели, var(--gray-100)), когда ни то ни другое не активно — эта
- * подсветка намеренно никак не связана со свёрнутостью блока.
+ * Шапка блока заказов — название, серый счётчик количества заказов (сколько
+ * покажется при разворачивании — с учётом текущих фильтров блока) и, для
+ * «Подходит вам рядом», дополнительно красный маркер «N новых» (см.
+ * countNewCandidateOrders). Отдельно справа — маленькая кнопка сортировки/
+ * фильтра (и, для «Подходит вам рядом», ещё и кнопка «Обновить» —
+ * extraButtonHtml). Кнопка сортировки светится синим (см. .sort-btn.active),
+ * когда в этом блоке скрыт хотя бы один статус фильтром и/или включена
+ * сортировка, и остаётся нейтральной (цвет панели, var(--gray-100)), когда
+ * ни то ни другое не активно — эта подсветка намеренно никак не связана со
+ * свёрнутостью блока. Сама шапка не кликабельна — сворачивает/разворачивает
+ * весь блок обёртка .orders-block в renderOrdersBlock() ниже (по просьбе Sg
+ * от 03.10.2026 — «чтобы вся строка была полноценной кнопкой», а не только
+ * текст заголовка); все кнопки внутри шапки сами гасят всплытие клика
+ * (onclick="event.stopPropagation()"), чтобы не дёргать заодно и
+ * сворачивание блока.
  */
 function renderOrdersSectionHeader(
   title,
@@ -7942,23 +7958,42 @@ function renderOrdersSectionHeader(
   // синий — во включённом (см. .archive-toggle-btn.active в CSS).
   const archiveToggleHtml =
     archivedCount > 0
-      ? `<button type="button" class="archive-toggle-btn ${showArchived ? 'active' : ''}" data-action="toggle-orders-archive" data-value="${blockKey}">Завершено ${archivedCount}</button>`
+      ? `<button type="button" class="archive-toggle-btn ${showArchived ? 'active' : ''}" data-action="toggle-orders-archive" data-value="${blockKey}" onclick="event.stopPropagation()">Завершено ${archivedCount}</button>`
       : '';
   const countBadgeHtml = count > 0 ? `<span class="section-count-badge">${count}</span>` : '';
   const newBadgeHtml = newCount > 0 ? `<span class="section-new-badge">${escapeHtml(pluralizeNew(newCount))}</span>` : '';
   return `
-    <div class="section-title-row">
-      <button type="button" class="section-title-head" data-action="toggle-orders-section" data-value="${blockKey}" aria-expanded="${expanded}">
+    <div class="orders-block-head" data-action="toggle-orders-section" data-value="${blockKey}" aria-expanded="${expanded}">
+      <span class="orders-block-head-title">
         <span class="section-title">${escapeHtml(title)}</span>
         ${countBadgeHtml}
         ${newBadgeHtml}
         <span class="chevron">${expanded ? '▲' : '▼'}</span>
-      </button>
+      </span>
       <div class="section-title-row-actions">
         ${extraButtonHtml}
         ${archiveToggleHtml}
-        <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="open-orders-sort" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка">${ICON_SORT}</button>
+        <button type="button" class="sort-btn ${active ? 'active' : ''}" data-action="open-orders-sort" data-value="${blockKey}" aria-label="Сортировка" title="Сортировка" onclick="event.stopPropagation()">${ICON_SORT}</button>
       </div>
+    </div>
+  `;
+}
+
+/**
+ * Обёртка блока заказов целиком — по просьбе Sg от 03.10.2026 «кнопка
+ * растягивается на все заказы»: единая скруглённая карточка (.orders-block),
+ * кликабельна целиком (data-action="toggle-orders-section" на самом внешнем
+ * div, см. handleAction), в свёрнутом виде показывает только шапку
+ * (renderOrdersSectionHeader), в развёрнутом — шапку и список заказов ниже,
+ * внутри той же карточки (.orders-block-body), так что скруглённая рамка
+ * растягивается вместе с содержимым, а не остаётся только вокруг заголовка.
+ */
+function renderOrdersBlock(title, blockKey, bodyHtml, headerOpts = {}) {
+  const expanded = expandedOrdersSections.has(blockKey);
+  return `
+    <div class="orders-block">
+      ${renderOrdersSectionHeader(title, blockKey, headerOpts)}
+      ${expanded ? `<div class="orders-block-body">${bodyHtml}</div>` : ''}
     </div>
   `;
 }
@@ -8003,7 +8038,7 @@ function renderOrders() {
   // нет») — отдельная подсказка со ссылкой на сброс, а не то же самое
   // сообщение, что и для честно пустого блока.
   const hiddenByFilterNote = (blockKey) => `
-    <div class="empty-state">Все заказы скрыты фильтром статусов. <button type="button" style="border:none;background:none;padding:0;font:inherit;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer;" data-action="reset-order-sort" data-value="${blockKey}">Сбросить фильтр</button></div>
+    <div class="empty-state">Все заказы скрыты фильтром статусов. <button type="button" style="border:none;background:none;padding:0;font:inherit;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer;" data-action="reset-order-sort" data-value="${blockKey}" onclick="event.stopPropagation()">Сбросить фильтр</button></div>
   `;
 
   // Счётчик для кнопки «Завершено ХХ» — считаем по полному списку заказов
@@ -8027,56 +8062,45 @@ function renderOrders() {
   // не поднимали — ровно «зашёл в Заказы и увидел», без дополнительного клика.
   markCandidateOrdersSeen(state.currentUserId, candidateOrders);
 
-  const myExpanded = expandedOrdersSections.has('my');
-  const assignedExpanded = expandedOrdersSections.has('assigned');
-  const candidatesExpanded = expandedOrdersSections.has('candidates');
+  // Тело каждого блока считаем всегда (дёшево — просто строки), а показывать
+  // его или нет решает renderOrdersBlock() по expandedOrdersSections.
+  const myBodyHtml = myOrdersSorted.length
+    ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
+    : myOrders.length
+    ? hiddenByFilterNote('my')
+    : `<div class="empty-state">Вы ещё не публиковали заказы</div>`;
+
+  const assignedBodyHtml = assignedSorted.length
+    ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
+    : assignedToMe.length
+    ? hiddenByFilterNote('assigned')
+    : `<div class="empty-state">Пока нет назначенных вам заказов</div>`;
+
+  const candidatesBodyHtml = !hasSkills
+    ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
+    : showsServerList && cache.availableOrdersError && !candidatesSorted.length
+    ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
+    : candidatesSorted.length
+    ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
+    : candidateOrders.length
+    ? hiddenByFilterNote('candidates')
+    : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`;
 
   return `
     <div class="screen">
-      ${renderOrdersSectionHeader('Мои заказы', 'my', { archivedCount: myArchivedCount, count: myCount })}
-      ${
-        !myExpanded
-          ? ''
-          : myOrdersSorted.length
-          ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
-          : myOrders.length
-          ? hiddenByFilterNote('my')
-          : `<div class="empty-state">Вы ещё не публиковали заказы</div>`
-      }
+      ${renderOrdersBlock('Мои заказы', 'my', myBodyHtml, { archivedCount: myArchivedCount, count: myCount })}
 
-      ${renderOrdersSectionHeader('Заказы, которые я выполняю', 'assigned', { count: assignedCount })}
-      ${
-        !assignedExpanded
-          ? ''
-          : assignedSorted.length
-          ? assignedSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
-          : assignedToMe.length
-          ? hiddenByFilterNote('assigned')
-          : `<div class="empty-state">Пока нет назначенных вам заказов</div>`
-      }
+      ${renderOrdersBlock('Заказы, которые я выполняю', 'assigned', assignedBodyHtml, { count: assignedCount })}
 
-      ${renderOrdersSectionHeader('Подходит вам рядом', 'candidates', {
+      ${renderOrdersBlock('Подходит вам рядом', 'candidates', candidatesBodyHtml, {
         count: candidatesCount,
         newCount: newCandidatesCount,
         extraButtonHtml: showsServerList
-          ? `<button class="section-refresh-btn" type="button" data-action="refresh-available-orders" ${
+          ? `<button class="section-refresh-btn" type="button" data-action="refresh-available-orders" onclick="event.stopPropagation()" ${
               cache.availableOrdersLoading ? 'disabled' : ''
             }>${cache.availableOrdersLoading ? 'Обновляем…' : 'Обновить'}</button>`
           : '',
       })}
-      ${
-        !candidatesExpanded
-          ? ''
-          : !hasSkills
-          ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
-          : showsServerList && cache.availableOrdersError && !candidatesSorted.length
-          ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
-          : candidatesSorted.length
-          ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
-          : candidateOrders.length
-          ? hiddenByFilterNote('candidates')
-          : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`
-      }
     </div>
     ${ordersSortModalOpenFor ? renderOrdersSortModal(ordersSortModalOpenFor) : ''}
   `;
