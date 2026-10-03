@@ -325,41 +325,6 @@ body {
   color: #d33;
 }
 
-/* ---------- Bottom nav ---------- */
-
-.bottom-nav {
-  display: flex;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 -1px 2px rgba(15, 23, 42, 0.04), 0 -8px 24px rgba(15, 23, 42, 0.06);
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
-}
-
-.bottom-nav button {
-  flex: 1;
-  border: none;
-  background: transparent;
-  padding: 10px 4px 14px;
-  font-size: 11px;
-  color: var(--gray-500);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.bottom-nav button.active {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.bottom-nav .nav-icon {
-  font-size: 18px;
-}
-
 /* ---------- Main content ---------- */
 
 .screen {
@@ -7377,12 +7342,19 @@ function pluralizeNew(n) {
 // иконка профиля (плюс заказы/уведомления/поддержка одним списком) и
 // выход из аккаунта. Бейдж с числом непрочитанных уведомлений дублируется
 // и на самой аватарке (см. renderTopbar), и на пункте «Уведомления» внутри.
+//
+// Нижнюю панель (Заявка/Заказы/Профиль) убрали по просьбе Sg от 03.10.2026 —
+// «Профиль» и «Заказы» и так открываются через это меню, а на главную ведёт
+// клик по логотипу в шапке (см. data-action="go-home" у .brand-block в
+// renderTopbar). «Заявка» добавлена сюда же самым первым пунктом — страховка
+// для тех, кто не сможет/не поймёт, что по логотипу можно нажать.
 function renderAvatarMenu(user, unreadCount) {
   const items = [
+    { action: 'go-home', icon: '✍︎', label: 'Заявка' },
+    { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-profile', icon: '◍', label: 'Профиль' },
     { action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' },
     { action: 'go-worker-balance', icon: '💰', label: 'Баланс' },
-    { action: 'go-orders', icon: '▤', label: 'Заказы' },
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
   ];
@@ -7491,31 +7463,6 @@ function renderTopbarNoUser() {
         <button class="icon-button" data-action="go-profile" aria-label="Профиль" title="Профиль">👤</button>
       </div>
     </header>
-  `;
-}
-
-function renderBottomNav() {
-  // Нижняя навигация целиком появляется только после входа в аккаунт
-  // (через иконку профиля в шапке) — до входа заявку и так видно и
-  // отправляют её прямо с главного экрана, отдельная вкладка «Заявка»
-  // там не нужна.
-  if (!currentUser()) return '';
-  const tabs = [
-    ['home', '✍︎', 'Заявка'],
-    ['orders', '▤', 'Заказы'],
-    ['profile', '◍', 'Профиль'],
-  ];
-  return `
-    <nav class="bottom-nav">
-      ${tabs
-        .map(
-          ([key, icon, label]) => `
-        <button data-action="go-${key}" class="${state.screen === key || (key === 'profile' && (state.screen === 'masterPanel' || state.screen === 'workerBalance')) ? 'active' : ''}">
-          <span class="nav-icon">${icon}</span>${label}
-        </button>`
-        )
-        .join('')}
-    </nav>
   `;
 }
 
@@ -8923,7 +8870,6 @@ function render() {
         <div class="section-title">Нужен номер телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${renderBottomNav()}
       ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     `;
@@ -8952,7 +8898,6 @@ function render() {
   app.innerHTML = `
     ${renderTopbar()}
     ${content}
-    ${renderBottomNav()}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : ''}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
