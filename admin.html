@@ -471,6 +471,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
     <div class="toolbar">
       <button type="button" class="btn-sm ghost" id="map-sort-toggle">Сортировка</button>
+      <button type="button" class="btn-sm ghost" id="map-radius-workers-toggle" title="Показать радиусы поиска всех мастеров на карте">R мастер</button>
+      <button type="button" class="btn-sm ghost" id="map-radius-orders-toggle" title="Показать радиусы поиска всех заказов на карте">R заказ</button>
     </div>
     <div class="zone-hint" id="zone-hint" style="display:none;"></div>
     <div id="map-note-slot"></div>
@@ -1442,6 +1444,20 @@ let mapLoaded = false;
 // либо заказ (кружок = радиус ИМЕННО этого заказа — а на практике именно
 // он решает, увидит ли мастер заказ: см. формулу в updateMapZoneOpacity).
 let mapZoneSelection = null; // { type: 'master' | 'order', id: string } | null
+// Быстрые тумблеры в тулбаре вкладки «Карта» (просьба Sg 04.10.2026): сразу
+// показать кружки радиуса поиска у ВСЕХ мастеров / ВСЕХ заказов на карте
+// (с учётом текущих фильтров «Сортировки»), в отличие от mapZoneSelection
+// выше — тот рисует кружок только у ОДНОГО выбранного мастера/заказа и
+// показывает список кандидатов под картой (инструмент для разбора
+// конкретного случая, а эти тумблеры — для общего обзора).
+let mapShowAllWorkerRadii = false;
+let mapShowAllOrderRadii = false;
+// Все кружки радиуса, добавленные на карту в текущем fillMapPoints() —
+// нужно, чтобы на zoomchange пересчитать им толщину обводки (см.
+// radiusStrokeWidthForZoom/updateRadiusCircleWidths): Яндекс.Карты не
+// меняют strokeWidth сами при изменении масштаба, а просьба Sg была
+// именно в том, чтобы при приближении карты линия становилась тоньше.
+let mapRadiusCircles = [];
 // Фильтры вкладки «Карта» (открываются кнопкой «Сортировка») — те же по духу
 // критерии, что и в «Рассылке»: кого показывать + специализация/статус.
 let mapFilterAudience = 'all'; // 'all' | 'workers' | 'orders' — что показывать на карте
@@ -4034,6 +4050,10 @@ async function renderMap() {
         controls: ['zoomControl', 'fullscreenControl'],
       });
       mapLoaded = true;
+      // Пересчитываем толщину обводки кружков радиуса при любом изменении
+      // границ карты (в т.ч. зум) — просьба Sg 04.10.2026, см.
+      // radiusStrokeWidthForZoom/updateRadiusCircleWidths выше.
+      window.__adminMap.events.add('boundschange', updateRadiusCircleWidths);
       fillMapPoints();
     });
   } catch (err) {
@@ -4187,11 +4207,49 @@ function renderMapZoneList(rows, mode) {
     .join('');
 }
 
+// Толщина обводки кружка радиуса в зависимости от текущего зума карты —
+// просьба Sg 04.10.2026: раньше была фиксированная strokeWidth:2 на любом
+// масштабе, и на сильном приближении карты это выглядело непропорционально
+// толстой полосой. Теперь обводка тонкая изначально (1px на обычном
+// масштабе района/города) и становится ЕЩЁ тоньше при приближении, до
+// минимума 0.5px на максимальном зуме — а не толще, как раньше казалось.
+function radiusStrokeWidthForZoom(zoom) {
+  const z = typeof zoom === 'number' ? zoom : 10;
+  const w = 1 - (z - 10) * 0.08;
+  return Math.max(0.5, Math.min(1.2, w));
+}
+
+// Общий стиль кружка радиуса поиска — просьба Sg 04.10.2026: сделать на
+// 20% прозрачнее заливку (было #2563eb26 → альфа 38/255 ≈ 15%, стало
+// #2563eb1e → альфа 30/255 ≈ 12%, т.е. ровно на 20% меньше) и менее яркую
+// обводку (strokeOpacity 0.8 → 0.5).
+function radiusCircleStyle(zoom) {
+  return {
+    fillColor: '#2563eb1e',
+    strokeColor: '#2563eb',
+    strokeWidth: radiusStrokeWidthForZoom(zoom),
+    strokeOpacity: 0.5,
+  };
+}
+
+// Пересчитывает толщину обводки всех кружков радиуса на карте под текущий
+// зум — вызывается на zoomchange (см. wireAdminMap/boundschange ниже), т.к.
+// Яндекс.Карты сами не трогают strokeWidth при изменении масштаба.
+function updateRadiusCircleWidths() {
+  const map = window.__adminMap;
+  if (!map || !mapRadiusCircles.length) return;
+  const w = radiusStrokeWidthForZoom(map.getZoom());
+  mapRadiusCircles.forEach((c) => {
+    try { c.options.set('strokeWidth', w); } catch (e) { /* кружок уже убран с карты — пропускаем */ }
+  });
+}
+
 function fillMapPoints() {
   const map = window.__adminMap;
   if (!map) return;
   populateMapZoneSelect();
   map.geoObjects.removeAll();
+  mapRadiusCircles = [];
   let pointCount = 0;
   let singlePoint = null;
 
@@ -4284,20 +4342,49 @@ function fillMapPoints() {
   // Кружок радиуса поиска — вокруг мастера (его радиус по умолчанию) или
   // вокруг заказа (радиус именно этого заказа, который на практике и
   // решает всё — см. formula выше). Circle ждёт радиус в МЕТРАХ, не км.
+  const circleStyle = radiusCircleStyle(map.getZoom());
   if (zoneMaster) {
     const circle = new window.ymaps.Circle(
       [[zoneMaster.location.lat, zoneMaster.location.lng], zoneMaster.searchRadiusKm * 1000],
       {},
-      { fillColor: '#2563eb26', strokeColor: '#2563eb', strokeWidth: 2, strokeOpacity: 0.8 }
+      circleStyle
     );
     map.geoObjects.add(circle);
+    mapRadiusCircles.push(circle);
   } else if (zoneOrder) {
     const circle = new window.ymaps.Circle(
       [[zoneOrder.exactLocation.lat, zoneOrder.exactLocation.lng], (zoneOrder.searchRadiusKm || 3) * 1000],
       {},
-      { fillColor: '#2563eb26', strokeColor: '#2563eb', strokeWidth: 2, strokeOpacity: 0.8 }
+      circleStyle
     );
     map.geoObjects.add(circle);
+    mapRadiusCircles.push(circle);
+  }
+
+  // Тумблеры «R мастер» / «R заказ» в тулбаре (просьба Sg 04.10.2026) —
+  // кружки радиуса СРАЗУ у всех мастеров/заказов на карте (с учётом
+  // текущих фильтров «Сортировки»), а не только у одного выбранного выше.
+  if (mapShowAllWorkerRadii) {
+    getFilteredMapWorkers().forEach((u) => {
+      const circle = new window.ymaps.Circle(
+        [[u.location.lat, u.location.lng], u.searchRadiusKm * 1000],
+        {},
+        circleStyle
+      );
+      map.geoObjects.add(circle);
+      mapRadiusCircles.push(circle);
+    });
+  }
+  if (mapShowAllOrderRadii) {
+    getFilteredMapOrders().forEach((o) => {
+      const circle = new window.ymaps.Circle(
+        [[o.exactLocation.lat, o.exactLocation.lng], (o.searchRadiusKm || 3) * 1000],
+        {},
+        circleStyle
+      );
+      map.geoObjects.add(circle);
+      mapRadiusCircles.push(circle);
+    });
   }
 
   // Список под картой — точные расстояния и запас/перебор радиуса, чтобы
@@ -4489,6 +4576,16 @@ function showApp() {
     }
     fillMapPoints();
     updateMapSortButtonLabel();
+  });
+  document.getElementById('map-radius-workers-toggle').addEventListener('click', (e) => {
+    mapShowAllWorkerRadii = !mapShowAllWorkerRadii;
+    e.currentTarget.classList.toggle('has-filters', mapShowAllWorkerRadii);
+    fillMapPoints();
+  });
+  document.getElementById('map-radius-orders-toggle').addEventListener('click', (e) => {
+    mapShowAllOrderRadii = !mapShowAllOrderRadii;
+    e.currentTarget.classList.toggle('has-filters', mapShowAllOrderRadii);
+    fillMapPoints();
   });
   document.getElementById('map-sort-toggle').addEventListener('click', openMapSortModal);
   document.getElementById('map-sort-close').addEventListener('click', closeMapSortModal);
