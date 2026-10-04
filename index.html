@@ -4504,6 +4504,151 @@ async function ensureUserByPhone(phone, extra = {}) {
  */
 let phoneVerifyState = null;
 
+// ---------------------------------------------------------------------
+// БАГ от 04.10.2026 (репорт Sg): человек дозвонился, Zvonok подтвердил
+// звонок своим автоответчиком, но в профиле номер остался «не подтверждён».
+// Причина — phoneVerifyState живёт только в памяти вкладки, а подтверждение
+// ищется обычным setTimeout-поллингом (см. pollPhoneCallVerification). Если
+// человек на телефоне в это время переключился в другое приложение (хотя бы
+// чтобы набрать номер или написать сообщение) — мобильный браузер нередко
+// замораживает таймеры фоновой вкладки или вовсе выгружает её из памяти, и
+// при возврате вкладка либо перезагружается с нуля (phoneVerifyState теряется
+// насовсем), либо поллинг просто не успевает дойти до звонка, который
+// произошёл, пока вкладка была в фоне. Само подтверждение при этом СОХРАНЕНО
+// на стороне Zvonok (его видно через calls_by_phone) — просто наш фронт его
+// не спросил вовремя.
+//
+// Фикс — PENDING_PHONE_VERIFY_KEY: та же минимальная информация, что в
+// phoneVerifyState, дублируется в localStorage при старте ожидания и
+// стирается при любом завершении (подтверждено/отменено/пропущено). При
+// каждой загрузке страницы (см. resumePendingPhoneVerifyIfAny в конце boot())
+// и при возврате на вкладку (см. visibilitychange ниже, в самом низу файла)
+// мы проверяем: нет ли «подвисшей» записи — и если есть, сразу спрашиваем
+// zvonok-check ещё раз, а не ждём, пока истечёт локальный таймер. Так
+// подтверждение, случившееся «за кадром», всё равно будет замечено и
+// записано в базу при следующем открытии сайта, даже если сама вкладка с
+// попапом подтверждения уже не пережила переключение приложений.
+// ---------------------------------------------------------------------
+
+const PENDING_PHONE_VERIFY_KEY = 'muzhik_phone_verify_pending_v1';
+
+/** Сколько храним незавершённую попытку подтверждения, прежде чем считать её протухшей и больше не пытаться её доспросить (см. блок выше). */
+const PENDING_PHONE_VERIFY_MAX_AGE_MS = 30 * 60 * 1000; // 30 минут — щедрый запас
+
+/** Сохраняет минимум данных, нужных, чтобы доспросить zvonok-check позже, даже если сама вкладка не переживёт фон (см. блок выше про баг от 04.10.2026). */
+function savePendingPhoneVerify(st) {
+  if (typeof localStorage === 'undefined' || !st) return;
+  try {
+    localStorage.setItem(
+      PENDING_PHONE_VERIFY_KEY,
+      JSON.stringify({
+        userId: st.userId,
+        phone: st.phone,
+        canonicalPhone: st.canonicalPhone || null,
+        numberToCall: st.numberToCall,
+        since: st.since,
+        fromProfile: !!st.fromProfile,
+        startedAt: Date.now(),
+      }),
+    );
+  } catch (err) {
+    console.error('[savePendingPhoneVerify] не удалось сохранить', err);
+  }
+}
+
+/** @returns {null | {userId:string, phone:string, canonicalPhone:string|null, numberToCall:string, since:string, fromProfile:boolean, startedAt:number}} */
+function readPendingPhoneVerify() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(PENDING_PHONE_VERIFY_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function clearPendingPhoneVerify() {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(PENDING_PHONE_VERIFY_KEY);
+  }
+}
+
+/**
+ * Вызывается один раз при загрузке страницы (см. конец boot()) и при
+ * возврате на вкладку (см. visibilitychange в самом низу файла) — доспрашивает
+ * zvonok-check по незавершённой попытке подтверждения, если она есть и не
+ * протухла (см. комментарий про баг от 04.10.2026 у PENDING_PHONE_VERIFY_KEY).
+ * Нужен именно для случая, когда сама вкладка с попапом не пережила переход
+ * в фон — здесь нет активного phoneVerifyState, поэтому действуем по записи
+ * из localStorage напрямую, не трогая текущий UI, если это не тот же вошедший
+ * пользователь.
+ */
+async function resumePendingPhoneVerifyIfAny() {
+  const pending = readPendingPhoneVerify();
+  if (!pending) return;
+  if (!isSupabaseConfigured() || Date.now() - (pending.startedAt || 0) > PENDING_PHONE_VERIFY_MAX_AGE_MS) {
+    clearPendingPhoneVerify();
+    return;
+  }
+  // Если по этому же номеру уже идёт обычный поллинг в этой же вкладке —
+  // не мешаем ему, он и так доберётся до результата.
+  if (phoneVerifyState && phoneVerifyState.userId === pending.userId && phoneVerifyState.status === 'waiting') return;
+
+  let result;
+  try {
+    result = await checkPhoneCallVerification(pending.phone, pending.since);
+  } catch (err) {
+    console.error('[resumePendingPhoneVerifyIfAny] не удалось проверить', err);
+    return; // запись не трогаем — попробуем ещё раз при следующей загрузке/возврате
+  }
+
+  if (result && result.confirmed) {
+    const patch = { phone_verified: true };
+    if (pending.fromProfile && pending.canonicalPhone) patch.phone = pending.canonicalPhone;
+    try {
+      await updateRow('users', pending.userId, patch, { minimal: true });
+      const idx = cache.users.findIndex((u) => u.id === pending.userId);
+      if (idx >= 0) {
+        cache.users[idx] = { ...cache.users[idx], phoneVerified: true, ...(patch.phone ? { phone: patch.phone } : {}) };
+      }
+    } catch (err) {
+      reportError('сохранение подтверждения телефона', err);
+    }
+    clearPendingPhoneVerify();
+    if (pending.fromProfile && state.currentUserId === pending.userId) {
+      showToast('Номер подтверждён');
+    }
+    render();
+    return;
+  }
+
+  if (result && result.configured === false) {
+    // Подтверждение выключили на сервере, пока ждали, — запись больше не актуальна.
+    clearPendingPhoneVerify();
+    return;
+  }
+
+  // Ещё не подтверждено. Если это привязка номера из профиля и человек уже
+  // вошёл тем же пользователем — продолжаем ждать звонок в фоне этой
+  // вкладки; попап (если его откроют) подхватит это состояние сам, см.
+  // renderPhoneOverlay. Вход по телефону (не fromProfile) здесь не
+  // восстанавливаем — сам экран входа мы не пересобираем, запись просто
+  // подождёт следующей попытки.
+  if (pending.fromProfile && state.currentUserId === pending.userId && !phoneVerifyState) {
+    phoneVerifyState = {
+      userId: pending.userId,
+      phone: pending.phone,
+      canonicalPhone: pending.canonicalPhone,
+      numberToCall: pending.numberToCall,
+      since: pending.since,
+      status: 'waiting',
+      attemptsLeft: 60,
+      fromProfile: true,
+    };
+    pollPhoneCallVerification(phoneVerifyState);
+  }
+}
+
 async function startPhoneCallVerification(phoneE164) {
   if (!isSupabaseConfigured()) return { configured: false };
   const { url } = getConfig();
@@ -4564,6 +4709,7 @@ let passwordStepState = null;
  */
 function enterPasswordStep(user, onComplete = null) {
   phoneVerifyState = null;
+  clearPendingPhoneVerify();
   passwordStepState = {
     userId: user.id,
     phone: user.phone,
@@ -4823,6 +4969,33 @@ function submitEditDeviceModel(value) {
   render();
 }
 
+// Сколько секунд держим экран «Готовим номер для звонка…», прежде чем
+// показать сам номер и разрешить звонок — добавлено 04.10.2026 по
+// репорту Sg: при звонке сразу после получения номера Zvonok иногда
+// отвечает автоответчиком «мы не ожидаем звонка с этого номера», а при
+// повторном звонке примерно через минуту — срабатывает (видимо, номеру
+// из общего пула «Служебные номера» нужно время, чтобы зарегистрировать
+// ожидание конкретного звонка). Полную минуту заставлять ждать не
+// хочется, поэтому 15 сек — компромисс, а не гарантия; подстраховка —
+// предупреждение в самом тексте «Ждём звонка» (см. renderPhoneVerifyStep)
+// на случай, если 15 сек не хватит. Если по опыту окажется мало —
+// можно просто увеличить это число.
+const PHONE_VERIFY_PREP_SECONDS = 15;
+
+/** Тикает обратный отсчёт «Готовим номер…» перед тем, как разрешить звонок (см. PHONE_VERIFY_PREP_SECONDS). */
+function tickPhoneVerifyPrep(forState) {
+  if (phoneVerifyState !== forState || forState.status !== 'preparing') return;
+  forState.prepSecondsLeft -= 1;
+  if (forState.prepSecondsLeft <= 0) {
+    forState.status = 'waiting';
+    render();
+    pollPhoneCallVerification(forState);
+    return;
+  }
+  render();
+  setTimeout(() => tickPhoneVerifyPrep(forState), 1000);
+}
+
 /**
  * Запускает подтверждение номера звонком для уже найденного/созданного
  * пользователя. Если функция на сервере не настроена, номер уже
@@ -4845,11 +5018,13 @@ async function beginPhoneCallVerification(user) {
     phone: phoneE164,
     numberToCall: start.numberToCall,
     since: start.createdAt || new Date().toISOString(),
-    status: 'waiting',
-    attemptsLeft: 40, // ~40 попыток по 3 сек — около двух минут ожидания
+    status: 'preparing',
+    prepSecondsLeft: PHONE_VERIFY_PREP_SECONDS,
+    attemptsLeft: 60, // ~60 попыток по 3 сек — около трёх минут ожидания (увеличено 04.10.2026 — см. комментарий про баг у PENDING_PHONE_VERIFY_KEY: обычно хватало двух минут, но живой тест показал, что до рабочего звонка иногда нужно две попытки с паузой)
   };
+  savePendingPhoneVerify(phoneVerifyState); // на случай, если вкладка не переживёт фон — см. PENDING_PHONE_VERIFY_KEY
   render();
-  pollPhoneCallVerification(phoneVerifyState);
+  tickPhoneVerifyPrep(phoneVerifyState);
 }
 
 /**
@@ -4878,12 +5053,14 @@ async function beginPhoneCallVerificationProfile(user, phoneRaw) {
     canonicalPhone,
     numberToCall: start.numberToCall,
     since: start.createdAt || new Date().toISOString(),
-    status: 'waiting',
-    attemptsLeft: 40,
+    status: 'preparing',
+    prepSecondsLeft: PHONE_VERIFY_PREP_SECONDS,
+    attemptsLeft: 60, // см. комментарий у первого attemptsLeft в beginPhoneCallVerification
     fromProfile: true,
   };
+  savePendingPhoneVerify(phoneVerifyState); // на случай, если вкладка не переживёт фон — см. PENDING_PHONE_VERIFY_KEY
   render();
-  pollPhoneCallVerification(phoneVerifyState);
+  tickPhoneVerifyPrep(phoneVerifyState);
 }
 
 async function pollPhoneCallVerification(forState) {
@@ -4899,12 +5076,14 @@ async function pollPhoneCallVerification(forState) {
 
   if (result && result.configured === false) {
     // Подтверждение выключили на сервере, пока человек ждал, — не блокируем.
+    clearPendingPhoneVerify();
     const user = cache.users.find((u) => u.id === forState.userId) || { id: forState.userId };
     await finishPhoneGateLogin(user);
     return;
   }
   if (result && result.confirmed) {
     forState.status = 'confirmed';
+    clearPendingPhoneVerify();
     render();
     // minimal: true — см. памятку у updateRow(): анонимному ключу больше
     // не выдан SELECT на users, return=representation тут упал бы 42501.
@@ -4938,6 +5117,7 @@ async function pollPhoneCallVerification(forState) {
 /** Отменяет ожидание звонка и возвращает к полю ввода телефона. */
 function cancelPhoneCallVerification() {
   phoneVerifyState = null;
+  clearPendingPhoneVerify();
   render();
 }
 
@@ -9276,11 +9456,23 @@ function renderPhoneGate() {
 /** Подшаг renderPhoneGate() — ожидание/результат звонка на проверочный номер (см. beginPhoneCallVerification). */
 function renderPhoneVerifyStep(st) {
   const number = displayPhone(st.numberToCall);
+  // Ссылка на звонок — по сырым цифрам номера, а не по number (с пробелами
+  // для display), иначе tel: может не набраться правильно на части телефонов.
+  const telHref = 'tel:' + String(st.numberToCall || '').replace(/[^\d+]/g, '');
   if (st.status === 'confirmed') {
     return `
       <div class="field-card">
         <p><b>Номер подтверждён ✓</b></p>
         <p class="order-meta">Заходим…</p>
+      </div>
+    `;
+  }
+  if (st.status === 'preparing') {
+    return `
+      <div class="field-card">
+        <p><b>Готовим номер для звонка…</b></p>
+        <p class="order-meta">Секунду — номер появится через ${st.prepSecondsLeft} сек. Это нужно, чтобы звонок точно прошёл с первого раза.</p>
+        <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="phone-verify-cancel">${st.fromProfile ? 'Отмена' : 'Ввести другой номер'}</button>
       </div>
     `;
   }
@@ -9300,9 +9492,10 @@ function renderPhoneVerifyStep(st) {
   }
   return `
     <div class="field-card">
-      <p><b>Позвоните на ${escapeHtml(number)}</b></p>
-      <p class="order-meta">Наберите этот номер со своего телефона и сразу сбросьте — отвечать не нужно, ничего вводить не нужно. Мы сами узнаем ваш номер по входящему звонку.</p>
+      <p><b>Позвоните на <a href="${escapeHtml(telHref)}" style="color:inherit;text-decoration:underline;">${escapeHtml(number)}</a></b></p>
+      <p class="order-meta">Нажмите на номер — откроется набор. Позвоните и сразу сбросьте — отвечать не нужно, ничего вводить не нужно. Мы сами узнаем ваш номер по входящему звонку.</p>
       <p class="order-meta">⏳ Ждём звонка…</p>
+      <p class="order-meta">Если автоответчик скажет, что звонок не ожидается, — положите трубку, подождите полминуты и наберите ещё раз.</p>
       <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="phone-verify-cancel">${st.fromProfile ? 'Отмена' : 'Ввести другой номер'}</button>
     </div>
   `;
@@ -9807,6 +10000,11 @@ function renderPhoneOverlay() {
           ? 'Чтобы привязать другой номер, введите его и подтвердите звонком — как и раньше, достаточно позвонить и сразу сбросить.'
           : 'Укажите номер телефона и подтвердите его звонком — достаточно позвонить на показанный номер и сразу сбросить.'
       }</p>
+      ${
+        user.phone
+          ? `<p class="order-meta">Проверьте номер ниже — подтверждать будем именно его. Если всё верно, просто нажмите «Подтвердить звонком», ничего не меняя. Если номер нужно поменять — сотрите старый и введите новый целиком, и только потом подтверждайте звонком.</p>`
+          : ''
+      }
       <label>Телефон</label>
       <input type="text" id="profile-phone-input" value="${escapeHtml(displayPhone(user.phone) || '+7 ')}" placeholder="+7 900 000 00 00" />
       <div class="order-warning" id="profile-phone-error" style="display:none;"></div>
@@ -11532,6 +11730,15 @@ async function boot() {
   state.booting = false;
   console.info(assistantDemoNotice());
   render();
+
+  // Доспрашиваем незавершённое подтверждение телефона, если вкладка, где оно
+  // ждалось, не пережила переход в фон (см. комментарий про баг от 04.10.2026
+  // у PENDING_PHONE_VERIFY_KEY). Делаем это после render() с чистым экраном,
+  // чтобы при найденном подтверждении toast/обновлённый профиль появились
+  // поверх уже отрисованного интерфейса, а не посреди загрузки.
+  if (isSupabaseConfigured()) {
+    resumePendingPhoneVerifyIfAny().catch((err) => console.error('[boot] resumePendingPhoneVerifyIfAny', err));
+  }
 }
 
 boot();
@@ -11541,6 +11748,18 @@ boot();
 // дожидаясь следующего тика поллинга (см. startAvailableOrdersPolling выше).
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.screen === 'orders') refreshAvailableOrders();
+
+  // Вернулись на вкладку, пока ждали подтверждения звонком, — переспрашиваем
+  // сразу, не дожидаясь обычного 3-секундного тика: на мобильных вкладка в
+  // фоне нередко замораживает таймеры (см. комментарий про баг от 04.10.2026
+  // у PENDING_PHONE_VERIFY_KEY), и звонок мог пройти, пока мы не смотрели.
+  if (!document.hidden) {
+    if (phoneVerifyState && phoneVerifyState.status === 'waiting') {
+      pollPhoneCallVerification(phoneVerifyState);
+    } else if (!phoneVerifyState) {
+      resumePendingPhoneVerifyIfAny().catch((err) => console.error('[visibilitychange] resumePendingPhoneVerifyIfAny', err));
+    }
+  }
 });
 
 // Регистрация service worker для PWA/офлайн app-шелла (см. sw.js —
