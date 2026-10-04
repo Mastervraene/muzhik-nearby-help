@@ -1439,6 +1439,14 @@ let expandedPartPurchaseIds = new Set();
 let adminNotes = new Map();
 let openAdminNoteKeys = new Set();
 let mapLoaded = false;
+// Подгонять карту под границы всех точек (setBounds/setCenter) нужно
+// только ОДИН раз, при самом первом fillMapPoints() после создания карты —
+// просьба Sg 04.10.2026: из-за мастера в Хабаровске карта при любом клике
+// по фильтру/тумблеру (каждый такой клик вызывает fillMapPoints() заново)
+// улетала на минимальный зум, чтобы вместить такую далёкую точку. Дальше
+// карта должна «помнить» то положение/зум, которое выставил себе сам
+// администратор, а не перецентровываться при каждом тумблере.
+let mapBoundsFitted = false;
 // Выбранная «зона действия» на карте — либо мастер (кружок = его радиус
 // по умолчанию, используется только когда у заказа своего радиуса нет),
 // либо заказ (кружок = радиус ИМЕННО этого заказа — а на практике именно
@@ -4426,12 +4434,16 @@ function fillMapPoints() {
   // случайный/вывернутый прямоугольник и карта улетала на весь мир. Метод
   // getBounds() самой коллекции меток считает настоящий охватывающий
   // прямоугольник по всем меткам — это и нужно.
-  if (pointCount === 1) {
-    map.setCenter(singlePoint, 14);
-  } else if (pointCount > 1) {
-    const objectsBounds = map.geoObjects.getBounds();
-    if (objectsBounds) {
-      map.setBounds(objectsBounds, { checkZoomRange: true, zoomMargin: 40 });
+  if (!mapBoundsFitted) {
+    if (pointCount === 1) {
+      map.setCenter(singlePoint, 14);
+      mapBoundsFitted = true;
+    } else if (pointCount > 1) {
+      const objectsBounds = map.geoObjects.getBounds();
+      if (objectsBounds) {
+        map.setBounds(objectsBounds, { checkZoomRange: true, zoomMargin: 40 });
+        mapBoundsFitted = true;
+      }
     }
   }
 }
