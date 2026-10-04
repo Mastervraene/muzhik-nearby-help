@@ -4504,6 +4504,17 @@ async function ensureUserByPhone(phone, extra = {}) {
  */
 let phoneVerifyState = null;
 
+/**
+ * Раскрыто ли поле редактирования номера в renderPhoneOverlay() — живёт вне
+ * state по тому же принципу, что и phoneVerifyState/composerExpandedField
+ * (черновое состояние конкретного экрана). Добавлено 04.10.2026 по просьбе
+ * Sg: номер телефона теперь показывается сверху простым текстом, а поле
+ * ввода для смены номера скрыто за ссылкой «изменить номер телефона
+ * (логин)» и раскрывается по клику (см. toggle-profile-phone-edit).
+ * Сбрасывается в false при каждом открытии/закрытии попапа телефона.
+ */
+let profilePhoneEditOpen = false;
+
 // ---------------------------------------------------------------------
 // БАГ от 04.10.2026 (репорт Sg): человек дозвонился, Zvonok подтвердил
 // звонок своим автоответчиком, но в профиле номер остался «не подтверждён».
@@ -9987,28 +9998,42 @@ function renderTelegramOverlay() {
 // телефону), просто с другими кнопками (см. st.fromProfile). Старый номер
 // при смене не теряется — остаётся в public.user_contact_history (см.
 // триггер log_user_contact_change).
+//
+// Реструктурировано 04.10.2026 по просьбе Sg: раньше редактирование номера
+// и подтверждение звонком были слиты в один экран со сплошным объяснением —
+// номер сразу лежал в открытом редактируемом поле. Теперь (если номер уже
+// есть) он показан сверху простым текстом, поле для смены номера скрыто за
+// ссылкой «изменить номер телефона (логин)» и раскрывается только по
+// запросу (см. profilePhoneEditOpen/toggle-profile-phone-edit), а кнопка
+// всегда одна — «Подтвердить номер». Сама инструкция «позвоните на...»
+// теперь только на следующем экране ожидания звонка (см.
+// renderPhoneVerifyStep) — здесь её больше нет.
 function renderPhoneOverlay() {
   const user = currentUser();
   if (!user) return '';
   const body =
     phoneVerifyState && phoneVerifyState.userId === user.id && phoneVerifyState.fromProfile
       ? renderPhoneVerifyStep(phoneVerifyState)
+      : user.phone
+      ? `
+    <div class="field-card">
+      <p class="profile-phone-current" style="margin:0 0 6px;"><b>${escapeHtml(displayPhone(user.phone))}</b></p>
+      <button type="button" data-action="toggle-profile-phone-edit" style="display:inline-block;background:none;border:none;padding:0;margin:0 0 14px;color:var(--accent);text-decoration:underline;font-size:14px;cursor:pointer;">изменить номер телефона (логин)</button>
+      <div id="profile-phone-edit-wrap" style="${profilePhoneEditOpen ? '' : 'display:none;'}">
+        <label>Телефон</label>
+        <input type="text" id="profile-phone-input" value="${escapeHtml(displayPhone(user.phone) || '+7 ')}" placeholder="+7 900 000 00 00" />
+        <div class="order-warning" id="profile-phone-error" style="display:none;"></div>
+      </div>
+      <button class="primary-button" id="profile-phone-send" style="${profilePhoneEditOpen ? 'margin-top:14px;' : ''}" disabled>Подтвердить номер</button>
+    </div>
+  `
       : `
     <div class="field-card">
-      <p class="order-meta">${
-        user.phone
-          ? 'Чтобы привязать другой номер, введите его и подтвердите звонком — как и раньше, достаточно позвонить и сразу сбросить.'
-          : 'Укажите номер телефона и подтвердите его звонком — достаточно позвонить на показанный номер и сразу сбросить.'
-      }</p>
-      ${
-        user.phone
-          ? `<p class="order-meta">Проверьте номер ниже — подтверждать будем именно его. Если всё верно, просто нажмите «Подтвердить звонком», ничего не меняя. Если номер нужно поменять — сотрите старый и введите новый целиком, и только потом подтверждайте звонком.</p>`
-          : ''
-      }
+      <p class="order-meta">Укажите номер телефона — на следующем шаге подтвердим его звонком.</p>
       <label>Телефон</label>
-      <input type="text" id="profile-phone-input" value="${escapeHtml(displayPhone(user.phone) || '+7 ')}" placeholder="+7 900 000 00 00" />
+      <input type="text" id="profile-phone-input" value="+7 " placeholder="+7 900 000 00 00" />
       <div class="order-warning" id="profile-phone-error" style="display:none;"></div>
-      <button class="primary-button" id="profile-phone-send" disabled>Подтвердить звонком</button>
+      <button class="primary-button" id="profile-phone-send" disabled>Подтвердить номер</button>
     </div>
   `;
   return `
@@ -11303,7 +11328,12 @@ async function handleAction(action, value) {
       return unlinkTelegram();
 
     case 'open-phone-overlay':
+      profilePhoneEditOpen = false;
       state.infoOverlay = 'phone';
+      return render();
+
+    case 'toggle-profile-phone-edit':
+      profilePhoneEditOpen = !profilePhoneEditOpen;
       return render();
 
     case 'phone-verify-cancel':
@@ -11372,6 +11402,7 @@ async function handleAction(action, value) {
       if (state.infoOverlay === 'phone' && phoneVerifyState && phoneVerifyState.fromProfile) {
         phoneVerifyState = null;
       }
+      if (state.infoOverlay === 'phone') profilePhoneEditOpen = false;
       state.infoOverlay = null;
       return render();
     case 'dismiss-onboarding-forever':
