@@ -4989,52 +4989,6 @@ function submitEditName(value) {
 }
 
 // ---------------------------------------------------------------------
-// История смены номера телефона и история входов/IP — маленькая кнопка в
-// профиле (см. renderProfile) рядом с номером телефона, по просьбе Sg как
-// часть защиты от частой смены номера/IP/геолокации. Данные приходят из
-// уже задеплоенной Edge Function get-my-history ({userId, sessionToken} →
-// {ok, phoneHistory:[{old_value,changed_at}], loginLog:[{ip_address,created_at}]}),
-// той же, что использует get-my-history в админке для соответствующих
-// лазилоадящихся <details> в карточке мастера. Тот же паттерн всплывающего
-// окна, что и editNameState/editDeviceModelState выше.
-// ---------------------------------------------------------------------
-let accountHistoryState = null;
-
-function openAccountHistory() {
-  const user = currentUser();
-  if (!user) return;
-  accountHistoryState = { loading: true, error: '', phoneHistory: [], loginLog: [] };
-  render();
-  const sessionToken = loadSessionToken();
-  if (!isSupabaseConfigured() || !sessionToken) {
-    accountHistoryState = { loading: false, error: 'История доступна только при входе по паролю.', phoneHistory: [], loginLog: [] };
-    render();
-    return;
-  }
-  callSecureFn('get-my-history', { userId: user.id, sessionToken })
-    .then((data) => {
-      if (!accountHistoryState) return; // окно уже закрыли
-      accountHistoryState = {
-        loading: false,
-        error: '',
-        phoneHistory: Array.isArray(data?.phoneHistory) ? data.phoneHistory : [],
-        loginLog: Array.isArray(data?.loginLog) ? data.loginLog : [],
-      };
-      render();
-    })
-    .catch((err) => {
-      if (!accountHistoryState) return;
-      accountHistoryState = { loading: false, error: err?.message || 'Не удалось загрузить историю', phoneHistory: [], loginLog: [] };
-      render();
-    });
-}
-
-function closeAccountHistory() {
-  accountHistoryState = null;
-  render();
-}
-
-// ---------------------------------------------------------------------
 // Изменение модели неисправного устройства на заказе (см. миграцию 007 —
 // device_model/device_model_history) — тот же паттерн всплывающего окна,
 // что и editNameState выше. Редактировать может заказчик и назначенный
@@ -7427,49 +7381,6 @@ function renderEditDeviceModelOverlay(st) {
 }
 
 /**
- * История смены номера телефона и история входов/IP (см. accountHistoryState,
- * openAccountHistory выше) — тот же паттерн всплывающего окна, что и
- * renderEditNameOverlay, но без формы — только два read-only списка.
- */
-function renderAccountHistoryOverlay(st) {
-  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('ru-RU') : '—');
-  return `
-    <div class="map-picker-overlay" data-action="close-account-history">
-      <div class="field-card" style="max-width:400px;width:100%;margin:0;max-height:80vh;overflow:auto;" onclick="event.stopPropagation()">
-        <p><b>История аккаунта</b></p>
-        ${
-          st.loading
-            ? `<p class="order-meta">Загружаем…</p>`
-            : st.error
-            ? `<div class="order-warning">${escapeHtml(st.error)}</div>`
-            : `
-        <p class="order-meta" style="margin-top:4px;margin-bottom:4px;"><b>Смена номера телефона</b></p>
-        ${
-          st.phoneHistory.length
-            ? st.phoneHistory
-                .map(
-                  (h) => `<p class="order-meta" style="margin:2px 0;">${escapeHtml(displayPhone(h.old_value) || h.old_value || '—')} — ${escapeHtml(fmtDate(h.changed_at))}</p>`
-                )
-                .join('')
-            : `<p class="order-meta">Изменений не было.</p>`
-        }
-        <p class="order-meta" style="margin-top:14px;margin-bottom:4px;"><b>Входы (IP-адрес)</b></p>
-        ${
-          st.loginLog.length
-            ? st.loginLog
-                .map((l) => `<p class="order-meta" style="margin:2px 0;">${escapeHtml(l.ip_address || '—')} — ${escapeHtml(fmtDate(l.created_at))}</p>`)
-                .join('')
-            : `<p class="order-meta">Входов не зафиксировано.</p>`
-        }
-        `
-        }
-        <button class="secondary-button" type="button" style="margin-top:14px;box-sizing:border-box;" data-action="close-account-history">Закрыть</button>
-      </div>
-    </div>
-  `;
-}
-
-/**
  * Подключает выпадающий список подсказок адреса к текстовому полю: с
  * задержкой (дебаунс) ищет реальные адреса по мере ввода (Геосаджест) и по
  * клику на вариант подставляет его текст, а следом — координаты (их
@@ -9280,7 +9191,7 @@ function renderProfile() {
           <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
           <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
         </div>
-        <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button>${isSupabaseConfigured() ? `<button type="button" class="icon-edit-btn" data-action="open-account-history" aria-label="История изменений" title="История номера и входов">🕓</button>` : ''}</p>
+        <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button></p>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён' : 'Telegram не подключён'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
       </div>
 
@@ -9778,7 +9689,6 @@ function render() {
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
     ${editDeviceModelState ? renderEditDeviceModelOverlay(editDeviceModelState) : ''}
-    ${accountHistoryState ? renderAccountHistoryOverlay(accountHistoryState) : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -11562,11 +11472,6 @@ async function handleAction(action, value) {
       return openEditName();
     case 'edit-name-cancel':
       return cancelEditName();
-
-    case 'open-account-history':
-      return openAccountHistory();
-    case 'close-account-history':
-      return closeAccountHistory();
 
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
