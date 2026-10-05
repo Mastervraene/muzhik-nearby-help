@@ -115,6 +115,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .pill.muted { background: var(--gray-100); color: var(--gray-600); }
 .pill.warn { background: #fef2f2; color: var(--red); }
 .pill.ok { background: #f0fdf4; color: var(--green); }
+/* Оранжевый «стикер» — частая смена номера (см. dbUserToUser.phoneChangeFlag,
+   пожелание Sg: "оранжевый стикер/флаг на затронутых аккаунтах"). */
+.pill.orange { background: #fff7ed; color: #c2410c; }
 .status-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 5px; vertical-align: middle; position: relative; top: -1px;
@@ -250,6 +253,33 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .toggle-pill:hover { background: var(--gray-200); }
 .toggle-pill.active { background: var(--accent); color: #fff; }
 .toggle-pill.active:hover { background: var(--accent-strong); }
+
+/* ---------- Кнопка-иконка сортировки рядом со строкой поиска (вкладка
+   «Заказы») — тот же приём, что .sort-btn в личном кабинете клиента
+   (index.html, renderOrdersSectionHeader): маленькая круглая кнопка вместо
+   select'а, открывает модалку с мультивыбором статусов (см.
+   orders-sort-overlay ниже, по образцу уже существующей «Сортировки на
+   карте» — admin-modal-overlay/toggle-pills). Просьба Sg 05.10.2026. */
+.sort-btn {
+  flex: none; position: relative; border: none; background: var(--gray-100); color: var(--gray-600);
+  width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.sort-btn svg { width: 16px; height: 16px; }
+.sort-btn:hover { background: var(--gray-200); }
+.sort-btn.active { background: var(--accent); color: #fff; }
+.sort-btn.active:hover { background: var(--accent-strong); }
+/* Бейдж-маркер поверх кнопки с числом заказов, подходящих под фильтр — как
+   уведомление: при однозначном числе он квадратный с border-radius:999px,
+   что даёт круг; при двузначном (>9) min-width перестаёт ограничивать
+   ширину, бейдж расширяется в стороны вокруг текста и получается
+   прямоугольник с тем же максимальным скруглением — форма «таблетки»
+   (ровно так же устроен .section-count-badge в index.html). */
+.sort-btn-badge {
+  position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: #e04b4b; color: #fff; font-size: 10px; font-weight: 700;
+  line-height: 16px; text-align: center; box-shadow: 0 0 0 2px var(--gray-0);
+}
 
 /* ---------- Карта ---------- */
 #map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
@@ -430,6 +460,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   <div class="tabs">
     <button class="tab-btn active" data-tab="orders">Заказы</button>
     <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span><span id="masters-task-review-badge" title="Ждут подтверждения задания" style="display:none; margin-left:6px; background:#e08a24; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
+    <button class="tab-btn" data-tab="tasks">Задачи<span id="admin-tasks-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="payouts">Выплаты</button>
@@ -438,10 +469,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
   <div class="tab-panel active" id="panel-orders">
     <div class="toolbar">
-      <select id="orders-status-filter">
-        <option value="">Все статусы</option>
-      </select>
       <input type="text" id="orders-search" placeholder="Поиск по любому полю…" />
+      <button type="button" class="sort-btn" id="orders-sort-toggle" aria-label="Сортировка" title="Сортировка"></button>
       <button type="button" class="toggle-pill" id="orders-group-toggle">Группировать по заказчику</button>
       <span class="count-hint" id="orders-count"></span>
     </div>
@@ -455,13 +484,24 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
         <option value="workers" selected>Только мастера</option>
         <option value="applicants">Заявки в мастера</option>
         <option value="task_review">Ждут подтверждения задания</option>
-        <option value="paused">На паузе</option>
+        <option value="paused">На паузе (задание)</option>
+        <option value="account_paused">На паузе (смена номера)</option>
+        <option value="phone_flag">Флаг: часто меняет номер</option>
         <option value="blocked">Заблокированные</option>
       </select>
       <input type="text" id="masters-search" placeholder="Поиск по любому полю…" />
       <span class="count-hint" id="masters-count"></span>
     </div>
     <div id="masters-list"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-tasks">
+    <div class="stats-note">Задачи, которые система создаёт автоматически — например, когда пользователь меняет номер телефона больше 5 раз за 30 дней (см. «Защита аккаунта» в карточке пользователя на вкладке «Мастера»).</div>
+    <div class="toolbar">
+      <button type="button" class="toggle-pill" id="admin-tasks-resolved-toggle">Показывать решённые</button>
+      <span class="count-hint" id="admin-tasks-count"></span>
+    </div>
+    <div id="admin-tasks-list"></div>
   </div>
 
   <div class="tab-panel" id="panel-map">
@@ -513,6 +553,27 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <div class="admin-modal-actions">
         <button type="button" class="btn-sm ghost" id="map-sort-reset">Сбросить всё</button>
         <button type="button" class="btn-sm primary" id="map-sort-done">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="admin-modal-overlay" id="orders-sort-overlay" style="display:none;" data-action="close-orders-sort">
+    <div class="admin-modal-card" onclick="event.stopPropagation()">
+      <div class="admin-modal-head">
+        <h2 class="heading">Сортировка заказов</h2>
+        <button type="button" class="admin-modal-close" id="orders-sort-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="admin-modal-body">
+        <p class="form-section-label" style="margin-top:0;">Показывать статусы (можно несколько; ничего не выбрано — все)</p>
+        <div class="toggle-pills" id="orders-sort-statuses"></div>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:16px; font-size:13px; color:var(--gray-700); cursor:pointer;">
+          <input type="checkbox" id="orders-sort-archived" />
+          Показывать завершённые и отменённые
+        </label>
+      </div>
+      <div class="admin-modal-actions">
+        <button type="button" class="btn-sm ghost" id="orders-sort-reset">Сбросить всё</button>
+        <button type="button" class="btn-sm primary" id="orders-sort-done">Готово</button>
       </div>
     </div>
   </div>
@@ -717,6 +778,15 @@ const STATUS_LABELS = {
   part_purchase_requested: 'Нужно купить деталь',
 };
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
+// Статусы, скрытые по умолчанию в списке заказов (см. ordersShowArchived) —
+// тот же набор, что ARCHIVED_ORDER_STATUSES в index.html (личный кабинет).
+const ARCHIVED_ORDER_STATUSES = ['rated', 'cancelled'];
+
+// Расшифровка машинного kind у admin_tasks (вкладка «Задачи») — незнакомый
+// kind показывается как есть, см. dbAdminTaskToTask.
+const ADMIN_TASK_KIND_LABELS = {
+  phone_change_flag: 'Часто меняет номер телефона',
+};
 
 // Цвет статуса — «радуга» от красного (заявка только создана) до зелёного
 // (заказ выполнен и оценён), чтобы стадию заказа было видно по цвету с
@@ -875,11 +945,15 @@ async function callAdminDb(body) {
   return data;
 }
 
-async function getRows(table, query) {
+async function getRows(table, query, eq) {
   const params = new URLSearchParams(query || '');
   const body = { op: 'select', table };
   if (params.has('order')) body.order = params.get('order');
   if (params.has('limit')) body.limit = Number(params.get('limit'));
+  // eq: [field, value] — точечный фильтр на стороне admin-db (см. его
+  // ALLOWED_TABLES/eq-поддержку), чтобы не тащить всю таблицу истории
+  // телефонов/логинов ради одного пользователя.
+  if (Array.isArray(eq) && eq.length === 2) body.eq = eq;
   return callAdminDb(body);
 }
 
@@ -1121,6 +1195,13 @@ function dbUserToUser(row) {
     // уточнения админом задание не снимается (см. masterFormHtml/
     // wireMasterForm, правка 03.10.2026 по просьбе Sg).
     masterTaskSubmittedAt: row.master_task_submitted_at || null,
+    // Защита от частой смены номера/геолокации (см. триггер
+    // log_user_contact_change и save-profile.ts) — отдельный механизм от
+    // masterStatus==='paused' выше (там пауза за просроченное задание).
+    accountPaused: Boolean(row.account_paused),
+    accountPausedReason: row.account_paused_reason || '',
+    accountPausedAt: row.account_paused_at || null,
+    phoneChangeFlag: Boolean(row.phone_change_flag),
   };
 }
 
@@ -1148,6 +1229,22 @@ function dbNotificationToNotification(row) {
     // одинаковых именах у разных мастеров).
     relatedUserId: row.related_user_id || null,
     text: row.text || '',
+    createdAt: row.created_at,
+  };
+}
+
+// Задачи для админа, созданные автоматически триггерами/Edge Functions
+// (сейчас — save-profile.ts при >5 сменах номера за 30 дней). kind — машинный
+// код причины (см. ADMIN_TASK_KIND_LABELS ниже для расшифровки в интерфейсе);
+// незнакомый kind просто показывается как есть, без расшифровки.
+function dbAdminTaskToTask(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    kind: row.kind || '',
+    text: row.text || '',
+    dueAt: row.due_at || null,
+    resolved: Boolean(row.resolved),
     createdAt: row.created_at,
   };
 }
@@ -1249,6 +1346,86 @@ async function loadPayouts() {
     payoutsLoading = false;
     renderPayouts();
   }
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Задачи» — список admin_tasks, созданных автоматически (сейчас —
+// флаг «часто меняет номер телефона», см. dbAdminTaskToTask/ADMIN_TASK_KIND_LABELS).
+// Данные уже загружены в loadData вместе со всем остальным — отдельного
+// запроса при открытии вкладки не требуется.
+// -----------------------------------------------------------------------
+function updateAdminTasksBadge() {
+  const badge = document.getElementById('admin-tasks-badge');
+  if (!badge) return;
+  const count = allAdminTasks.filter((t) => !t.resolved).length;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderAdminTasks() {
+  const toggleBtn = document.getElementById('admin-tasks-resolved-toggle');
+  if (toggleBtn) toggleBtn.classList.toggle('active', adminTasksShowResolved);
+  updateAdminTasksBadge();
+  const list = adminTasksShowResolved ? allAdminTasks : allAdminTasks.filter((t) => !t.resolved);
+  const sorted = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  document.getElementById('admin-tasks-count').textContent = sorted.length ? `${sorted.length} задач(и)` : '';
+  const container = document.getElementById('admin-tasks-list');
+  if (!sorted.length) {
+    container.innerHTML = `<div class="empty-state">${adminTasksShowResolved ? 'Задач нет' : 'Нерешённых задач нет'}</div>`;
+    return;
+  }
+  container.innerHTML = sorted.map((t) => adminTaskCardHtml(t)).join('');
+  sorted.forEach((t) => {
+    const openBtn = document.getElementById(`task-open-user-${t.id}`);
+    if (openBtn) {
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.goToMasterCard(t.userId);
+      });
+    }
+    const resolveBtn = document.getElementById(`task-resolve-${t.id}`);
+    if (resolveBtn) {
+      resolveBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        resolveBtn.disabled = true;
+        try {
+          await updateRow('admin_tasks', t.id, { resolved: !t.resolved });
+          t.resolved = !t.resolved;
+          renderAdminTasks();
+        } catch (err) {
+          alert('Не удалось обновить задачу: ' + err.message);
+          resolveBtn.disabled = false;
+        }
+      });
+    }
+  });
+}
+
+function adminTaskCardHtml(t) {
+  const label = ADMIN_TASK_KIND_LABELS[t.kind] || t.kind || 'Задача';
+  return `
+    <div class="card">
+      <div class="card-head" style="cursor:default;">
+        <div class="card-head-main">
+          <p class="card-title">${escapeHtml(label)} ${t.resolved ? '<span class="pill ok">решено</span>' : '<span class="pill warn">не решено</span>'}</p>
+          <div class="card-meta">
+            ${t.text ? `<span>${escapeHtml(t.text)}</span>` : ''}
+            <span>${escapeHtml(userName(t.userId))}</span>
+            <span>создано ${escapeHtml(fmtDate(t.createdAt))}</span>
+            ${t.dueAt ? `<span>срок ${escapeHtml(fmtDate(t.dueAt))}</span>` : ''}
+          </div>
+        </div>
+        <div class="row-actions">
+          <button type="button" class="btn-sm ghost" id="task-open-user-${t.id}">Открыть профиль</button>
+          <button type="button" class="btn-sm ${t.resolved ? 'ghost' : 'primary'}" id="task-resolve-${t.id}">${t.resolved ? '↺ Вернуть в работу' : '✓ Решено'}</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderPayouts() {
@@ -1410,12 +1587,21 @@ let allMessages = [];
 // Раньше админка их никогда не читала обратно (только писала) — нужны для
 // «Истории запросов модератора» в masterFormHtml (requestsHistoryForMaster).
 let allNotifications = [];
+// Задачи, которые система создаёт сама (сейчас — флаг «часто меняет номер
+// телефона», см. admin_tasks/dbAdminTaskToTask, вкладка «Задачи»).
+let allAdminTasks = [];
+let adminTasksShowResolved = false;
 let allPayouts = [];
 let payoutsLoaded = false; // грузим лениво, только при первом открытии вкладки «Выплаты»
 let payoutsLoading = false;
 let payoutsStatusFilter = '';
 let openPayoutId = null;
-let ordersStatusFilter = '';
+// Мультивыбор статусов (пусто — показывать все статусы, как и «ничего не
+// выбрано — любой» в «Сортировке на карте») + отдельный флаг показа
+// завершённых/отменённых заказов — по умолчанию скрыты (просьба Sg
+// 05.10.2026), по образцу ordersSortSettings в index.html (личный кабинет).
+let ordersStatusFilters = new Set();
+let ordersShowArchived = false;
 let ordersSearchQuery = '';
 let ordersGroupByCustomer = false;
 let collapsedCustomerGroups = new Set(); // id заказчиков со свёрнутой группой (по умолчанию все развёрнуты)
@@ -1548,18 +1734,25 @@ function userSearchHaystack(u) {
 // -----------------------------------------------------------------------
 // Вкладка «Заказы»
 // -----------------------------------------------------------------------
+// Применяет мультивыбор статусов + скрытие завершённых/отменённых по
+// умолчанию (ordersShowArchived) — используется и для самого списка заказов,
+// и для счётчика на бейдже кнопки сортировки (без учёта текста поиска,
+// который к самому фильтру отношения не имеет).
+function applyOrdersFilters(list) {
+  let result = ordersStatusFilters.size ? list.filter((o) => ordersStatusFilters.has(o.status)) : list;
+  if (!ordersShowArchived) result = result.filter((o) => !ARCHIVED_ORDER_STATUSES.includes(o.status));
+  return result;
+}
+
 function renderOrdersToolbar() {
-  const sel = document.getElementById('orders-status-filter');
-  if (sel.options.length <= 1) {
-    STATUS_KEYS.forEach((key) => {
-      const opt = document.createElement('option');
-      opt.value = key;
-      opt.textContent = STATUS_LABELS[key];
-      opt.style.color = statusColor(key).fg;
-      sel.appendChild(opt);
-    });
+  const btn = document.getElementById('orders-sort-toggle');
+  // Иконка и бейдж вставляются один раз (не на каждый renderOrders — незачем
+  // пересоздавать DOM кнопки при каждом обновлении списка).
+  if (btn && !btn.dataset.filled) {
+    btn.innerHTML = ICON_SORT + '<span class="sort-btn-badge" id="orders-sort-badge" style="display:none;"></span>';
+    btn.dataset.filled = '1';
   }
-  sel.value = ordersStatusFilter;
+  updateOrdersSortButtonLabel();
 }
 
 function renderOrdersGroupToggleUi() {
@@ -1570,7 +1763,7 @@ function renderOrdersGroupToggleUi() {
 function renderOrders() {
   renderOrdersToolbar();
   renderOrdersGroupToggleUi();
-  let list = ordersStatusFilter ? allOrders.filter((o) => o.status === ordersStatusFilter) : allOrders;
+  let list = applyOrdersFilters(allOrders);
   const q = ordersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((o) => orderSearchHaystack(o).includes(q));
   const sorted = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
@@ -2657,6 +2850,10 @@ function renderMasters() {
   // 'paused' раньше был в select, но не обрабатывался здесь (падал в общий
   // список без фильтра) — попутно починено при добавлении task_review.
   else if (mastersFilter === 'paused') list = list.filter((u) => u.masterStatus === 'paused');
+  // Отдельная пауза — за частую смену номера телефона (см. dbUserToUser,
+  // триггер log_user_contact_change) — не путать с 'paused' выше.
+  else if (mastersFilter === 'account_paused') list = list.filter((u) => u.accountPaused);
+  else if (mastersFilter === 'phone_flag') list = list.filter((u) => u.phoneChangeFlag);
   else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
   const q = mastersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((u) => userSearchHaystack(u).includes(q));
@@ -2710,6 +2907,11 @@ const ICON_BADGE_TELEGRAM =
 const ICON_BADGE_LOCATION =
   '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>';
 const BADGE_ICONS = { avatar: ICON_BADGE_AVATAR, phone: ICON_BADGE_PHONE, telegram: ICON_BADGE_TELEGRAM, location: ICON_BADGE_LOCATION };
+
+// Иконка кнопки сортировки заказов (.sort-btn) — та же, что в личном
+// кабинете клиента (index.html, ICON_SORT), для единообразия.
+const ICON_SORT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6.5 7.5v5.5l-3 1.5v-7L4 5z"/></svg>';
 
 function statusBadge(kind, on, title) {
   return `<span class="status-badge badge-${kind} ${on ? 'on' : 'off'}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${BADGE_ICONS[kind]}</span>`;
@@ -2798,7 +3000,9 @@ function masterCardHtml(u) {
     u.blocked ? '<span class="pill warn">заблокирован</span>' : '',
     u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : '',
     u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : '',
-    u.masterStatus === 'paused' ? '<span class="pill warn">на паузе</span>' : '',
+    u.masterStatus === 'paused' ? '<span class="pill warn">на паузе (задание)</span>' : '',
+    u.accountPaused ? `<span class="pill warn">⏸ на паузе: ${escapeHtml(u.accountPausedReason || 'смена номера')}</span>` : '',
+    u.phoneChangeFlag ? '<span class="pill orange">🔶 часто меняет номер</span>' : '',
     u.masterStatus === 'approved' && u.masterTaskComment
       ? u.masterTaskSubmittedAt
         ? '<span class="pill ok">✅ задание выполнено — ждёт подтверждения</span>'
@@ -2926,6 +3130,27 @@ function masterFormHtml(u) {
         `}
       </div>
       ` : ''}
+      <p class="form-section-label">Защита аккаунта</p>
+      <div class="field-sm dense" style="margin-bottom:14px;">
+        ${u.accountPaused ? `
+        <p class="order-meta" style="margin:0 0 8px;">
+          ⏸ На паузе: ${escapeHtml(u.accountPausedReason || 'частая смена номера')}${u.accountPausedAt ? ` · с ${escapeHtml(fmtDate(u.accountPausedAt))}` : ''}
+        </p>
+        <div class="row-actions" style="margin-bottom:10px;">
+          <button class="btn-sm primary" id="unpause-account-${u.id}">▶ Снять паузу (смена номера)</button>
+          <span class="save-hint" id="account-pause-hint-${u.id}" style="color:var(--gray-500);"></span>
+        </div>
+        ` : ''}
+        ${u.phoneChangeFlag ? `<p class="order-meta" style="margin:0 0 8px;">🔶 Флаг: часто меняет номер телефона (&gt;5 раз за 30 дней) — проверьте историю ниже.</p>` : ''}
+        <details class="requests-history" id="phone-history-details-${u.id}">
+          <summary>История номеров телефона</summary>
+          <div class="chat-thread" id="phone-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
+        </details>
+        <details class="requests-history" id="login-history-details-${u.id}" style="margin-top:8px;">
+          <summary>История входов (IP)</summary>
+          <div class="chat-thread" id="login-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
+        </details>
+      </div>
       <p class="form-section-label">Профиль</p>
       <div class="grid-2-tight">
         <div class="field-sm dense">
@@ -3323,6 +3548,82 @@ function wireMasterForm(u) {
         alert('Не удалось снять паузу: ' + err.message);
         const freshBtn = document.getElementById(`unpause-master-${u.id}`);
         if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '▶ Снять паузу'; }
+      }
+    });
+  }
+
+  const unpauseAccountBtn = document.getElementById(`unpause-account-${u.id}`);
+  if (unpauseAccountBtn) {
+    unpauseAccountBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const label = u.displayName || u.phone || u.id;
+      const ok = confirm(`Снять паузу (частая смена номера) с «${label}»?`);
+      if (!ok) return;
+      unpauseAccountBtn.disabled = true;
+      unpauseAccountBtn.textContent = 'Снимаем паузу…';
+      try {
+        await updateRow('users', u.id, {
+          account_paused: false,
+          account_paused_reason: null,
+          account_paused_at: null,
+        });
+        try {
+          await insertRow('notifications', {
+            recipient_user_id: u.id,
+            recipient_role: u.availableAsWorker ? 'worker' : 'client',
+            text: 'Пауза аккаунта (частая смена номера телефона) снята администратором.',
+            channel: 'telegram',
+          });
+        } catch (notifyErr) {
+          console.warn('[unpauseAccount] не удалось уведомить пользователя', notifyErr);
+        }
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось снять паузу: ' + err.message);
+        const freshBtn = document.getElementById(`unpause-account-${u.id}`);
+        if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = '▶ Снять паузу (смена номера)'; }
+      }
+    });
+  }
+
+  // Ленивая подгрузка истории номеров/входов — только при первом открытии
+  // <details>, не на каждый рендер карточки (экономим запросы к admin-db).
+  // eq-фильтр (user_id) идёт прямо в admin-db select — см. ALLOWED_TABLES/
+  // eq-поддержку, добавленную туда специально для этого (user_contact_history,
+  // user_login_log).
+  const phoneHistoryDetails = document.getElementById(`phone-history-details-${u.id}`);
+  if (phoneHistoryDetails) {
+    phoneHistoryDetails.addEventListener('toggle', async () => {
+      if (!phoneHistoryDetails.open || phoneHistoryDetails.dataset.loaded) return;
+      phoneHistoryDetails.dataset.loaded = '1';
+      const listEl = document.getElementById(`phone-history-list-${u.id}`);
+      try {
+        const rows = await getRows('user_contact_history', 'order=changed_at.desc&limit=50', ['user_id', u.id]);
+        const phoneRows = (rows || []).filter((r) => !r.field || r.field === 'phone');
+        listEl.innerHTML = phoneRows.length
+          ? phoneRows.map((r) => `<p class="order-meta" style="margin:0 0 4px;">${escapeHtml(r.old_value || '—')} — ${escapeHtml(fmtDate(r.changed_at))}</p>`).join('')
+          : '<div class="chat-empty">Смен номера не было</div>';
+      } catch (err) {
+        listEl.innerHTML = `<div class="chat-empty">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
+        phoneHistoryDetails.dataset.loaded = '';
+      }
+    });
+  }
+
+  const loginHistoryDetails = document.getElementById(`login-history-details-${u.id}`);
+  if (loginHistoryDetails) {
+    loginHistoryDetails.addEventListener('toggle', async () => {
+      if (!loginHistoryDetails.open || loginHistoryDetails.dataset.loaded) return;
+      loginHistoryDetails.dataset.loaded = '1';
+      const listEl = document.getElementById(`login-history-list-${u.id}`);
+      try {
+        const rows = await getRows('user_login_log', 'order=created_at.desc&limit=50', ['user_id', u.id]);
+        listEl.innerHTML = (rows || []).length
+          ? rows.map((r) => `<p class="order-meta" style="margin:0 0 4px;">${escapeHtml(r.ip_address || '—')} — ${escapeHtml(fmtDate(r.created_at))}</p>`).join('')
+          : '<div class="chat-empty">Входов не зафиксировано</div>';
+      } catch (err) {
+        listEl.innerHTML = `<div class="chat-empty">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
+        loginHistoryDetails.dataset.loaded = '';
       }
     });
   }
@@ -4024,6 +4325,59 @@ function updateMapSortButtonLabel() {
   btn.classList.toggle('has-filters', Boolean(active));
 }
 
+// -----------------------------------------------------------------------
+// Модалка «Сортировка заказов» на вкладке «Заказы» — та же механика, что
+// «Сортировка на карте» выше (admin-modal-overlay/toggle-pills), но кнопка
+// в тулбаре — маленькая круглая иконка (.sort-btn), как в личном кабинете
+// клиента (index.html, .sort-btn/ICON_SORT), с бейджем числа подходящих
+// заказов поверх неё вместо текста в скобках. Просьба Sg 05.10.2026.
+// -----------------------------------------------------------------------
+function openOrdersSortModal() {
+  document.getElementById('orders-sort-overlay').style.display = 'flex';
+  renderOrdersSortModal();
+}
+function closeOrdersSortModal() {
+  document.getElementById('orders-sort-overlay').style.display = 'none';
+}
+
+function renderOrdersSortModal() {
+  const statusesEl = document.getElementById('orders-sort-statuses');
+  statusesEl.innerHTML = STATUS_KEYS
+    .map(
+      (key) =>
+        `<button type="button" class="toggle-pill ${ordersStatusFilters.has(key) ? 'active' : ''}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}</button>`
+    )
+    .join('');
+  statusesEl.querySelectorAll('[data-status]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(ordersStatusFilters, btn.dataset.status);
+      renderOrdersSortModal();
+      renderOrders();
+    });
+  });
+  document.getElementById('orders-sort-archived').checked = ordersShowArchived;
+  updateOrdersSortButtonLabel();
+}
+
+// Бейдж поверх кнопки — число заказов, подходящих под текущий фильтр (без
+// учёта текста поиска, см. applyOrdersFilters). Кнопка синеет, когда фильтр
+// отличается от настроек по умолчанию (выбраны статусы и/или включён показ
+// завершённых/отменённых).
+function updateOrdersSortButtonLabel() {
+  const btn = document.getElementById('orders-sort-toggle');
+  const badge = document.getElementById('orders-sort-badge');
+  if (!btn || !badge) return;
+  const active = ordersStatusFilters.size > 0 || ordersShowArchived;
+  btn.classList.toggle('active', active);
+  const count = applyOrdersFilters(allOrders).length;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 function renderMapNote() {
   const slot = document.getElementById('map-note-slot');
   if (!YANDEX_MAPS_JS_API_KEY) {
@@ -4452,7 +4806,7 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
@@ -4472,6 +4826,9 @@ async function loadData(opts) {
       console.warn('[admin-notes] не удалось загрузить заметки', err);
       return { notes: [] };
     }),
+    // Задачи для админа (вкладка «Задачи») — та же подстраховка, что и
+    // telegram_messages/notifications выше: таблица появилась позже остальных.
+    getRows('admin_tasks', 'order=created_at.desc&limit=200').catch(() => []),
   ]);
   allUsers = userRows.map(dbUserToUser);
   allOrders = orderRows.map(dbOrderToOrder);
@@ -4480,10 +4837,12 @@ async function loadData(opts) {
   allMessages = messageRows.map(dbMessageToMessage);
   allNotifications = notificationRows.map(dbNotificationToNotification);
   adminNotes = new Map((notesData.notes || []).map((n) => [`${n.entity_type}:${n.entity_id}`, n.note]));
+  allAdminTasks = (adminTaskRows || []).map(dbAdminTaskToTask);
   renderOrders();
   renderMasters();
   renderNotify();
   renderStats();
+  renderAdminTasks();
 
   // Счётчик заявок в мастера на табе (см. submit-master-application.ts —
   // статус 'pending' выставляется только там, при подаче заявки).
@@ -4521,11 +4880,13 @@ function activateTab(tab) {
 // window.* — балун Яндекс.Карт вставляет HTML как есть, onclick-обработчик
 // должен быть виден в глобальной области видимости.
 window.goToOrderCard = function (orderId) {
-  ordersStatusFilter = '';
+  ordersStatusFilters.clear();
+  // Включаем показ завершённых/отменённых тоже — иначе карточка клика по
+  // точке карты может быть скрыта фильтром по умолчанию, если у заказа как
+  // раз такой статус.
+  ordersShowArchived = true;
   ordersSearchQuery = '';
-  const statusSel = document.getElementById('orders-status-filter');
   const searchInput = document.getElementById('orders-search');
-  if (statusSel) statusSel.value = '';
   if (searchInput) searchInput.value = '';
   openOrderId = orderId;
   activateTab('orders');
@@ -4558,8 +4919,22 @@ window.goToMasterCard = function (userId) {
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('admin-app').style.display = 'block';
-  document.getElementById('orders-status-filter').addEventListener('change', (e) => {
-    ordersStatusFilter = e.target.value;
+  document.getElementById('orders-sort-toggle').addEventListener('click', openOrdersSortModal);
+  document.getElementById('orders-sort-close').addEventListener('click', closeOrdersSortModal);
+  document.getElementById('orders-sort-done').addEventListener('click', closeOrdersSortModal);
+  document.getElementById('orders-sort-overlay').addEventListener('click', (e) => {
+    if (e.target.dataset.action === 'close-orders-sort') closeOrdersSortModal();
+  });
+  wireModalSwipeToClose(document.querySelector('#orders-sort-overlay .admin-modal-card'), closeOrdersSortModal);
+  document.getElementById('orders-sort-archived').addEventListener('change', (e) => {
+    ordersShowArchived = e.target.checked;
+    renderOrdersSortModal();
+    renderOrders();
+  });
+  document.getElementById('orders-sort-reset').addEventListener('click', () => {
+    ordersStatusFilters.clear();
+    ordersShowArchived = false;
+    renderOrdersSortModal();
     renderOrders();
   });
   document.getElementById('orders-search').addEventListener('input', (e) => {
@@ -4569,6 +4944,10 @@ function showApp() {
   document.getElementById('orders-group-toggle').addEventListener('click', () => {
     ordersGroupByCustomer = !ordersGroupByCustomer;
     renderOrders();
+  });
+  document.getElementById('admin-tasks-resolved-toggle').addEventListener('click', () => {
+    adminTasksShowResolved = !adminTasksShowResolved;
+    renderAdminTasks();
   });
   document.getElementById('masters-filter').addEventListener('change', (e) => {
     mastersFilter = e.target.value;

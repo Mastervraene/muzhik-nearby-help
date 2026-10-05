@@ -3045,6 +3045,13 @@ function dbUserToUser(row, skillsByUser) {
     // раньше задание снималось автоматически по нажатию «Я выполнил(а)»,
     // без проверки админом; теперь это промежуточный статус).
     masterTaskSubmittedAt: row.master_task_submitted_at || null,
+    // Защита от частой смены номера/IP/геолокации (см. триггер
+    // log_user_contact_change и save-profile.ts) — читается только, клиент
+    // сам эти поля никогда не отправляет (см. userToDbUser).
+    accountPaused: Boolean(row.account_paused),
+    accountPausedReason: row.account_paused_reason || '',
+    accountPausedAt: row.account_paused_at || null,
+    phoneChangeFlag: Boolean(row.phone_change_flag),
   };
 }
 
@@ -3477,6 +3484,11 @@ function ensureCustomerContact(order) {
 
 function saveUser(user) {
   const idx = cache.users.findIndex((u) => u.id === user.id);
+  // Запоминаем прежнее значение — если сервер откажет в смене района из-за
+  // лимита геолокации (geo_limit_exceeded, см. catch ниже), откатываем кэш
+  // к тому, что реально осталось в БД, а не оставляем непринятое значение
+  // висеть в интерфейсе.
+  const previous = idx >= 0 ? cache.users[idx] : null;
   if (idx >= 0) cache.users[idx] = user;
   else cache.users.push(user);
 
@@ -3528,7 +3540,19 @@ function saveUser(user) {
           lat: user.location?.lat,
           lng: user.location?.lng,
         },
-      }).catch((err) => reportError('сохранение пользователя', err));
+      }).catch((err) => {
+        // Лимит смены геолокации (не более 2 раз в неделю — см. save-profile.ts)
+        // — по просьбе Sg это НЕ постоянная надпись в профиле, а временное
+        // всплывающее сообщение (showToast уже само исчезает через 2.2с), и
+        // район откатывается к тому, что реально осталось сохранённым в БД.
+        if (err && err.code === 'geo_limit_exceeded') {
+          if (previous && cache.users[idx] === user) cache.users[idx] = previous;
+          showToast('Слишком частая смена района — не более 2 раз в неделю. Попробуйте позже.');
+          render();
+          return;
+        }
+        reportError('сохранение пользователя', err);
+      });
     }
   }
   return user;
@@ -4929,6 +4953,52 @@ function submitEditName(value) {
     saveUser({ ...user, displayName: trimmed });
   }
   editNameState = null;
+  render();
+}
+
+// ---------------------------------------------------------------------
+// История смены номера телефона и история входов/IP — маленькая кнопка в
+// профиле (см. renderProfile) рядом с номером телефона, по просьбе Sg как
+// часть защиты от частой смены номера/IP/геолокации. Данные приходят из
+// уже задеплоенной Edge Function get-my-history ({userId, sessionToken} →
+// {ok, phoneHistory:[{old_value,changed_at}], loginLog:[{ip_address,created_at}]}),
+// той же, что использует get-my-history в админке для соответствующих
+// лазилоадящихся <details> в карточке мастера. Тот же паттерн всплывающего
+// окна, что и editNameState/editDeviceModelState выше.
+// ---------------------------------------------------------------------
+let accountHistoryState = null;
+
+function openAccountHistory() {
+  const user = currentUser();
+  if (!user) return;
+  accountHistoryState = { loading: true, error: '', phoneHistory: [], loginLog: [] };
+  render();
+  const sessionToken = loadSessionToken();
+  if (!isSupabaseConfigured() || !sessionToken) {
+    accountHistoryState = { loading: false, error: 'История доступна только при входе по паролю.', phoneHistory: [], loginLog: [] };
+    render();
+    return;
+  }
+  callSecureFn('get-my-history', { userId: user.id, sessionToken })
+    .then((data) => {
+      if (!accountHistoryState) return; // окно уже закрыли
+      accountHistoryState = {
+        loading: false,
+        error: '',
+        phoneHistory: Array.isArray(data?.phoneHistory) ? data.phoneHistory : [],
+        loginLog: Array.isArray(data?.loginLog) ? data.loginLog : [],
+      };
+      render();
+    })
+    .catch((err) => {
+      if (!accountHistoryState) return;
+      accountHistoryState = { loading: false, error: err?.message || 'Не удалось загрузить историю', phoneHistory: [], loginLog: [] };
+      render();
+    });
+}
+
+function closeAccountHistory() {
+  accountHistoryState = null;
   render();
 }
 
@@ -7304,6 +7374,49 @@ function renderEditDeviceModelOverlay(st) {
 }
 
 /**
+ * История смены номера телефона и история входов/IP (см. accountHistoryState,
+ * openAccountHistory выше) — тот же паттерн всплывающего окна, что и
+ * renderEditNameOverlay, но без формы — только два read-only списка.
+ */
+function renderAccountHistoryOverlay(st) {
+  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('ru-RU') : '—');
+  return `
+    <div class="map-picker-overlay" data-action="close-account-history">
+      <div class="field-card" style="max-width:400px;width:100%;margin:0;max-height:80vh;overflow:auto;" onclick="event.stopPropagation()">
+        <p><b>История аккаунта</b></p>
+        ${
+          st.loading
+            ? `<p class="order-meta">Загружаем…</p>`
+            : st.error
+            ? `<div class="order-warning">${escapeHtml(st.error)}</div>`
+            : `
+        <p class="order-meta" style="margin-top:4px;margin-bottom:4px;"><b>Смена номера телефона</b></p>
+        ${
+          st.phoneHistory.length
+            ? st.phoneHistory
+                .map(
+                  (h) => `<p class="order-meta" style="margin:2px 0;">${escapeHtml(displayPhone(h.old_value) || h.old_value || '—')} — ${escapeHtml(fmtDate(h.changed_at))}</p>`
+                )
+                .join('')
+            : `<p class="order-meta">Изменений не было.</p>`
+        }
+        <p class="order-meta" style="margin-top:14px;margin-bottom:4px;"><b>Входы (IP-адрес)</b></p>
+        ${
+          st.loginLog.length
+            ? st.loginLog
+                .map((l) => `<p class="order-meta" style="margin:2px 0;">${escapeHtml(l.ip_address || '—')} — ${escapeHtml(fmtDate(l.created_at))}</p>`)
+                .join('')
+            : `<p class="order-meta">Входов не зафиксировано.</p>`
+        }
+        `
+        }
+        <button class="secondary-button" type="button" style="margin-top:14px;box-sizing:border-box;" data-action="close-account-history">Закрыть</button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Подключает выпадающий список подсказок адреса к текстовому полю: с
  * задержкой (дебаунс) ищет реальные адреса по мере ввода (Геосаджест) и по
  * клику на вариант подставляет его текст, а следом — координаты (их
@@ -9114,7 +9227,7 @@ function renderProfile() {
           <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
           <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
         </div>
-        <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button></p>
+        <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button>${isSupabaseConfigured() ? `<button type="button" class="icon-edit-btn" data-action="open-account-history" aria-label="История изменений" title="История номера и входов">🕓</button>` : ''}</p>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён' : 'Telegram не подключён'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
       </div>
 
@@ -9539,6 +9652,33 @@ function render() {
     return;
   }
 
+  // Защита от частой смены номера/IP/геолокации (см. save-profile.ts и
+  // accountPaused в dbUserToUser): пока аккаунт приостановлен, вся обычная
+  // работа с приложением недоступна — показываем только экран с причиной
+  // и кнопкой в поддержку. Шапка (renderTopbar) всё равно рисуется —
+  // через её меню аватарки пользователь может выйти из аккаунта.
+  const gateUser = currentUser();
+  if (gateUser && gateUser.accountPaused) {
+    app.innerHTML = `
+      ${renderTopbar()}
+      <div class="screen">
+        <div class="section-title">Аккаунт приостановлен</div>
+        <div class="chat-thread">
+          <div class="field-card">
+            <p><b>Доступ временно ограничен</b></p>
+            <p class="order-meta">${gateUser.accountPausedReason ? escapeHtml(gateUser.accountPausedReason) : 'Слишком частая смена номера телефона или других данных аккаунта.'}</p>
+            <p class="order-meta">Чтобы снять ограничение, напишите в поддержку — мы разберёмся и разблокируем аккаунт.</p>
+            <button class="primary-button" data-action="show-support">Написать в поддержку</button>
+          </div>
+        </div>
+      </div>
+      ${state.infoOverlay === 'support' ? renderSupportOverlay() : ''}
+      ${renderPhotoViewerOverlay()}
+    `;
+    wireEvents();
+    return;
+  }
+
   const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'workerBalance', 'notifications', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
     app.innerHTML = `
@@ -9585,6 +9725,7 @@ function render() {
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
     ${editDeviceModelState ? renderEditDeviceModelOverlay(editDeviceModelState) : ''}
+    ${accountHistoryState ? renderAccountHistoryOverlay(accountHistoryState) : ''}
   `;
 
   lastRenderedScreen = state.screen;
@@ -11368,6 +11509,11 @@ async function handleAction(action, value) {
       return openEditName();
     case 'edit-name-cancel':
       return cancelEditName();
+
+    case 'open-account-history':
+      return openAccountHistory();
+    case 'close-account-history':
+      return closeAccountHistory();
 
     case 'toggle-specialist-mode':
       state.specialistMode = !state.specialistMode;
