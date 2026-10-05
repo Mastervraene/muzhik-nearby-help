@@ -4631,23 +4631,32 @@ async function resumePendingPhoneVerifyIfAny() {
 
   let result;
   try {
-    result = await checkPhoneCallVerification(pending.phone, pending.since);
+    result = await checkPhoneCallVerification(pending.phone, pending.since, {
+      userId: pending.userId,
+      sessionToken: pending.fromProfile ? loadSessionToken() : undefined,
+      canonicalPhone: pending.fromProfile ? pending.canonicalPhone : undefined,
+    });
   } catch (err) {
     console.error('[resumePendingPhoneVerifyIfAny] не удалось проверить', err);
     return; // запись не трогаем — попробуем ещё раз при следующей загрузке/возврате
   }
 
   if (result && result.confirmed) {
-    const patch = { phone_verified: true };
-    if (pending.fromProfile && pending.canonicalPhone) patch.phone = pending.canonicalPhone;
-    try {
-      await updateRow('users', pending.userId, patch, { minimal: true });
+    // Запись phone_verified/phone теперь делает сама zvonok-check
+    // (service_role, с проверкой владения — см. комментарий у
+    // checkPhoneCallVerification). Здесь только отражаем в локальном
+    // кэше то, что сервер реально сохранил (result.saved).
+    if (result.saved) {
       const idx = cache.users.findIndex((u) => u.id === pending.userId);
       if (idx >= 0) {
-        cache.users[idx] = { ...cache.users[idx], phoneVerified: true, ...(patch.phone ? { phone: patch.phone } : {}) };
+        cache.users[idx] = {
+          ...cache.users[idx],
+          phoneVerified: true,
+          ...(pending.fromProfile && pending.canonicalPhone ? { phone: pending.canonicalPhone } : {}),
+        };
       }
-    } catch (err) {
-      reportError('сохранение подтверждения телефона', err);
+    } else if (pending.fromProfile) {
+      reportError('сохранение подтверждения телефона', new Error('сервер не подтвердил владение профилем'));
     }
     clearPendingPhoneVerify();
     if (pending.fromProfile && state.currentUserId === pending.userId) {
@@ -4701,14 +4710,37 @@ async function startPhoneCallVerification(phoneE164) {
   }
 }
 
-async function checkPhoneCallVerification(phoneE164, since) {
+/**
+ * ПРАВКА БЕЗОПАСНОСТИ (аудит RLS/GRANT, окт.2026): раньше после
+ * confirmed:true сайт сам писал phone_verified (и иногда phone) в users
+ * напрямую анонимным ключом (updateRow) — без всякой проверки, что
+ * пишущий действительно владеет этим userId. Поскольку anon-ключ
+ * публичный (виден в этом файле на GitHub), это позволяло ЛЮБОМУ
+ * человеку одним запросом выставить phone_verified=true (или стереть
+ * чужую смену номера) произвольному пользователю. Теперь запись делает
+ * сама zvonok-check (под service_role) — и только после того как САМА
+ * проверит: для входа/обычной проверки — что phone совпадает с уже
+ * сохранённым users.phone этого userId; для смены номера из профиля
+ * (opts.sessionToken) — что sessionToken реально принадлежит этому
+ * userId. Сайт больше не может просто попросить «запиши вот это» —
+ * только «вот подтверждённый номер, проверь сам и, если можно,
+ * сохрани» (см. result.saved в ответе).
+ * @param {{userId?:string, sessionToken?:string, canonicalPhone?:string}} [opts]
+ */
+async function checkPhoneCallVerification(phoneE164, since, opts = {}) {
   if (!isSupabaseConfigured()) return { configured: false, confirmed: false };
   const { url } = getConfig();
   try {
     const res = await fetch(`${url}/functions/v1/zvonok-check`, {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify({ phone: phoneE164, since }),
+      body: JSON.stringify({
+        phone: phoneE164,
+        since,
+        userId: opts.userId,
+        sessionToken: opts.sessionToken,
+        canonicalPhone: opts.canonicalPhone,
+      }),
     });
     if (!res.ok) throw new Error(`zvonok-check failed: ${res.status}`);
     return await res.json();
@@ -5152,7 +5184,11 @@ async function pollPhoneCallVerification(forState) {
     return;
   }
   forState.attemptsLeft -= 1;
-  const result = await checkPhoneCallVerification(forState.phone, forState.since);
+  const result = await checkPhoneCallVerification(forState.phone, forState.since, {
+    userId: forState.userId,
+    sessionToken: forState.fromProfile ? loadSessionToken() : undefined,
+    canonicalPhone: forState.fromProfile ? forState.canonicalPhone : undefined,
+  });
   if (phoneVerifyState !== forState || forState.status !== 'waiting') return; // отменили/сменили номер, пока ждали ответ
 
   if (result && result.configured === false) {
@@ -5166,18 +5202,21 @@ async function pollPhoneCallVerification(forState) {
     forState.status = 'confirmed';
     clearPendingPhoneVerify();
     render();
-    // minimal: true — см. памятку у updateRow(): анонимному ключу больше
-    // не выдан SELECT на users, return=representation тут упал бы 42501.
-    const patch = { phone_verified: true };
-    if (forState.fromProfile && forState.canonicalPhone) patch.phone = forState.canonicalPhone;
-    try {
-      await updateRow('users', forState.userId, patch, { minimal: true });
+    // Запись phone_verified/phone теперь делает сама zvonok-check
+    // (service_role, с проверкой владения — см. комментарий у
+    // checkPhoneCallVerification). Здесь только отражаем в локальном
+    // кэше то, что сервер реально сохранил (result.saved).
+    if (result.saved) {
       const idx = cache.users.findIndex((u) => u.id === forState.userId);
       if (idx >= 0) {
-        cache.users[idx] = { ...cache.users[idx], phoneVerified: true, ...(patch.phone ? { phone: patch.phone } : {}) };
+        cache.users[idx] = {
+          ...cache.users[idx],
+          phoneVerified: true,
+          ...(forState.fromProfile && forState.canonicalPhone ? { phone: forState.canonicalPhone } : {}),
+        };
       }
-    } catch (err) {
-      reportError('сохранение подтверждения телефона', err);
+    } else if (forState.fromProfile) {
+      reportError('сохранение подтверждения телефона', new Error('сервер не подтвердил владение профилем'));
     }
     if (forState.fromProfile) {
       // Из профиля — просто закрываем попап, без finishPhoneGateLogin
@@ -5371,33 +5410,30 @@ async function submitTelegramLinkCode(rawCode) {
     }
   }
 
-  let row;
-  try {
-    row = await getLoginCodeStatus(code);
-  } catch (err) {
-    reportError('проверка кода Telegram', err);
-    return;
-  }
-  if (!row || !row.telegram_id) {
-    // Одна и та же ошибка и для опечатки, и для просроченного кода (бот
-    // выдаёт код на 10 минут) — отличить их на сайте нечем (см.
-    // getLoginCodeStatus: истёкшая строка просто не попадает в выборку),
-    // поэтому подсказываем оба варианта явно, а не только «неверный код».
-    showToast('Код не найден — проверьте, что ввели его без ошибок, либо запросите новый (старый мог истечь через 10 минут)');
-    return;
-  }
-
   try {
     if (!wasLoggedIn) {
       user = await ensureUserByPhone(gatePhone.value, {});
     }
-    // minimal: true — см. памятку у updateRow(): анонимному ключу больше не
-    // выдан SELECT на users, return=representation тут упал бы 42501.
-    // Значение и так уже известно (row.telegram_id), читать его обратно не
-    // нужно.
-    await updateRow('users', user.id, { telegram_id: row.telegram_id }, { minimal: true });
+    // ПРАВКА БЕЗОПАСНОСТИ (аудит RLS/GRANT, окт.2026): раньше код
+    // проверялся отдельным вызовом (getLoginCodeStatus), а привязка
+    // писалась напрямую анонимным updateRow('users', ...) — без проверки,
+    // что пишущий владеет этим userId. Публичный anon-ключ позволял так
+    // привязать (угнать) чужой telegram_id одним запросом к любому id.
+    // Теперь код проверяется и привязывается одной серверной функцией
+    // link-telegram (service_role): вошедшему пользователю она требует
+    // его настоящий sessionToken, а при входе через Telegram (ещё не
+    // вошли) — что присланный телефон совпадает с уже сохранённым
+    // телефоном этого userId.
+    const sessionToken = wasLoggedIn ? loadSessionToken() : null;
+    const data = await callSecureFn('link-telegram', {
+      op: 'link',
+      code,
+      userId: user.id,
+      sessionToken: sessionToken || undefined,
+      phone: wasLoggedIn ? undefined : (user.phone || null),
+    });
     const idx = cache.users.findIndex((u) => u.id === user.id);
-    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: row.telegram_id };
+    if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: data.telegramId };
     if (!wasLoggedIn) {
       // Как и у phone-gate — вход по Telegram-коду тоже теперь ведёт на
       // обязательный экран пароля, а не сразу выдаёт сессию.
@@ -5409,6 +5445,17 @@ async function submitTelegramLinkCode(rawCode) {
     showToast('Telegram подключён — будем присылать уведомления');
     render();
   } catch (err) {
+    if (err && err.code === 'bad_code') {
+      // Одна и та же ошибка и для опечатки, и для просроченного кода (бот
+      // выдаёт код на 10 минут) — отличить их на сайте нечем, поэтому
+      // подсказываем оба варианта явно, а не только «неверный код».
+      showToast('Код не найден — проверьте, что ввели его без ошибок, либо запросите новый (старый мог истечь через 10 минут)');
+      return;
+    }
+    if (err && err.code === 'telegram_already_linked') {
+      showToast('Этот Telegram уже привязан к другому аккаунту');
+      return;
+    }
     reportError(wasLoggedIn ? 'привязка Telegram к аккаунту' : 'вход через Telegram', err);
   }
 }
@@ -5424,7 +5471,13 @@ async function unlinkTelegram() {
   const user = currentUser();
   if (!user || !user.telegramId) return;
   try {
-    await updateRow('users', user.id, { telegram_id: null }, { minimal: true });
+    // ПРАВКА БЕЗОПАСНОСТИ (аудит RLS/GRANT, окт.2026): раньше — прямой
+    // updateRow('users', ...) анонимным ключом, без проверки владения (см.
+    // подробности в комментарии у submitTelegramLinkCode). Теперь —
+    // link-telegram с проверкой настоящего sessionToken.
+    const sessionToken = loadSessionToken();
+    if (!sessionToken) throw new Error('нет sessionToken — войдите заново');
+    await callSecureFn('link-telegram', { op: 'unlink', userId: user.id, sessionToken });
     const idx = cache.users.findIndex((u) => u.id === user.id);
     if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: null };
     showToast('Telegram отвязан');
