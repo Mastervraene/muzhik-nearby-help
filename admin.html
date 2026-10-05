@@ -3566,6 +3566,15 @@ function wireMasterForm(u) {
           account_paused: false,
           account_paused_reason: null,
           account_paused_at: null,
+          // Сбрасываем и флаг phone_change_flag (09.10.2026, по просьбе Sg):
+          // пока он не сброшен, повторные смены номера этим же аккаунтом не
+          // создадут новую admin_tasks-задачу и не пришлют повторное
+          // Telegram-уведомление админу (см. log_user_contact_change —
+          // проверяет old.phone_change_flag перед созданием задачи). Снятие
+          // паузы — осознанное решение админа, что инцидент разобран,
+          // поэтому логично снимать и флаг, иначе будущее злоупотребление
+          // этим аккаунтом останется незамеченным.
+          phone_change_flag: false,
         });
         try {
           await insertRow('notifications', {
