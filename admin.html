@@ -253,6 +253,18 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .toggle-pill:hover { background: var(--gray-200); }
 .toggle-pill.active { background: var(--accent); color: #fff; }
 .toggle-pill.active:hover { background: var(--accent-strong); }
+/* Маркер-счётчик внутри пилюли статуса (сколько заказов сейчас в этом
+   статусе) — чтобы сразу было видно, стоит ли вообще фильтровать по этому
+   пункту, или там пусто. Пустые статусы дополнительно притушены. Просьба
+   Sg 05.10.2026 (скриншот с кружками от руки напротив статусов). */
+.toggle-pill-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px;
+  padding: 0 5px; margin-left: 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.14);
+  color: inherit; font-size: 10.5px; font-weight: 800; line-height: 16px; vertical-align: -1px;
+}
+.toggle-pill.active .toggle-pill-count { background: rgba(255, 255, 255, 0.32); }
+.toggle-pill.is-empty { opacity: 0.45; }
+.toggle-pill.is-empty .toggle-pill-count { background: rgba(0, 0, 0, 0.08); }
 
 /* ---------- Кнопка-иконка сортировки рядом со строкой поиска (вкладка
    «Заказы») — тот же приём, что .sort-btn в личном кабинете клиента
@@ -4305,11 +4317,17 @@ function renderMapSortModal() {
   });
 
   const statusesEl = document.getElementById('map-sort-statuses');
+  // Счётчик — сколько заказов с координатами (т.е. реально способных
+  // появиться на карте) сейчас в этом статусе, без учёта текущего выбора
+  // статусов (как будто выбран только он один) — см. getFilteredMapOrders.
+  const mapOrdersWithLocation = allOrders.filter((o) => o.exactLocation.lat && o.exactLocation.lng);
+  const mapStatusCounts = {};
+  mapOrdersWithLocation.forEach((o) => { mapStatusCounts[o.status] = (mapStatusCounts[o.status] || 0) + 1; });
   statusesEl.innerHTML = STATUS_KEYS
-    .map(
-      (key) =>
-        `<button type="button" class="toggle-pill ${mapFilterStatuses.has(key) ? 'active' : ''}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}</button>`
-    )
+    .map((key) => {
+      const count = mapStatusCounts[key] || 0;
+      return `<button type="button" class="toggle-pill ${mapFilterStatuses.has(key) ? 'active' : ''} ${count ? '' : 'is-empty'}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}<span class="toggle-pill-count">${count}</span></button>`;
+    })
     .join('');
   statusesEl.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -4351,11 +4369,16 @@ function closeOrdersSortModal() {
 
 function renderOrdersSortModal() {
   const statusesEl = document.getElementById('orders-sort-statuses');
+  // Счётчик — сколько всего заказов сейчас в этом статусе (по всем заказам,
+  // без учёта текущего выбора статусов и чекбокса «показывать завершённые и
+  // отменённые») — чтобы сразу было видно, есть ли там вообще что искать.
+  const ordersStatusCounts = {};
+  allOrders.forEach((o) => { ordersStatusCounts[o.status] = (ordersStatusCounts[o.status] || 0) + 1; });
   statusesEl.innerHTML = STATUS_KEYS
-    .map(
-      (key) =>
-        `<button type="button" class="toggle-pill ${ordersStatusFilters.has(key) ? 'active' : ''}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}</button>`
-    )
+    .map((key) => {
+      const count = ordersStatusCounts[key] || 0;
+      return `<button type="button" class="toggle-pill ${ordersStatusFilters.has(key) ? 'active' : ''} ${count ? '' : 'is-empty'}" data-status="${key}">${escapeHtml(STATUS_LABELS[key])}<span class="toggle-pill-count">${count}</span></button>`;
+    })
     .join('');
   statusesEl.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', () => {
