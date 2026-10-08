@@ -1107,14 +1107,14 @@ body {
 }
 
 .order-title {
-  font-size: 14.5px;
+  font-size: 15.5px;
   font-weight: 700;
   color: var(--gray-900);
   margin: 0 0 4px;
 }
 
 .order-number-tag {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--gray-500);
   margin: 0 0 3px;
@@ -1122,7 +1122,7 @@ body {
 }
 
 .status-pill {
-  font-size: 10.5px;
+  font-size: 11.5px;
   padding: 3px 8px;
   border-radius: 999px;
   background: var(--gray-800);
@@ -1135,8 +1135,18 @@ body {
   color: var(--gray-600);
 }
 
+/* Статус «Нужно уточнение» (clarification_requested) в краткой карточке
+   списка (см. orderCardHtml) — просьба Sg 08.10.2026 сделать его красным,
+   чтобы сразу бросался в глаза в списке «Мои заказы», не дожидаясь
+   открытия заказа. Тот же акцентный красный, что и --notify-badge /
+   .clarification-alert в деталях заказа. */
+.status-pill.danger {
+  background: var(--notify-badge);
+  color: var(--gray-0);
+}
+
 .order-meta {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--gray-500);
   margin: 6px 0 0;
   display: flex;
@@ -1146,12 +1156,24 @@ body {
 
 .order-warning {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--gray-700);
   background: var(--gray-100);
   border-left: 3px solid var(--gray-500);
   padding: 6px 8px;
   border-radius: 6px;
+}
+
+/* Подсказка «нажмите, чтоб смотреть подробней» в краткой карточке списка —
+   заменяет собой техническую информацию о прецеденте цены, которую убрали
+   из краткой версии (см. orderCardHtml, просьба Sg 08.10.2026). Вся
+   карточка и так кликабельна (data-action="open-order"), это просто
+   визуальная подсказка, а не отдельный обработчик клика. */
+.order-card-more-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* ---------- Блок заработка мастера в карточке заказа (см. renderWorkerPayoutBlock) ---------- */
@@ -8592,11 +8614,19 @@ function orderCardHtml(order, { viewer }) {
             ${viewer === 'worker' && dist ? `<span>~${dist} км</span>` : ''}
           </div>
         </div>
-        <span class="status-pill ${['cancelled', 'issue_reported'].includes(order.status) ? '' : 'muted'}">${STATUS_LABELS[order.status]}</span>
+        <span class="status-pill ${
+          order.status === 'clarification_requested' ? 'danger' : ['cancelled', 'issue_reported'].includes(order.status) ? '' : 'muted'
+        }">${STATUS_LABELS[order.status]}</span>
       </div>
       ${
+        // Для заказов-прецедентов (цена согласовывается сторонами) раньше
+        // тут же показывался текст «Прецедент: цена согласовывается
+        // сторонами» — просьба Sg 08.10.2026 убрать эту техническую
+        // информацию из краткой карточки списка полностью (она остаётся в
+        // деталях заказа) и вместо неё показать подсказку, что подробности
+        // смотрятся по клику на карточку (вся карточка и так кликабельна).
         order.isPrecedent
-          ? `<div class="order-warning">Прецедент: цена согласовывается сторонами</div>`
+          ? `<p class="order-card-more-hint">Нажмите, чтоб смотреть подробней</p>`
           : typeof order.finalPrice === 'number'
           ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
@@ -8622,7 +8652,18 @@ function orderCardHtml(order, { viewer }) {
           : ''
       }
       ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
-      ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
+      ${
+        // «Точная цена не найдена в каталоге — предложите свою цену» — тот
+        // же технический текст про прецедент, что и выше, только приходит
+        // через order.warnings (см. isPrecedent-ветку при формировании
+        // заказа). В краткой карточке списка просьба Sg 08.10.2026 убрать
+        // и его — остальные предупреждения (например, про неопределённую
+        // точку на карте) показываем как обычно.
+        order.warnings
+          .filter((w) => !w.includes('Точная цена не найдена'))
+          .map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`)
+          .join('')
+      }
       ${diagnosisLogPreviewHtml(order)}
     </div>
   `;
