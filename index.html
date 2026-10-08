@@ -8764,6 +8764,7 @@ function renderCompose() {
             <input type="text" id="compose-phone" value="${escapeHtml(composePhoneFieldValue || '+7 ')}" placeholder="+7 900 000 00 00" />
             <div class="order-warning" id="compose-phone-error" style="display:none;"></div>
             <p class="order-meta"><span>Он привяжется к вашему аккаунту, чтобы мастер мог с вами связаться.</span></p>
+            <p style="font-size:12px;color:#767676;margin-top:8px;">Отправляя заявку, вы соглашаетесь с <a href="/privacy-policy.html" style="color:inherit;">политикой конфиденциальности</a> и даёте согласие на <a href="/personal-data-policy.html" style="color:inherit;">обработку персональных данных</a>.</p>
           </div>
           `
             : ''
@@ -9524,6 +9525,7 @@ function renderPhoneGate() {
       <input type="text" id="gate-phone" value="+7 " placeholder="+7 900 000 00 00" />
       <div class="order-warning" id="gate-phone-error" style="display:none;"></div>
       <button class="primary-button" id="gate-phone-send" disabled>Продолжить</button>
+      <p style="font-size:12px;color:#767676;margin-top:10px;">Нажимая «Продолжить», вы соглашаетесь с <a href="/privacy-policy.html" style="color:inherit;">политикой конфиденциальности</a> и даёте согласие на <a href="/personal-data-policy.html" style="color:inherit;">обработку персональных данных</a>.</p>
       <div class="composer-field-inline" style="margin-top:14px;">
         <p class="order-meta">Telegram — для получения уведомлений о заказах</p>
         <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
