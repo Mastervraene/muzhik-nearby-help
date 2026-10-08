@@ -2156,6 +2156,46 @@ body {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/* Сам экран «Тест» (.htest-sheet) намеренно НЕ использует
+   .onboarding-overlay/.onboarding-card — тот паттерн затемняет и
+   перекрывает ВЕСЬ экран (fixed inset:0, тёмный фон, z-index:100,
+   перехватывает все клики/скролл), а весь смысл этой панели — живьём
+   видеть шапку и листать карточки под ней, пока крутишь ползунки (по
+   просьбе Sg 09.10.2026: «скроллинг, чтобы листать» + «саму шапку,
+   чтобы сразу видеть результат»). Поэтому здесь — лёгкая панель снизу
+   БЕЗ тёмной подложки: она занимает только нижнюю часть экрана,
+   шапка и верх контента остаются полностью видны и некликнуты, а
+   остальной экран (.screen, overflow-y:auto) как обычно
+   прокручивается — панель его не перехватывает, так как сама не
+   растянута на весь viewport. */
+.htest-sheet {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: var(--max-width);
+  z-index: 60;
+  background: var(--gray-0);
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.18);
+  max-height: 46vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: onboarding-rise 0.25s ease-out;
+}
+.htest-sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--gray-200);
+  margin: 10px auto 0;
+}
+.htest-sheet-inner {
+  padding: 6px 18px calc(16px + env(safe-area-inset-bottom));
+  position: relative;
+}
+
 </style>
 </head>
 <body>
@@ -10536,40 +10576,38 @@ function renderHeaderTestOverlay() {
   try { saved = JSON.parse(localStorage.getItem('hbTestValues') || 'null'); } catch (e) {}
   const v = Object.assign({ pad: 14, blur: 4, reach: 100, solid: 1, opacity: 35 }, saved || {});
   return `
-    <div class="onboarding-overlay" data-action="dismiss-onboarding">
-      <div class="onboarding-card" onclick="event.stopPropagation()">
-        <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
-          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
-          <h2>Тест: размытие шапки</h2>
-          <p class="order-meta" style="margin-bottom:14px;">Крутите ползунки — шапка меняется сразу, без перезагрузки. Когда понравится — нажмите «Скопировать» и пришлите мне эти значения, я поставлю такие же в сам файл.</p>
-          <div class="htest-controls">
-            <div class="htest-row">
-              <label>Размер шапки (паддинг) <span class="htest-val" id="ht-pad-val">${v.pad}px</span></label>
-              <input type="range" id="ht-pad" min="6" max="30" step="1" value="${v.pad}" oninput="htestApply()" />
-            </div>
-            <div class="htest-row">
-              <label>Сила размытия <span class="htest-val" id="ht-blur-val">${v.blur}px</span></label>
-              <input type="range" id="ht-blur" min="0" max="40" step="1" value="${v.blur}" oninput="htestApply()" />
-            </div>
-            <div class="htest-row">
-              <label>Размер размытия (глубина затухания) <span class="htest-val" id="ht-reach-val">${v.reach}px</span></label>
-              <input type="range" id="ht-reach" min="10" max="220" step="1" value="${v.reach}" oninput="htestApply()" />
-            </div>
-            <div class="htest-row">
-              <label>Сплошная часть перед началом затухания <span class="htest-val" id="ht-solid-val">${v.solid}px</span></label>
-              <input type="range" id="ht-solid" min="0" max="80" step="1" value="${v.solid}" oninput="htestApply()" />
-            </div>
-            <div class="htest-row">
-              <label>Непрозрачность белой подложки <span class="htest-val" id="ht-opacity-val">${v.opacity}%</span></label>
-              <input type="range" id="ht-opacity" min="0" max="70" step="1" value="${v.opacity}" oninput="htestApply()" />
-            </div>
+    <div class="htest-sheet">
+      <div class="htest-sheet-handle"></div>
+      <div class="htest-sheet-inner">
+        <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:10px; right:12px;">✕</button>
+        <h2 style="margin-top:6px;">Тест: размытие шапки</h2>
+        <p class="order-meta" style="margin-bottom:14px;">Шапка сверху и карточки под ней — настоящие, экран листается как обычно. Крутите ползунки — результат виден сразу. Когда понравится — нажмите «Скопировать» и пришлите мне эти значения.</p>
+        <div class="htest-controls">
+          <div class="htest-row">
+            <label>Размер шапки (паддинг) <span class="htest-val" id="ht-pad-val">${v.pad}px</span></label>
+            <input type="range" id="ht-pad" min="6" max="30" step="1" value="${v.pad}" oninput="htestApply()" />
           </div>
-          <pre class="htest-readout" id="ht-css-output"></pre>
-          <div style="display:flex; gap:10px; margin-top:12px;">
-            <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" id="ht-copy-btn" onclick="htestCopy()">Скопировать</button>
-            <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" onclick="htestReset()">Сбросить</button>
+          <div class="htest-row">
+            <label>Сила размытия <span class="htest-val" id="ht-blur-val">${v.blur}px</span></label>
+            <input type="range" id="ht-blur" min="0" max="40" step="1" value="${v.blur}" oninput="htestApply()" />
           </div>
+          <div class="htest-row">
+            <label>Размер размытия (глубина затухания) <span class="htest-val" id="ht-reach-val">${v.reach}px</span></label>
+            <input type="range" id="ht-reach" min="10" max="220" step="1" value="${v.reach}" oninput="htestApply()" />
+          </div>
+          <div class="htest-row">
+            <label>Сплошная часть перед началом затухания <span class="htest-val" id="ht-solid-val">${v.solid}px</span></label>
+            <input type="range" id="ht-solid" min="0" max="80" step="1" value="${v.solid}" oninput="htestApply()" />
+          </div>
+          <div class="htest-row">
+            <label>Непрозрачность белой подложки <span class="htest-val" id="ht-opacity-val">${v.opacity}%</span></label>
+            <input type="range" id="ht-opacity" min="0" max="70" step="1" value="${v.opacity}" oninput="htestApply()" />
+          </div>
+        </div>
+        <pre class="htest-readout" id="ht-css-output"></pre>
+        <div style="display:flex; gap:10px; margin-top:12px;">
+          <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" id="ht-copy-btn" onclick="htestCopy()">Скопировать</button>
+          <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" onclick="htestReset()">Сбросить</button>
         </div>
       </div>
     </div>
