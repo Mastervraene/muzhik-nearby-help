@@ -185,6 +185,16 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
    в одну колонку и растягивает карточку; тут поля короткие, двух колонок
    достаточно и на маленьком экране. */
 .grid-2-tight { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+/* Радиус + широта/долгота в одну строку (просьба Sg 08.10.2026) — радиус
+   узкий (под один-два символа и букву «R» в подписи), остальное место
+   делится между lat/lng; подписи могут не влезать целиком — это ожидаемо. */
+.grid-geo { display: grid; grid-template-columns: 44px 1fr 1fr; gap: 6px 8px; align-items: start; }
+.grid-geo label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-toggle-wrap { margin: 2px 0 10px; }
+.map-toggle-wrap > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--gray-700); list-style: none; }
+.map-toggle-wrap > summary::-webkit-details-marker { display: none; }
+.map-toggle-wrap > summary::before { content: '📍 '; }
+.user-mini-map { width: 33%; min-width: 150px; height: 190px; margin-top: 8px; border-radius: 12px; overflow: hidden; border: 1px solid var(--gray-200); background: var(--gray-50); }
 .field-sm.dense { margin-bottom: 6px; }
 .field-sm.dense label { font-size: 10.5px; margin-bottom: 2px; }
 .field-sm.dense input, .field-sm.dense select {
@@ -1591,6 +1601,25 @@ function wirePayoutForm(p) {
 // -----------------------------------------------------------------------
 let allOrders = [];
 let allUsers = [];
+// Короткий порядковый номер пользователя для отображения в админке (вместо
+// технического UUID) — просьба Sg 08.10.2026: "мой аккаунт id1, главный
+// мастер id2 и так далее". Считается по порядку регистрации (created_at
+// по возрастанию) и пересчитывается в renderMasters() при каждой перезагрузке
+// данных; реальный UUID (u.id) остаётся как есть везде в логике/запросах —
+// это чисто отображаемый номер для людей, "технический" вид никуда не делся
+// (виден в карточке рядом с номером и доступен техподдержке).
+let userSeqById = new Map();
+function recomputeUserSeqIds() {
+  userSeqById = new Map(
+    [...allUsers]
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map((u, i) => [u.id, i + 1])
+  );
+}
+function userSeqLabel(id) {
+  const n = userSeqById.get(id);
+  return n ? `id${n}` : '—';
+}
 let allStats = [];
 let allSkills = [];
 let allMessages = [];
@@ -1737,7 +1766,7 @@ function orderSearchHaystack(o) {
 
 function userSearchHaystack(u) {
   return [
-    u.displayName, u.phone, u.district, u.id,
+    u.displayName, u.phone, u.district, u.id, userSeqLabel(u.id),
     u.availableAsWorker ? 'мастер исполнитель' : 'клиент',
     u.blocked ? 'заблокирован' : '',
   ].filter(Boolean).join(' ').toLowerCase();
@@ -3030,7 +3059,7 @@ function masterCardHtml(u) {
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')}${city ? ` · ${escapeHtml(city)}` : ''}</p>
+          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} · ${userSeqLabel(u.id)}${city ? ` · ${escapeHtml(city)}` : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span>` : '<span class="pill muted">клиент</span>'}
@@ -3198,9 +3227,9 @@ function masterFormHtml(u) {
       </div>
 
       <p class="form-section-label">Гео и радиус</p>
-      <div class="grid-2-tight">
+      <div class="grid-geo">
         <div class="field-sm dense">
-          <label>Радиус поиска (км)</label>
+          <label title="Радиус поиска, км">R</label>
           <input type="number" id="mf-radius-${u.id}" value="${u.searchRadiusKm ?? 3}" />
         </div>
         <div class="field-sm dense">
@@ -3212,6 +3241,12 @@ function masterFormHtml(u) {
           <input type="number" step="0.000001" id="mf-lng-${u.id}" value="${u.location.lng ?? ''}" />
         </div>
       </div>
+      <details class="map-toggle-wrap" id="mf-map-details-${u.id}">
+        <summary>Карта</summary>
+        ${Boolean(u.location.lat && u.location.lng)
+          ? `<div class="user-mini-map" id="mf-map-${u.id}"></div>`
+          : `<div class="map-note">Локация не указана — нечего показать на карте.</div>`}
+      </details>
 
       <p class="form-section-label">Рейтинги</p>
       <div class="grid-2-tight">
@@ -3229,7 +3264,8 @@ function masterFormHtml(u) {
       <div class="grid-2-tight">
         <div class="field-sm dense">
           <label>ID пользователя</label>
-          <input type="text" disabled value="${escapeHtml(u.id)}" />
+          <input type="text" disabled value="${userSeqLabel(u.id)}" />
+          <p class="order-meta" style="margin:4px 0 0;font-size:11px;word-break:break-all;" title="Технический UUID — для техподдержки/SQL-запросов">${escapeHtml(u.id)}</p>
         </div>
         <div class="field-sm dense">
           <label>Дата регистрации</label>
@@ -3645,6 +3681,39 @@ function wireMasterForm(u) {
       } catch (err) {
         listEl.innerHTML = `<div class="chat-empty">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
         loginHistoryDetails.dataset.loaded = '';
+      }
+    });
+  }
+
+  // Узкая карта (1/3 ширины) прямо в карточке пользователя — просьба Sg
+  // 08.10.2026, по образцу <details> выше: карта (отдельный ymaps.Map на
+  // свой контейнер, не трогает общий window.__adminMap вкладки «Карта»)
+  // создаётся лениво, только при первом открытии.
+  const userMapDetails = document.getElementById(`mf-map-details-${u.id}`);
+  if (userMapDetails) {
+    userMapDetails.addEventListener('toggle', async () => {
+      if (!userMapDetails.open || userMapDetails.dataset.loaded) return;
+      const mapEl = document.getElementById(`mf-map-${u.id}`);
+      if (!mapEl) return; // локации нет — уже показана текстовая заметка
+      if (!YANDEX_MAPS_JS_API_KEY) {
+        mapEl.innerHTML = '<div class="map-note">Карта не подключена: нет ключа YANDEX_MAPS_JS_API_KEY.</div>';
+        userMapDetails.dataset.loaded = '1';
+        return;
+      }
+      userMapDetails.dataset.loaded = '1';
+      try {
+        await loadYmapsScript();
+        window.ymaps.ready(() => {
+          const map = new window.ymaps.Map(mapEl, {
+            center: [u.location.lat, u.location.lng],
+            zoom: 14,
+            controls: ['zoomControl'],
+          });
+          map.geoObjects.add(new window.ymaps.Placemark([u.location.lat, u.location.lng], {}, { preset: 'islands#redDotIcon' }));
+        });
+      } catch (err) {
+        mapEl.innerHTML = `<div class="map-note">${escapeHtml(err.message)}</div>`;
+        userMapDetails.dataset.loaded = '';
       }
     });
   }
@@ -4863,6 +4932,7 @@ async function loadData(opts) {
     getRows('admin_tasks', 'order=created_at.desc&limit=200').catch(() => []),
   ]);
   allUsers = userRows.map(dbUserToUser);
+  recomputeUserSeqIds();
   allOrders = orderRows.map(dbOrderToOrder);
   allStats = statRows.map(dbDailyStatToStat);
   allSkills = skillRows.map(dbSkillToSkill);
