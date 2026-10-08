@@ -104,6 +104,24 @@
   --shadow-unread: 0 2px 8px rgba(224, 36, 36, 0.22), 0 10px 28px rgba(224, 36, 36, 0.22);
   --danger: #6b6b6b; /* без цвета — предупреждения выделяются текстурой/жирностью, не цветом */
   --max-width: 480px;
+
+  /* Параметры размытия шапки — вынесены в переменные специально, чтобы
+     экран «Тест» (меню аватарки → «Тест», см. renderHeaderTestOverlay)
+     мог крутить их ползунками в реальном времени через
+     document.documentElement.style.setProperty(...), без пересборки
+     страницы. Значения по умолчанию — те, что согласованы с Sg
+     09.10.2026 через интерактивный прототип: сила размытия 4px, размер
+     (глубина затухания) 100px, видимая часть фона перед началом
+     затухания — 1px, непрозрачность белого 0.35. --hb-total и
+     --hb-solid-pct — производные (общая высота слоя и % сплошной
+     части в mask-image), их пересчитывает JS, чтобы не делать деление
+     внутри calc().
+  */
+  --hb-tb-pad: 14px;
+  --hb-blur: 4px;
+  --hb-total: 101px;
+  --hb-solid-pct: 1%;
+  --hb-bg-opacity: 0.35;
 }
 
 * { box-sizing: border-box; }
@@ -145,7 +163,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  /* padding через переменную --hb-tb-pad — это и есть «размер шапки» в
+     экране «Тест» (меню аватарки → «Тест»): чем больше паддинг, тем
+     выше сама шапка. */
+  padding: var(--hb-tb-pad, 14px) 16px;
   /* У шапки больше нет собственного фона/blur — раньше он обрывался
      ровно на нижней границе шапки, а прогрессивное размытие (::before/
      ::after ниже) начиналось сразу под ней отдельным слоем: на стыке
@@ -172,40 +193,28 @@ body {
 
 /* Единый прямоугольник размытия под шапкой (переделан 09.10.2026 вместе
    с Sg через интерактивный прототип с ползунками). Раньше было два
-   отдельных слоя (::before/::after) с разной высотой — на глаз
-   читалось как две отдельных «плашки», а не один плавный переход.
-   Теперь один слой, start от top:0 (под контентом шапки, см. z-index
-   выше).
-   09.10.2026, уточнение от Sg: «безопасная» зона с полной силой
-   (mask alpha=1) должна быть не высотой с саму шапку (~76px), а
-   практически нулевой — 1px, — и сразу после неё на всю дальность
-   100px идёт затухание. То есть сама верхняя плашка (лого/текст)
-   остаётся чёткой не из-за широкой «безопасной» зоны (она больше не
-   нужна — читаемость лого/текста и так обеспечена тем, что они
-   нарисованы отдельным слоем поверх, см. z-index), а просто потому,
-   что dec затухание идёт сразу от самого верха. Итог высота слоя
-   1+100=101px, mask держит alpha=1 только первый 1px (~1%), дальше
-   плавно тает в ноль. Тает сразу всё вместе — и тон (background), и
-   сам эффект размытия (backdrop-filter) — поэтому размытие
-   воспринимается убывающим градиентом, хотя технически blur-radius
-   внутри прямоугольника постоянный (CSS не умеет плавно менять силу
-   blur у одного слоя — это единственный способ приблизить эффект).
-   Сила размытия 4px, дальность 100px — работает постоянно, не
-   привязано к скроллу (по просьбе Sg: эффект должен быть виден
-   всегда, как плашка у Яндекса). */
+   отдельных слоя (::before/::after) с разной высотой/силой — граница
+   между ними читалась как шов. Теперь один слой: высота (--hb-total),
+   сила размытия (--hb-blur) и непрозрачность белой подложки
+   (--hb-bg-opacity) регулируются переменными — их же крутит экран
+   «Тест» в реальном времени. mask-image держит верхнюю часть слоя
+   (--hb-solid-pct, по умолчанию 1% — то есть практически сразу) в
+   полную силу эффекта, а дальше плавно сводит её к нулю к низу слоя —
+   поэтому резкой границы не видно, а текст/карточки под шапкой не
+   обрезаются чёткой линией. */
 .topbar::before {
   content: '';
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  height: 101px;
+  height: var(--hb-total, 101px);
   pointer-events: none;
-  background: rgba(255, 255, 255, 0.35);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 1) 1%, rgba(0, 0, 0, 0) 100%);
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 1) 1%, rgba(0, 0, 0, 0) 100%);
+  background: rgba(255, 255, 255, var(--hb-bg-opacity, 0.35));
+  backdrop-filter: blur(var(--hb-blur, 4px));
+  -webkit-backdrop-filter: blur(var(--hb-blur, 4px));
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 1) var(--hb-solid-pct, 1%), rgba(0, 0, 0, 0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 1) var(--hb-solid-pct, 1%), rgba(0, 0, 0, 0) 100%);
 }
 
 .logo-slot {
@@ -2107,6 +2116,46 @@ body {
   font-weight: 700;
 }
 
+/* Экран «Тест» (меню аватарки → «Тест», см. renderHeaderTestOverlay) —
+   временная техническая панель для подбора параметров размытия шапки
+   вживую, ползунками, прямо на реальном устройстве. */
+.htest-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.htest-row label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--gray-800);
+}
+.htest-val {
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.htest-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.htest-readout {
+  margin: 14px 0 0;
+  background: var(--gray-50);
+  border: 1px dashed var(--gray-200);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--gray-600);
+  white-space: pre-wrap;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
 </style>
 </head>
 <body>
@@ -2167,6 +2216,28 @@ body {
 // === Собранный бандл (без ES-модулей), чтобы сайт открывался и через file://, и на GitHub Pages ===
 (function(){
 "use strict";
+
+// Восстанавливаем подобранные в экране «Тест» (меню аватарки → «Тест»,
+// см. renderHeaderTestOverlay/htestApply) значения размытия шапки сразу
+// при загрузке страницы — чтобы выбранный вид не сбрасывался при
+// переходах между экранами/обновлении страницы, пока идёт подбор перед
+// тем, как прислать итоговые цифры для самого файла. Если ничего не
+// сохранено (или localStorage недоступен) — используются обычные
+// значения по умолчанию из :root.
+(function restoreHeaderTestVars() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('hbTestValues') || 'null');
+    if (!saved) return;
+    const total = Number(saved.solid) + Number(saved.reach);
+    const solidPct = (total > 0 ? (Number(saved.solid) / total) * 100 : 0).toFixed(1) + '%';
+    const root = document.documentElement.style;
+    root.setProperty('--hb-tb-pad', saved.pad + 'px');
+    root.setProperty('--hb-blur', saved.blur + 'px');
+    root.setProperty('--hb-total', total + 'px');
+    root.setProperty('--hb-solid-pct', solidPct);
+    root.setProperty('--hb-bg-opacity', saved.opacity);
+  } catch (e) {}
+})();
 
 // ---- js/domain/orderStateMachine.js ----
 /**
@@ -8296,6 +8367,10 @@ function renderAvatarMenu(user, unreadCount) {
     ...(hasMasterAccess ? [{ action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
     { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
     { action: 'show-support', icon: '🛟', label: 'Поддержка' },
+    // Временный технический пункт для подбора параметров размытия шапки
+    // вживую на реальном устройстве (см. renderHeaderTestOverlay) — по
+    // просьбе Sg 09.10.2026, после жалоб, что изменения не видны.
+    { action: 'open-header-test', icon: '🧪', label: 'Тест' },
   ];
   return `
     <div class="avatar-menu" id="avatar-menu">
@@ -10033,7 +10108,7 @@ function render() {
         <div class="section-title">Нужен номер телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'header-test' ? renderHeaderTestOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -10064,7 +10139,7 @@ function render() {
     ${renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'header-test' ? renderHeaderTestOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -10442,6 +10517,168 @@ function renderSupportOverlay() {
       </div>
     </div>
   `;
+}
+
+// Экран «Тест» (меню аватарки → «Тест») — ползунки, которые тут же,
+// без правки файла и без выгрузки на GitHub, двигают реальные CSS-
+// переменные размытия шапки (--hb-tb-pad/--hb-blur/--hb-total/
+// --hb-solid-pct/--hb-bg-opacity, см. :root и .topbar::before) прямо на
+// живой странице — через document.documentElement.style.setProperty в
+// htestApply() ниже. Подобрали устраивающие значения — кнопка
+// «Скопировать» кладёт их в буфер обмена, чтобы прислать мне и зашить
+// в сам файл: сами ползунки ничего не меняют на сервере и не видны
+// другим пользователям, это только локальная подстройка в этом
+// браузере (хранится в localStorage под ключом hbTestValues, чтобы не
+// сбрасывалась при обновлении страницы, пока идёт подбор — см.
+// применение в начале файла, ищи hbTestValues).
+function renderHeaderTestOverlay() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('hbTestValues') || 'null'); } catch (e) {}
+  const v = Object.assign({ pad: 14, blur: 4, reach: 100, solid: 1, opacity: 35 }, saved || {});
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Тест: размытие шапки</h2>
+          <p class="order-meta" style="margin-bottom:14px;">Крутите ползунки — шапка меняется сразу, без перезагрузки. Когда понравится — нажмите «Скопировать» и пришлите мне эти значения, я поставлю такие же в сам файл.</p>
+          <div class="htest-controls">
+            <div class="htest-row">
+              <label>Размер шапки (паддинг) <span class="htest-val" id="ht-pad-val">${v.pad}px</span></label>
+              <input type="range" id="ht-pad" min="6" max="30" step="1" value="${v.pad}" oninput="htestApply()" />
+            </div>
+            <div class="htest-row">
+              <label>Сила размытия <span class="htest-val" id="ht-blur-val">${v.blur}px</span></label>
+              <input type="range" id="ht-blur" min="0" max="40" step="1" value="${v.blur}" oninput="htestApply()" />
+            </div>
+            <div class="htest-row">
+              <label>Размер размытия (глубина затухания) <span class="htest-val" id="ht-reach-val">${v.reach}px</span></label>
+              <input type="range" id="ht-reach" min="10" max="220" step="1" value="${v.reach}" oninput="htestApply()" />
+            </div>
+            <div class="htest-row">
+              <label>Сплошная часть перед началом затухания <span class="htest-val" id="ht-solid-val">${v.solid}px</span></label>
+              <input type="range" id="ht-solid" min="0" max="80" step="1" value="${v.solid}" oninput="htestApply()" />
+            </div>
+            <div class="htest-row">
+              <label>Непрозрачность белой подложки <span class="htest-val" id="ht-opacity-val">${v.opacity}%</span></label>
+              <input type="range" id="ht-opacity" min="0" max="70" step="1" value="${v.opacity}" oninput="htestApply()" />
+            </div>
+          </div>
+          <pre class="htest-readout" id="ht-css-output"></pre>
+          <div style="display:flex; gap:10px; margin-top:12px;">
+            <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" id="ht-copy-btn" onclick="htestCopy()">Скопировать</button>
+            <button type="button" class="secondary-button" style="box-sizing:border-box; flex:1;" onclick="htestReset()">Сбросить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Пересчитывает все 5 ползунков экрана «Тест» в реальные CSS-переменные
+ * шапки и применяет их сразу, через document.documentElement.style —
+ * тем же способом, каким их читает .topbar/.topbar::before (var(...) в
+ * :root, см. начало файла). Высота слоя и % сплошной части в
+ * mask-image — производные от «сплошной части» (solid) и «размера
+ * размытия» (reach), поэтому их пересчитываем тут, а не в CSS calc().
+ * Сохраняет значения в localStorage, чтобы при обновлении страницы
+ * (например, после клика на уведомление) подбор не сбрасывался.
+ */
+function htestApply() {
+  const padEl = document.getElementById('ht-pad');
+  const blurEl = document.getElementById('ht-blur');
+  const reachEl = document.getElementById('ht-reach');
+  const solidEl = document.getElementById('ht-solid');
+  const opEl = document.getElementById('ht-opacity');
+  if (!padEl || !blurEl || !reachEl || !solidEl || !opEl) return;
+
+  const pad = Number(padEl.value);
+  const blur = Number(blurEl.value);
+  const reach = Number(reachEl.value);
+  const solid = Number(solidEl.value);
+  const op = Number(opEl.value);
+  const total = solid + reach;
+  const solidPct = (total > 0 ? (solid / total) * 100 : 0).toFixed(1) + '%';
+  const opacity = (op / 100).toFixed(2);
+
+  const root = document.documentElement.style;
+  root.setProperty('--hb-tb-pad', pad + 'px');
+  root.setProperty('--hb-blur', blur + 'px');
+  root.setProperty('--hb-total', total + 'px');
+  root.setProperty('--hb-solid-pct', solidPct);
+  root.setProperty('--hb-bg-opacity', opacity);
+
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  setText('ht-pad-val', pad + 'px');
+  setText('ht-blur-val', blur + 'px');
+  setText('ht-reach-val', reach + 'px');
+  setText('ht-solid-val', solid + 'px');
+  setText('ht-opacity-val', op + '%');
+
+  const out = document.getElementById('ht-css-output');
+  if (out) {
+    out.textContent =
+      `--hb-tb-pad: ${pad}px;\n` +
+      `--hb-blur: ${blur}px;\n` +
+      `--hb-total: ${total}px;\n` +
+      `--hb-solid-pct: ${solidPct};\n` +
+      `--hb-bg-opacity: ${opacity};\n` +
+      `(сплошная часть ${solid}px + размытие ${reach}px = ${total}px)`;
+  }
+
+  try {
+    localStorage.setItem('hbTestValues', JSON.stringify({ pad, blur, reach, solid, opacity: op }));
+  } catch (e) {}
+}
+
+/** Возвращает ползунки экрана «Тест» к значениям, согласованным с Sg 09.10.2026. */
+function htestReset() {
+  const defaults = { pad: 14, blur: 4, reach: 100, solid: 1, opacity: 35 };
+  const ids = { pad: 'ht-pad', blur: 'ht-blur', reach: 'ht-reach', solid: 'ht-solid', opacity: 'ht-opacity' };
+  Object.keys(defaults).forEach((key) => {
+    const el = document.getElementById(ids[key]);
+    if (el) el.value = defaults[key];
+  });
+  htestApply();
+}
+
+/** Копирует текущие подобранные значения (блок #ht-css-output) в буфер обмена. */
+function htestCopy() {
+  const out = document.getElementById('ht-css-output');
+  const btn = document.getElementById('ht-copy-btn');
+  if (!out) return;
+  const text = out.textContent;
+  const showCopied = () => {
+    if (!btn) return;
+    const old = btn.textContent;
+    btn.textContent = 'Скопировано ✓';
+    setTimeout(() => {
+      btn.textContent = old;
+    }, 1500);
+  };
+  const fallbackCopy = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      showCopied();
+    } catch (e) {}
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showCopied, fallbackCopy);
+  } else {
+    fallbackCopy();
+  }
 }
 
 // Всплывающее окно привязки/отвязки Telegram — открывается карандашом
@@ -11355,6 +11592,15 @@ function wireEvents() {
     notificationsObserver.disconnect();
     notificationsObserver = null;
   }
+
+  // Экран «Тест» (см. renderHeaderTestOverlay) пересоздаётся при каждом
+  // render() вместе со всем остальным — сразу после вставки в DOM
+  // применяем текущие значения ползунков к CSS-переменным, иначе до
+  // первого движения ползунка показывались бы его исходные атрибуты
+  // value, а не реально применённый эффект.
+  if (document.getElementById('ht-css-output')) {
+    htestApply();
+  }
 }
 
 // IntersectionObserver, следящий за карточками уведомлений на экране
@@ -12012,6 +12258,9 @@ async function handleAction(action, value) {
       return render();
     case 'show-support':
       state.infoOverlay = 'support';
+      return render();
+    case 'open-header-test':
+      state.infoOverlay = 'header-test';
       return render();
     case 'publish-draft': {
       const fullAddressField = document.getElementById('field-full-address');
