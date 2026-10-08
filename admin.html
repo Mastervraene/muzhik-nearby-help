@@ -744,7 +744,15 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 // (сузить RLS-политики / перевести админ-доступ на service_role Edge
 // Function) — см. аудит и предложение в чате.
 // =======================================================================
-const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1'; // теперь хранит настоящий токен сессии (не булев флаг)
+const ADMIN_SESSION_KEY = 'muzhik_admin_session_v1'; // хранит настоящий токен сессии (не булев флаг)
+// ПРАВКА 08.10.2026 (Sg): токен теперь в localStorage (раньше был в
+// sessionStorage и слетал при каждом закрытии вкладки/телефон выгружал
+// вкладку из памяти — админка разлогинивала слишком часто). Чтобы вечный
+// токен в более живучем хранилище не был риском, на сервере (все функции,
+// проверяющие adminSessionToken — см. ниже) добавлена проверка возраста
+// токена по admin_sessions.created_at: старше 24 часов — токен считается
+// недействительным (invalid_session), как будто его нет, и нужно войти
+// заново. Разлогин теперь раз в сутки, а не каждое закрытие вкладки.
 let adminSessionToken = null;
 
 // Тот же проект Supabase, что и в основном приложении (см. index.html →
@@ -5390,7 +5398,7 @@ function showApp() {
     }
   });
   document.getElementById('logout-btn').addEventListener('click', () => {
-    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    localStorage.removeItem(ADMIN_SESSION_KEY);
     location.reload();
   });
   document.getElementById('change-password-btn').addEventListener('click', openPasswordChangeModal);
@@ -5511,7 +5519,7 @@ async function handleLogin() {
     if (res.ok && data && data.ok && data.token) {
       clearLoginAttempts();
       adminSessionToken = data.token;
-      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      localStorage.setItem(ADMIN_SESSION_KEY, data.token);
       errBox.style.display = 'none';
       showApp();
       return;
@@ -5585,7 +5593,7 @@ async function handleSetupSubmit() {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data && data.ok && data.token) {
       adminSessionToken = data.token;
-      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      localStorage.setItem(ADMIN_SESSION_KEY, data.token);
       errBox.style.display = 'none';
       showApp();
       return;
@@ -5652,13 +5660,13 @@ async function submitPasswordChange() {
     const data = await res.json().catch(() => ({}));
     if (res.ok && data && data.ok && data.token) {
       adminSessionToken = data.token;
-      sessionStorage.setItem(ADMIN_SESSION_KEY, data.token);
+      localStorage.setItem(ADMIN_SESSION_KEY, data.token);
       closePasswordChangeModal();
       return;
     }
     if (data && data.error === 'invalid_session') {
       closePasswordChangeModal();
-      sessionStorage.removeItem(ADMIN_SESSION_KEY);
+      localStorage.removeItem(ADMIN_SESSION_KEY);
       location.reload();
       return;
     }
@@ -5672,8 +5680,8 @@ async function submitPasswordChange() {
   }
 }
 
-if (sessionStorage.getItem(ADMIN_SESSION_KEY)) {
-  adminSessionToken = sessionStorage.getItem(ADMIN_SESSION_KEY);
+if (localStorage.getItem(ADMIN_SESSION_KEY)) {
+  adminSessionToken = localStorage.getItem(ADMIN_SESSION_KEY);
   showApp();
 }
 </script>
