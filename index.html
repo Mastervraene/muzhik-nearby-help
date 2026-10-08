@@ -321,6 +321,29 @@ body {
   overflow-y: auto;
 }
 
+/* Необязательный эффект при переключении экрана свайпом (см.
+   wirePageSwipe/triggerSwipeAnim) — лёгкий въезд нового экрана сбоку,
+   откуда «пришёл» палец. Класс навешивается на #app (сам .screen внутри
+   него каждый render() пересоздаётся заново, поэтому анимация
+   проигрывается автоматически на свежей разметке). Обычная навигация
+   (клик по пункту меню, кнопке «Назад» и т.п.) эти классы не трогает —
+   там никакой анимации нет, экран просто меняется мгновенно, как и
+   раньше. */
+#app.swipe-anim-left .screen {
+  animation: screen-slide-in-left 0.22s ease-out;
+}
+#app.swipe-anim-right .screen {
+  animation: screen-slide-in-right 0.22s ease-out;
+}
+@keyframes screen-slide-in-left {
+  from { transform: translateX(28px); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes screen-slide-in-right {
+  from { transform: translateX(-28px); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
 /* ---------- Home / composer (главный экран как в чате) ---------- */
 
 .home-screen {
@@ -8223,24 +8246,43 @@ function pluralizeNew(n) {
 // клик по логотипу в шапке (см. data-action="go-home" у .brand-block в
 // renderTopbar). «Заявка» добавлена сюда же самым первым пунктом — страховка
 // для тех, кто не сможет/не поймёт, что по логотипу можно нажать.
-function renderAvatarMenu(user, unreadCount) {
+/**
+ * Пункты меню аватарки, которые ведут на ОТДЕЛЬНЫЙ ЭКРАН (а не на
+ * всплывающее окно вроде «Поддержки») — единый источник правды для
+ * самого меню (renderAvatarMenu) и для свайпа между страницами
+ * (см. wirePageSwipe): порядок свайпа — это ровно порядок активных у
+ * конкретного пользователя пунктов меню, без дублирования списка в
+ * двух местах (по просьбе Sg 09.10.2026 — «свайпы работают исключительно
+ * по тем пунктам меню, которые активны у пользователя»).
+ * @param {object} user
+ */
+function getNavPages(user) {
   // «На паузе» (master_status==='paused') — это уже одобренный мастер, у
   // которого истёк срок задания (см. renderMasterPanel и фоновый pg_cron
   // job expire-master-tasks): доступ к панели мастера и балансу остаётся,
   // просто новые заказы не приходят, пока он не пройдёт повторную проверку
   // (по явному решению Sg от 03.10.2026 — «Баланс» остаётся видимым).
   const hasMasterAccess = user.masterStatus === 'approved' || user.masterStatus === 'paused';
-  const items = [
-    { action: 'go-home', icon: '✍︎', label: 'Заявка' },
-    { action: 'go-orders', icon: '▤', label: 'Заказы' },
-    { action: 'go-profile', icon: '◍', label: 'Профиль' },
+  return [
+    { screen: 'home', action: 'go-home', icon: '✍︎', label: 'Заявка' },
+    { screen: 'orders', action: 'go-orders', icon: '▤', label: 'Заказы' },
+    { screen: 'profile', action: 'go-profile', icon: '◍', label: 'Профиль' },
     // «Панель мастера» и «Баланс» — только после одобрения заявки в
     // мастера (см. renderProfile/renderMasterPanel и submit-master-application).
-    ...(hasMasterAccess ? [{ action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' }] : []),
-    ...(hasMasterAccess ? [{ action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
-    { action: 'go-notifications', icon: '🔔', label: 'Уведомления', badge: unreadCount },
-    { action: 'show-support', icon: '🛟', label: 'Поддержка' },
+    ...(hasMasterAccess ? [{ screen: 'masterPanel', action: 'go-master-panel', icon: '🛠', label: 'Панель мастера' }] : []),
+    ...(hasMasterAccess ? [{ screen: 'workerBalance', action: 'go-worker-balance', icon: '💰', label: 'Баланс' }] : []),
+    { screen: 'notifications', action: 'go-notifications', icon: '🔔', label: 'Уведомления' },
   ];
+}
+
+function renderAvatarMenu(user, unreadCount) {
+  const items = getNavPages(user).map((p) =>
+    p.screen === 'notifications' ? { ...p, badge: unreadCount } : p
+  );
+  // «Поддержка» — всплывающее окно поверх текущего экрана, а не отдельная
+  // страница, поэтому в getNavPages (и в свайп между экранами) она не
+  // входит, но в самом меню остаётся обычным пунктом.
+  items.push({ action: 'show-support', icon: '🛟', label: 'Поддержка' });
   return `
     <div class="avatar-menu" id="avatar-menu">
       <div class="avatar-menu-header">
@@ -11291,6 +11333,7 @@ function wireEvents() {
   wireOnboardingSwipe();
   wirePhotoViewerSwipe();
   wireStoriesSwipe();
+  wirePageSwipe();
   if (state.screen === 'notifications') {
     wireNotificationsScreen();
   } else if (notificationsObserver) {
@@ -11706,6 +11749,104 @@ function wireStoriesSwipe() {
   stage.addEventListener('pointermove', onPointerMove);
   stage.addEventListener('pointerup', onPointerEnd);
   stage.addEventListener('pointercancel', onPointerEnd);
+}
+
+/**
+ * Горизонтальный свайп между «главными» экранами — теми же, что ведут
+ * отдельной страницей из меню аватарки (см. getNavPages): «Заявка» →
+ * «Заказы» → «Профиль» → [«Панель мастера» → «Баланс»] → «Уведомления».
+ * Пункты-попапы («Поддержка») в этот список не входят — по ним свайпом
+ * никуда не попасть, у них просто нет своего места в последовательности
+ * (по просьбе Sg 09.10.2026: «свайпы работают исключительно по тем пунктам
+ * меню, которые активны у пользователя»). Жест — тот же дискретный
+ * паттерн, что и у сторис (см. wireStoriesSwipe выше): ловим на .screen
+ * (там же, где обычный вертикальный скролл заказов/уведомлений), ось
+ * жеста определяем один раз по первому заметному движению и дальше не
+ * меняем, и только для горизонтальной оси при отпускании за порогом сразу
+ * переключаем на соседний экран — страница не «тащится» за пальцем в
+ * реальном времени, просто следующий экран подставляется сразу, с лёгкой
+ * анимацией въезда сбоку (необязательный эффект, см. triggerSwipeAnim/
+ * #app.swipe-anim-* в CSS).
+ */
+function wirePageSwipe() {
+  const screenEl = document.querySelector('.screen');
+  if (!screenEl) return;
+  // Свайп работает только на основных экранах вошедшего пользователя — не
+  // в черновике заявки (compose), не в карточке конкретного заказа
+  // (orderDetail) и не поверх открытого попапа/просмотра фото/сторис/карты,
+  // где этот же жест уже занят своим собственным смыслом.
+  const user = currentUser();
+  if (!user) return;
+  if (state.infoOverlay || state.photoViewer || state.storiesViewer || mapPickerOpenFor) return;
+  const pages = getNavPages(user).map((p) => p.screen);
+  const currentIndex = pages.indexOf(state.screen);
+  if (currentIndex === -1) return;
+
+  const TAP_SLOP = 8;
+  const SWIPE_THRESHOLD = 60;
+  let startX = null;
+  let startY = null;
+  let dragging = false;
+  let axis = null;
+
+  const onPointerDown = (e) => {
+    if (e.target.closest('[data-action], button, a, input, textarea, select')) return;
+    startX = e.clientX;
+    startY = e.clientY;
+    dragging = true;
+    axis = null;
+  };
+  const onPointerMove = (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (axis === null && (Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP)) {
+      // Ось определяем один раз и дальше не меняем — иначе обычный
+      // вертикальный скролл списка заказов на длинном движении мог бы
+      // внезапно «переключиться» на горизонтальный свайп середины жеста.
+      axis = Math.abs(dx) > Math.abs(dy) * 1.3 ? 'x' : 'y';
+    }
+  };
+  const onPointerEnd = (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    dragging = false;
+    const wasHorizontal = axis === 'x';
+    axis = null;
+    if (!wasHorizontal || Math.abs(dx) < SWIPE_THRESHOLD) return;
+    const dir = dx < 0 ? 1 : -1; // влево — следующий экран, вправо — предыдущий
+    const nextScreen = pages[currentIndex + dir];
+    if (!nextScreen) return; // край списка — дальше свайпать некуда
+    avatarMenuOpen = false;
+    triggerSwipeAnim(dir);
+    go(nextScreen);
+  };
+
+  screenEl.addEventListener('pointerdown', onPointerDown);
+  screenEl.addEventListener('pointermove', onPointerMove);
+  screenEl.addEventListener('pointerup', onPointerEnd);
+  screenEl.addEventListener('pointercancel', onPointerEnd);
+}
+
+let swipeAnimClearTimer = null;
+/**
+ * Необязательный визуальный эффект при переключении страницы свайпом —
+ * лёгкий въезд нового экрана сбоку (см. #app.swipe-anim-left/right и
+ * @keyframes screen-slide-in-* в CSS). Класс вешаем на #app — он, в
+ * отличие от .screen внутри него, НЕ пересоздаётся при render() (только
+ * его innerHTML), поэтому следующий render() внутри go() ниже подхватывает
+ * анимацию сам, без необходимости лезть в разметку каждого renderX().
+ */
+function triggerSwipeAnim(direction) {
+  const appEl = document.getElementById('app');
+  if (!appEl) return;
+  appEl.classList.remove('swipe-anim-left', 'swipe-anim-right');
+  void appEl.offsetWidth; // форсируем reflow, чтобы повторный свайп в ту же сторону переиграл анимацию с нуля
+  appEl.classList.add(direction === 1 ? 'swipe-anim-left' : 'swipe-anim-right');
+  clearTimeout(swipeAnimClearTimer);
+  swipeAnimClearTimer = setTimeout(() => {
+    appEl.classList.remove('swipe-anim-left', 'swipe-anim-right');
+  }, 260);
 }
 
 async function handleAction(action, value) {
