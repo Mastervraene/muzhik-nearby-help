@@ -1640,6 +1640,40 @@ body {
   justify-content: center;
 }
 
+/* ---------- Подсказка «заказ ушёл с главной» (см. renderOrderCreatedTipOverlay) ----------
+   Стрелка-указатель на аватарку в шапке — отдельный элемент НАД попапом
+   (z-index выше .onboarding-overlay), выровненный по той же колонке
+   var(--max-width), что и сама шапка (.topbar), поэтому на широких экранах
+   не «уезжает» от реальной аватарки вбок. */
+.order-tip-pointer-wrap {
+  position: fixed;
+  top: 6px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 101;
+}
+
+.order-tip-pointer {
+  width: 100%;
+  max-width: var(--max-width);
+  text-align: right;
+  padding-right: 22px;
+  box-sizing: border-box;
+  font-size: 30px;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  animation: order-tip-bounce 1.1s ease-in-out infinite;
+}
+
+@keyframes order-tip-bounce {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(5px, -5px); }
+}
+
 /* ---------- Полноэкранный просмотр фото (аватарка, вложения заказа) ---------- */
 
 .photo-viewer-stage {
@@ -5347,6 +5381,42 @@ function getTelegramLinkLimitState() {
   };
 }
 
+// Если человек открыл попап привязки Telegram (см. open-telegram-overlay) и
+// страница перезагрузилась посреди процедуры (вышел в сам Telegram и
+// вернулся, вкладку выгрузило из памяти телефона и т.п.) — попап должен сам
+// открыться заново при следующем заходе, а не заставлять искать «карандаш» в
+// профиле с нуля (просьба Sg 08.10.2026: «продумай... чтобы при повторном
+// открытии можно было продолжить процедуру, а не начинать с нуля»). Сам
+// запрос кода и его кулдаун и так уже переживают перезагрузку (см.
+// TELEGRAM_LINK_ATTEMPTS_KEY выше) — этот флаг только про то, открыт ли
+// попап, см. восстановление в boot().
+const TELEGRAM_LINK_OVERLAY_OPEN_KEY = 'muzhik_tg_overlay_open_v1';
+
+function markTelegramOverlayOpen() {
+  try {
+    localStorage.setItem(TELEGRAM_LINK_OVERLAY_OPEN_KEY, '1');
+  } catch {
+    // localStorage недоступен (приватный режим и т.п.) — просто не
+    // восстановим попап автоматически после перезагрузки.
+  }
+}
+
+function clearTelegramOverlayOpen() {
+  try {
+    localStorage.removeItem(TELEGRAM_LINK_OVERLAY_OPEN_KEY);
+  } catch {
+    // см. markTelegramOverlayOpen
+  }
+}
+
+function wasTelegramOverlayOpen() {
+  try {
+    return localStorage.getItem(TELEGRAM_LINK_OVERLAY_OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * @param {string} rawCode — код, который человек ввёл на сайте (получил от бота)
  *
@@ -5398,6 +5468,9 @@ async function submitTelegramLinkCode(rawCode) {
     });
     const idx = cache.users.findIndex((u) => u.id === user.id);
     if (idx >= 0) cache.users[idx] = { ...cache.users[idx], telegramId: data.telegramId };
+    // Привязка удалась — попап восстанавливать после перезагрузки больше не
+    // нужно (см. markTelegramOverlayOpen/wasTelegramOverlayOpen).
+    clearTelegramOverlayOpen();
     if (!wasLoggedIn) {
       // Как и у phone-gate — вход по Telegram-коду тоже теперь ведёт на
       // обязательный экран пароля, а не сразу выдаёт сессию.
@@ -5489,6 +5562,30 @@ function renderTelegramLinkCard(purposeText) {
       <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>`
           : ''
       }
+    </div>
+  `;
+}
+
+/**
+ * Короткое приглашение привязать Telegram — просто текст и синяя кнопка
+ * «Подключить», без самой формы ввода кода (см. renderTelegramLinkCard
+ * выше). По клику открывается тот же попап привязки, что и по карандашу в
+ * профиле/панели мастера (см. data-action="open-telegram-overlay",
+ * renderTelegramOverlay) — один и тот же блок всплывает и работает из
+ * разных мест сайта, а не заводится заново в каждом (просьба Sg 08.10.2026).
+ * Если Telegram уже подключён — просто короткая строка статуса, кнопки нет.
+ * @param {string} purposeText — например, "получать уведомления о заказе"
+ */
+function renderTelegramLinkPrompt(purposeText) {
+  const user = currentUser();
+  if (!user) return '';
+  if (user.telegramId) {
+    return `<p class="order-meta"><span>✓ Telegram подключён — уведомления приходят туда</span></p>`;
+  }
+  return `
+    <div class="field-card">
+      <p class="order-meta">Привяжите телеграм, чтобы ${escapeHtml(purposeText)}</p>
+      <button type="button" class="primary-button" data-action="open-telegram-overlay">Подключить</button>
     </div>
   `;
 }
@@ -5701,11 +5798,15 @@ async function publishDraftInner() {
     createNotification(order.customerId, 'customer', order.id, 'order_published')
   );
 
-  // Сначала переключаем экран (иначе showToast() вызовет render() для ещё
-  // активного экрана 'compose' с уже обнулённым state.draft — исключение).
+  // Заказ дальше живёт только на экране заказа/в «Заказы» — с главного
+  // экрана он уходит сразу. Вместо обычного тихого тоста — поп-ап со
+  // стрелкой на аватарку (см. renderOrderCreatedTipOverlay), объясняющий,
+  // где теперь искать статус заказа, плюс приглашение привязать Telegram
+  // (просьба Sg 08.10.2026). Текст о модерации («обычно это быстро...»)
+  // теперь внутри самого поп-апа, отдельный showToast для него не нужен.
   state.draft = null;
+  state.infoOverlay = 'order-created';
   go('orderDetail', { openOrderId: order.id });
-  showToast('Заявка отправлена и проверяется — обычно это быстро. Мастера увидят её сразу после одобрения.');
 }
 
 // ---------------------------------------------------------------------
@@ -8252,17 +8353,29 @@ function diagnosisLogHtml(order) {
  * добавляются через requestClarification в admin.html, ответы — через
  * submitClarificationAnswer выше.
  */
-function clarificationHistoryHtml(order) {
+/**
+ * Единый раскрывающийся блок «Техническая информация» в самом конце карточки
+ * заказа, под кнопкой «К списку заказов» (просьба Sg 08.10.2026). Раньше
+ * здесь была отдельная «История уточнений», а таймлайн статусов (Черновик →
+ * На проверке → …) — ещё одним отдельным блоком прямо в теле карточки;
+ * теперь то и другое — чисто техническая, редко нужная информация — живёт
+ * вместе в одном <details> (нативном, без своего состояния в state). Само
+ * активное уточнение с полем ответа по-прежнему отдельный выделенный блок
+ * внутри actions (clarification_requested) и сюда не входит — чтобы не
+ * теряться среди старых раундов истории.
+ */
+function technicalInfoHtml(order) {
   const history = orderClarificationHistory(order);
-  if (!history.length) return '';
-  // Раскрывающийся список (нативный <details>, без собственного состояния
-  // в state) — перенесено в самый конец карточки заказа, под кнопку «К
-  // списку заказов» (просьба Sg 08.10.2026): само активное уточнение с
-  // полем ответа живёт отдельным выделенным блоком внутри actions
-  // (clarification_requested) и не должно теряться среди старых раундов.
-  return `
-    <details class="field-card" style="margin-top:12px;">
-      <summary class="order-meta" style="cursor:pointer;"><b>История уточнений</b></summary>
+  const timelineHtml = `
+    <div class="timeline">
+      ${order.timeline
+        .map((t) => `<div class="timeline-item"><b>${STATUS_LABELS[t.status]}</b> — ${new Date(t.at).toLocaleString('ru-RU')}</div>`)
+        .join('')}
+    </div>
+  `;
+  const historyHtml = history.length
+    ? `
+      <p class="order-meta" style="margin-top:12px;"><b>История уточнений</b></p>
       ${history
         .map(
           (c) => `
@@ -8277,6 +8390,13 @@ function clarificationHistoryHtml(order) {
         </div>`
         )
         .join('')}
+    `
+    : '';
+  return `
+    <details class="field-card" style="margin-top:12px;">
+      <summary class="order-meta" style="cursor:pointer;"><b>Техническая информация</b></summary>
+      ${timelineHtml}
+      ${historyHtml}
     </details>
   `;
 }
@@ -8600,6 +8720,31 @@ function renderOrders() {
   const user = currentUser();
   const myOrders = getOrders().filter((o) => o.customerId === state.currentUserId);
   const hasSkills = user.skills.length > 0;
+
+  // Пока человек не мастер (нет ни одного навыка) — блоки «Заказы, которые я
+  // выполняю» и «Подходит вам рядом» ему попросту не нужны: это для
+  // исполнителей (просьба Sg от 08.10.2026). Показываем только «Мои заказы»,
+  // и он всегда развёрнут сразу, без дополнительного нажатия — добавляем его
+  // в expandedOrdersSections (а не рисуем мимо общего renderOrdersBlock),
+  // чтобы кнопка сортировки/фильтра и счётчик «Завершено ХХ» продолжали
+  // работать как обычно.
+  if (!hasSkills) {
+    expandedOrdersSections.add('my');
+    const myOrdersSorted = applyOrdersBlockSettings(myOrders, 'my');
+    const myArchivedCount = myOrders.filter((o) => ARCHIVED_ORDER_STATUSES.includes(o.status)).length;
+    const myBodyHtml = myOrdersSorted.length
+      ? myOrdersSorted.map((o) => orderCardHtml(o, { viewer: 'customer' })).join('')
+      : myOrders.length
+      ? `<div class="empty-state">Все заказы скрыты фильтром статусов. <button type="button" style="border:none;background:none;padding:0;font:inherit;color:var(--accent);font-weight:600;text-decoration:underline;cursor:pointer;" data-action="reset-order-sort" data-value="my" onclick="event.stopPropagation()">Сбросить фильтр</button></div>`
+      : `<div class="empty-state">Вы ещё не публиковали заказы</div>`;
+    return `
+      <div class="screen">
+        ${renderOrdersBlock('Мои заказы', 'my', myBodyHtml, { archivedCount: myArchivedCount, count: myOrdersSorted.length })}
+      </div>
+      ${ordersSortModalOpenFor ? renderOrdersSortModal(ordersSortModalOpenFor) : ''}
+    `;
+  }
+
   // В режиме Supabase список кандидатов считает и фильтрует сервер (Edge
   // Function available-orders, см. refreshAvailableOrders) — здесь просто
   // читаем уже готовый результат из кэша. В демо-режиме без Supabase
@@ -9121,20 +9266,15 @@ function renderOrderDetail() {
         ${diagnosisLogHtml(order)}
         ${partPurchaseHistoryHtml(order)}
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
-        <div class="timeline">
-          ${order.timeline
-            .map((t) => `<div class="timeline-item"><b>${STATUS_LABELS[t.status]}</b> — ${new Date(t.at).toLocaleString('ru-RU')}</div>`)
-            .join('')}
-        </div>
         <div style="margin-top:12px;">${actions}</div>
       </div>
       ${
         isCustomer
-          ? `<div style="margin-top:12px;">${renderTelegramLinkCard('получать уведомления о статусе этого заказа')}</div>`
+          ? `<div style="margin-top:12px;">${renderTelegramLinkPrompt('получать уведомления о статусе этого заказа')}</div>`
           : ''
       }
       <button class="secondary-button" data-action="go-orders">← К списку заказов</button>
-      ${clarificationHistoryHtml(order)}
+      ${technicalInfoHtml(order)}
     </div>
   `;
 }
@@ -9676,7 +9816,7 @@ function render() {
         <div class="section-title">Нужен номер телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -9707,7 +9847,7 @@ function render() {
     ${renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -10114,6 +10254,39 @@ function renderTelegramOverlay() {
           `
               : ''
           }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Подсказка сразу после отправки заказа (см. publishDraftInner) — заказ
+// уходит с главного экрана и дальше доступен только через меню (аватар в
+// шапке) → «Заказы» (просьба Sg 08.10.2026: нужен явный поп-ап со стрелкой
+// на аватарку, иначе непонятно, куда заказ делся). Стрелка — отдельный
+// бьющийся элемент над попапом (см. .order-tip-pointer, CSS), а не внутри
+// карточки: сама карточка — обычный нижний лист (.onboarding-overlay), как
+// и остальные попапы сайта, и выровнена по центру с шапкой общим
+// var(--max-width), так что стрелка в правом верхнем углу указывает ровно
+// туда, где на самом деле аватарка. Тут же — приглашение привязать Telegram
+// (та же кнопка «Подключить», что и в карточке заказа, см.
+// renderTelegramLinkPrompt) — один из «нескольких мест», откуда всплывает
+// общий попап привязки.
+function renderOrderCreatedTipOverlay() {
+  const user = currentUser();
+  if (!user) return '';
+  return `
+    <div class="order-tip-pointer-wrap" aria-hidden="true"><span class="order-tip-pointer">↗</span></div>
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Заявка отправлена</h2>
+          <p>Заказ проверяется — обычно это быстро, мастера увидят его сразу после одобрения.</p>
+          <p><b>Заказ ушёл с главного экрана</b> — смотреть его статус и переписку можно в любой момент через меню: аватар в правом верхнем углу ↗ → «Заказы».</p>
+          ${renderTelegramLinkPrompt('сразу получать уведомления о статусе этого заказа')}
+          <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
     </div>
@@ -10862,10 +11035,19 @@ function wireEvents() {
         }
         // Черновик текста ответа (см. clarificationAnswerDrafts) — иначе
         // render() после сохранения фото стирал бы уже набранный текст.
+        //
+        // Высота поля (см. autosizeComposerTextarea) — раньше подстраивалась
+        // под текст только у композера нового заказа, это же поле оставалось
+        // фиксированной одной строкой (24px, см. .composer-textarea), из-за
+        // чего уже набранный черновик ответа не был виден целиком (жалоба Sg
+        // 08.10.2026). Подгоняем высоту сразу при открытии экрана (на случай
+        // уже непустого черновика) и дальше при каждом вводе.
         const clarAnswerEl = document.getElementById(`clarification-answer-${openOrder.id}`);
         if (clarAnswerEl) {
+          autosizeComposerTextarea(clarAnswerEl);
           clarAnswerEl.addEventListener('input', () => {
             clarificationAnswerDrafts[openOrder.id] = clarAnswerEl.value;
+            autosizeComposerTextarea(clarAnswerEl);
           });
         }
       }
@@ -11451,6 +11633,7 @@ async function handleAction(action, value) {
     }
 
     case 'open-telegram-overlay':
+      markTelegramOverlayOpen();
       state.infoOverlay = 'telegram';
       return render();
     case 'unlink-telegram':
@@ -11532,6 +11715,7 @@ async function handleAction(action, value) {
         phoneVerifyState = null;
       }
       if (state.infoOverlay === 'phone') profilePhoneEditOpen = false;
+      if (state.infoOverlay === 'telegram') clearTelegramOverlayOpen();
       state.infoOverlay = null;
       return render();
     case 'dismiss-onboarding-forever':
@@ -11860,6 +12044,18 @@ async function boot() {
   // шапке. Картинка в этой карточке — реальная карта зоны покрытия
   // мастеров (см. renderOnboardingOverlay).
   state.infoOverlay = currentUser() || wasOnboardingDismissed() ? null : 'short';
+
+  // Восстановление попапа привязки Telegram, если страница перезагрузилась
+  // посреди процедуры (см. markTelegramOverlayOpen/wasTelegramOverlayOpen) —
+  // просьба Sg 08.10.2026, чтобы не «начинать с нуля» после возврата из
+  // самого Telegram. Ниже может ещё переопределиться оплатой — у неё
+  // приоритет выше (человек вернулся по конкретной ссылке с оплаты).
+  {
+    const bootUser = currentUser();
+    if (state.infoOverlay === null && bootUser && !bootUser.telegramId && wasTelegramOverlayOpen()) {
+      state.infoOverlay = 'telegram';
+    }
+  }
 
   // Возврат с оплаты T-Bank — SuccessURL с ?paid_order=<id> или FailURL с
   // ?failed_order=<id> (см. create-payment.ts) — показываем баннер поверх
