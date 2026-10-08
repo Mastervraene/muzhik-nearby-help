@@ -319,6 +319,13 @@ body {
   padding: 16px;
   padding-bottom: 24px;
   overflow-y: auto;
+  /* pan-y — отдаём браузеру только вертикальный скролл нативно, горизонтальную
+     ось оставляем под управление wirePageSwipe (иначе на части мобильных
+     браузеров обычный горизонтальный драг по контенту может интерпретироваться
+     как жест навигации по истории). Полностью не спасает от свайпа-назад,
+     начатого у самого края экрана, — это уже решается отступом от края в
+     самом wirePageSwipe. */
+  touch-action: pan-y;
 }
 
 /* Необязательный эффект при переключении экрана свайпом (см.
@@ -11784,6 +11791,15 @@ function wirePageSwipe() {
 
   const TAP_SLOP = 8;
   const SWIPE_THRESHOLD = 60;
+  // Жест, начатый совсем у края экрана, не ловим вовсе — именно в этой
+  // полосе мобильные браузеры (Safari, Chrome/Yandex на Android) перехватывают
+  // горизонтальный драг под СВОЙ жест «назад/вперёд по истории» ещё до того,
+  // как события вообще доходят до страницы, так что наш preventDefault тут
+  // бессилен (см. баг 09.10.2026: свайп от левого края уводил на другую
+  // страницу сайта вместо переключения экрана). Поэтому просто не начинаем
+  // свой жест в этой зоне — пусть эта узкая полоса целиком остаётся
+  // нативному жесту браузера, а наш свайп работает от центра экрана.
+  const EDGE_GUARD = 32;
   let startX = null;
   let startY = null;
   let dragging = false;
@@ -11791,6 +11807,7 @@ function wirePageSwipe() {
 
   const onPointerDown = (e) => {
     if (e.target.closest('[data-action], button, a, input, textarea, select')) return;
+    if (e.clientX < EDGE_GUARD || e.clientX > window.innerWidth - EDGE_GUARD) return;
     startX = e.clientX;
     startY = e.clientY;
     dragging = true;
