@@ -303,6 +303,20 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   line-height: 16px; text-align: center; box-shadow: 0 0 0 2px var(--gray-0);
 }
 
+/* ---------- Вкладка «Мастера» — короткая строка поиска + маленькие кнопки
+   М/К (просьба Sg 08.10.2026: убрать старый select, сделать компактную
+   строку поиск/М/К/сортировка-по-дате/фильтр). .role-btn — те же размеры,
+   что .sort-btn, но квадратная (под букву, не под иконку-круг). */
+#masters-search.search-sm { width: 120px; flex: none; }
+.role-btn {
+  flex: none; border: none; background: var(--gray-100); color: var(--gray-600);
+  width: 30px; height: 30px; border-radius: 8px; font-size: 13px; font-weight: 800;
+  cursor: pointer; line-height: 1;
+}
+.role-btn:hover { background: var(--gray-200); }
+.role-btn.active { background: var(--accent); color: #fff; }
+.role-btn.active:hover { background: var(--accent-strong); }
+
 /* ---------- Карта ---------- */
 #map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
 .map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
@@ -501,17 +515,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 
   <div class="tab-panel" id="panel-masters">
     <div class="toolbar">
-      <select id="masters-filter">
-        <option value="all">Все пользователи</option>
-        <option value="workers" selected>Только мастера</option>
-        <option value="applicants">Заявки в мастера</option>
-        <option value="task_review">Ждут подтверждения задания</option>
-        <option value="paused">На паузе (задание)</option>
-        <option value="account_paused">На паузе (смена номера)</option>
-        <option value="phone_flag">Флаг: часто меняет номер</option>
-        <option value="blocked">Заблокированные</option>
-      </select>
-      <input type="text" id="masters-search" placeholder="Поиск по любому полю…" />
+      <input type="text" id="masters-search" class="search-sm" placeholder="Поиск…" />
+      <button type="button" class="role-btn" id="masters-role-m" title="Только мастера">М</button>
+      <button type="button" class="role-btn" id="masters-role-k" title="Только клиенты">К</button>
+      <button type="button" class="sort-btn" id="masters-date-sort" aria-label="Сортировка по дате регистрации" title="Сортировка по дате регистрации: выкл"></button>
+      <button type="button" class="sort-btn" id="masters-sort-toggle" aria-label="Фильтр" title="Фильтр"></button>
       <span class="count-hint" id="masters-count"></span>
     </div>
     <div id="masters-list"></div>
@@ -596,6 +604,23 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <div class="admin-modal-actions">
         <button type="button" class="btn-sm ghost" id="orders-sort-reset">Сбросить всё</button>
         <button type="button" class="btn-sm primary" id="orders-sort-done">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="admin-modal-overlay" id="masters-sort-overlay" style="display:none;" data-action="close-masters-sort">
+    <div class="admin-modal-card" onclick="event.stopPropagation()">
+      <div class="admin-modal-head">
+        <h2 class="heading">Фильтр мастеров</h2>
+        <button type="button" class="admin-modal-close" id="masters-sort-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="admin-modal-body">
+        <p class="form-section-label" style="margin-top:0;">Показывать (можно несколько; ничего не выбрано — всех, с учётом «М»/«К» выше)</p>
+        <div class="toggle-pills" id="masters-sort-flags"></div>
+      </div>
+      <div class="admin-modal-actions">
+        <button type="button" class="btn-sm ghost" id="masters-sort-reset">Сбросить всё</button>
+        <button type="button" class="btn-sm primary" id="masters-sort-done">Готово</button>
       </div>
     </div>
   </div>
@@ -1646,8 +1671,34 @@ let ordersShowArchived = false;
 let ordersSearchQuery = '';
 let ordersGroupByCustomer = false;
 let collapsedCustomerGroups = new Set(); // id заказчиков со свёрнутой группой (по умолчанию все развёрнуты)
-let mastersFilter = 'workers';
+// Новая панель вкладки «Мастера» (просьба Sg 08.10.2026, по образцу
+// «Заказы»): вместо одного select'а — быстрые кнопки «М»/«К» (роль),
+// кнопка сортировки по дате регистрации (3 положения) и кнопка «Фильтр»
+// с мультивыбором остальных флагов (как orders-sort-overlay).
+let mastersRoleFilter = 'workers'; // 'workers' | 'clients' | null (null = все)
+let mastersStatusFilters = new Set(); // applicants/task_review/paused/account_paused/phone_flag/blocked
+let mastersDateSort = 'off'; // 'off' | 'desc' | 'asc' (по created_at)
 let mastersSearchQuery = '';
+const MASTERS_FLAG_KEYS = ['applicants', 'task_review', 'paused', 'account_paused', 'phone_flag', 'blocked'];
+const MASTERS_FLAG_LABELS = {
+  applicants: 'Заявки в мастера',
+  task_review: 'Ждут подтверждения задания',
+  paused: 'На паузе (задание)',
+  account_paused: 'На паузе (смена номера)',
+  phone_flag: 'Флаг: часто меняет номер',
+  blocked: 'Заблокированные',
+};
+function userMatchesMastersFlag(u, key) {
+  switch (key) {
+    case 'applicants': return u.masterStatus === 'pending';
+    case 'task_review': return u.masterStatus === 'approved' && Boolean(u.masterTaskSubmittedAt);
+    case 'paused': return u.masterStatus === 'paused';
+    case 'account_paused': return Boolean(u.accountPaused);
+    case 'phone_flag': return Boolean(u.phoneChangeFlag);
+    case 'blocked': return Boolean(u.blocked);
+    default: return false;
+  }
+}
 let openOrderId = null;
 let openMasterId = null;
 // Какие карточки заказов показывают развёрнутую историю уточнений (см.
@@ -2883,23 +2934,28 @@ function wireOrderForm(o) {
 // -----------------------------------------------------------------------
 // Вкладка «Мастера»
 // -----------------------------------------------------------------------
+function applyMastersFilters(source) {
+  let list = source;
+  if (mastersRoleFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
+  else if (mastersRoleFilter === 'clients') list = list.filter((u) => !u.availableAsWorker);
+  if (mastersStatusFilters.size) {
+    list = list.filter((u) => [...mastersStatusFilters].some((key) => userMatchesMastersFlag(u, key)));
+  }
+  return list;
+}
+
 function renderMasters() {
-  let list = allUsers;
-  if (mastersFilter === 'workers') list = list.filter((u) => u.availableAsWorker);
-  else if (mastersFilter === 'applicants') list = list.filter((u) => u.masterStatus === 'pending');
-  else if (mastersFilter === 'task_review') list = list.filter((u) => u.masterStatus === 'approved' && u.masterTaskSubmittedAt);
-  // 'paused' раньше был в select, но не обрабатывался здесь (падал в общий
-  // список без фильтра) — попутно починено при добавлении task_review.
-  else if (mastersFilter === 'paused') list = list.filter((u) => u.masterStatus === 'paused');
-  // Отдельная пауза — за частую смену номера телефона (см. dbUserToUser,
-  // триггер log_user_contact_change) — не путать с 'paused' выше.
-  else if (mastersFilter === 'account_paused') list = list.filter((u) => u.accountPaused);
-  else if (mastersFilter === 'phone_flag') list = list.filter((u) => u.phoneChangeFlag);
-  else if (mastersFilter === 'blocked') list = list.filter((u) => u.blocked);
+  let list = applyMastersFilters(allUsers);
   const q = mastersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((u) => userSearchHaystack(u).includes(q));
+  if (mastersDateSort === 'desc') {
+    list = [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } else if (mastersDateSort === 'asc') {
+    list = [...list].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
 
   document.getElementById('masters-count').textContent = `${list.length} чел.`;
+  updateMastersToolbar();
   const container = document.getElementById('masters-list');
   if (!list.length) {
     container.innerHTML = '<div class="empty-state">Никого не найдено</div>';
@@ -4479,6 +4535,85 @@ function updateOrdersSortButtonLabel() {
   }
 }
 
+// ---------- Вкладка «Мастера» — модалка «Фильтр» + тулбар (М/К/дата) ----------
+// По образцу orders-sort-overlay выше: кнопка-иконка (.sort-btn) открывает
+// модалку с мультивыбором остальных флагов (applicants/task_review/paused/
+// account_paused/phone_flag/blocked), счётчик на пилюле — сколько всего
+// пользователей сейчас под этим флагом (без учёта М/К и текста поиска).
+function renderMastersSortModal() {
+  const el = document.getElementById('masters-sort-flags');
+  const counts = {};
+  allUsers.forEach((u) => {
+    MASTERS_FLAG_KEYS.forEach((key) => {
+      if (userMatchesMastersFlag(u, key)) counts[key] = (counts[key] || 0) + 1;
+    });
+  });
+  el.innerHTML = MASTERS_FLAG_KEYS
+    .map((key) => {
+      const count = counts[key] || 0;
+      return `<button type="button" class="toggle-pill ${mastersStatusFilters.has(key) ? 'active' : ''} ${count ? '' : 'is-empty'}" data-flag="${key}">${escapeHtml(MASTERS_FLAG_LABELS[key])}<span class="toggle-pill-count">${count}</span></button>`;
+    })
+    .join('');
+  el.querySelectorAll('[data-flag]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      toggleSetValue(mastersStatusFilters, btn.dataset.flag);
+      renderMastersSortModal();
+      renderMasters();
+    });
+  });
+  updateMastersToolbar();
+}
+
+function openMastersSortModal() {
+  document.getElementById('masters-sort-overlay').style.display = 'flex';
+  renderMastersSortModal();
+}
+function closeMastersSortModal() {
+  document.getElementById('masters-sort-overlay').style.display = 'none';
+}
+
+// Состояние кнопок тулбара «Мастера»: активность М/К, иконка/подсказка
+// кнопки даты (3 положения), бейдж-счётчик и подсветка кнопки «Фильтр».
+function updateMastersToolbar() {
+  const mBtn = document.getElementById('masters-role-m');
+  const kBtn = document.getElementById('masters-role-k');
+  if (mBtn) mBtn.classList.toggle('active', mastersRoleFilter === 'workers');
+  if (kBtn) kBtn.classList.toggle('active', mastersRoleFilter === 'clients');
+
+  const dateBtn = document.getElementById('masters-date-sort');
+  if (dateBtn) {
+    const iconByState = { off: '↕', desc: '↓', asc: '↑' };
+    const titleByState = {
+      off: 'Сортировка по дате регистрации: выкл',
+      desc: 'Сортировка по дате регистрации: сначала новые',
+      asc: 'Сортировка по дате регистрации: сначала старые',
+    };
+    dateBtn.innerHTML = `<span style="font-size:15px;font-weight:700;">${iconByState[mastersDateSort]}</span>`;
+    dateBtn.title = titleByState[mastersDateSort];
+    dateBtn.setAttribute('aria-label', titleByState[mastersDateSort]);
+    dateBtn.classList.toggle('active', mastersDateSort !== 'off');
+  }
+
+  const filterBtn = document.getElementById('masters-sort-toggle');
+  if (filterBtn && !filterBtn.dataset.filled) {
+    filterBtn.innerHTML = ICON_SORT + '<span class="sort-btn-badge" id="masters-sort-badge" style="display:none;"></span>';
+    filterBtn.dataset.filled = '1';
+  }
+  if (filterBtn) {
+    filterBtn.classList.toggle('active', mastersStatusFilters.size > 0);
+    const badge = document.getElementById('masters-sort-badge');
+    if (badge) {
+      const count = applyMastersFilters(allUsers).length;
+      if (count > 0) {
+        badge.textContent = String(count);
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  }
+}
+
 function renderMapNote() {
   const slot = document.getElementById('map-note-slot');
   if (!YANDEX_MAPS_JS_API_KEY) {
@@ -5000,11 +5135,10 @@ window.goToOrderCard = function (orderId) {
 };
 
 window.goToMasterCard = function (userId) {
-  mastersFilter = 'all';
+  mastersRoleFilter = null;
+  mastersStatusFilters.clear();
   mastersSearchQuery = '';
-  const filterSel = document.getElementById('masters-filter');
   const searchInput = document.getElementById('masters-search');
-  if (filterSel) filterSel.value = 'all';
   if (searchInput) searchInput.value = '';
   openMasterId = userId;
   activateTab('masters');
@@ -5051,8 +5185,28 @@ function showApp() {
     adminTasksShowResolved = !adminTasksShowResolved;
     renderAdminTasks();
   });
-  document.getElementById('masters-filter').addEventListener('change', (e) => {
-    mastersFilter = e.target.value;
+  document.getElementById('masters-role-m').addEventListener('click', () => {
+    mastersRoleFilter = mastersRoleFilter === 'workers' ? null : 'workers';
+    renderMasters();
+  });
+  document.getElementById('masters-role-k').addEventListener('click', () => {
+    mastersRoleFilter = mastersRoleFilter === 'clients' ? null : 'clients';
+    renderMasters();
+  });
+  document.getElementById('masters-date-sort').addEventListener('click', () => {
+    mastersDateSort = mastersDateSort === 'off' ? 'desc' : mastersDateSort === 'desc' ? 'asc' : 'off';
+    renderMasters();
+  });
+  document.getElementById('masters-sort-toggle').addEventListener('click', openMastersSortModal);
+  document.getElementById('masters-sort-close').addEventListener('click', closeMastersSortModal);
+  document.getElementById('masters-sort-done').addEventListener('click', closeMastersSortModal);
+  document.getElementById('masters-sort-overlay').addEventListener('click', (e) => {
+    if (e.target.dataset.action === 'close-masters-sort') closeMastersSortModal();
+  });
+  wireModalSwipeToClose(document.querySelector('#masters-sort-overlay .admin-modal-card'), closeMastersSortModal);
+  document.getElementById('masters-sort-reset').addEventListener('click', () => {
+    mastersStatusFilters.clear();
+    renderMastersSortModal();
     renderMasters();
   });
   document.getElementById('masters-search').addEventListener('input', (e) => {
