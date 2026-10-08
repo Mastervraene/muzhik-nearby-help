@@ -11804,9 +11804,34 @@ function wirePageSwipe() {
   let startY = null;
   let dragging = false;
   let axis = null;
+  let clickGuardTimer = null;
+
+  // Жест теперь ловим ВЕЗДЕ, включая кнопки/поля/чипы (раньше здесь стояла
+  // проверка e.target.closest('[data-action], button, a, input, textarea,
+  // select') и жест вообще не начинал отслеживаться — а на экране «Заявка»
+  // кнопками и полями занята почти вся площадь, поэтому свайп там толком не
+  // работал). Простой тап по кнопке по-прежнему не задевается — ниже мы
+  // гасим клик только если движение уже однозначно определилось как
+  // горизонтальный драг, а не просто палец чуть дрогнул при нажатии.
+  const suppressNextClick = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    disarmClickGuard();
+  };
+  function disarmClickGuard() {
+    clearTimeout(clickGuardTimer);
+    screenEl.removeEventListener('click', suppressNextClick, true);
+  }
+  function armClickGuard() {
+    // Ставим перехватчик клика ровно на один раз и снимаем его по таймеру,
+    // если клика так и не случилось (жест закончился над пустым местом) —
+    // иначе забытый обработчик мог бы случайно съесть следующий обычный тап.
+    screenEl.addEventListener('click', suppressNextClick, true);
+    clearTimeout(clickGuardTimer);
+    clickGuardTimer = setTimeout(disarmClickGuard, 500);
+  }
 
   const onPointerDown = (e) => {
-    if (e.target.closest('[data-action], button, a, input, textarea, select')) return;
     if (e.clientX < EDGE_GUARD || e.clientX > window.innerWidth - EDGE_GUARD) return;
     startX = e.clientX;
     startY = e.clientY;
@@ -11822,6 +11847,16 @@ function wirePageSwipe() {
       // вертикальный скролл списка заказов на длинном движении мог бы
       // внезапно «переключиться» на горизонтальный свайп середины жеста.
       axis = Math.abs(dx) > Math.abs(dy) * 1.3 ? 'x' : 'y';
+      if (axis === 'x') {
+        // Движение однозначно горизонтальное — это уже не тап по кнопке/полю
+        // под пальцем, а жест свайпа: гасим нативное поведение (выделение
+        // текста, фокус на инпуте) и «проехавший» клик по элементу, с
+        // которого палец стартовал.
+        armClickGuard();
+      }
+    }
+    if (axis === 'x') {
+      e.preventDefault();
     }
   };
   const onPointerEnd = (e) => {
