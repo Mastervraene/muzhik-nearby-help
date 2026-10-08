@@ -1641,37 +1641,132 @@ body {
 }
 
 /* ---------- Подсказка «заказ ушёл с главной» (см. renderOrderCreatedTipOverlay) ----------
-   Стрелка-указатель на аватарку в шапке — отдельный элемент НАД попапом
-   (z-index выше .onboarding-overlay), выровненный по той же колонке
-   var(--max-width), что и сама шапка (.topbar), поэтому на широких экранах
-   не «уезжает» от реальной аватарки вбок. */
-.order-tip-pointer-wrap {
+   Переработано 09.10.2026 по просьбе Sg: вместо прыгающей стрелки над
+   попапом — настоящая «подсветка» аватарки прямо под общим затемнением
+   (.onboarding-overlay) и само меню аккаунта раскрывается автоматически
+   (см. publishDraftInner: avatarMenuOpen = true одновременно с
+   state.infoOverlay = 'order-created'). Переключатель — класс
+   order-tip-active на <body> (см. render()): пока он есть, у аватарки и
+   её раскрытого меню z-index поднят ВЫШЕ затемнения (которое само по
+   себе на уровне .onboarding-overlay, z-index 100), поэтому они остаются
+   чёткими поверх затемнённого фона — без вырезов/масок в самом
+   затемняющем слое, просто обычный стекинг. Свечение — статичный
+   box-shadow без пульсации (Sg: «пульсацию делать не надо», только
+   внешнее свечение). Пункт «Заказы» в открывшемся меню подсвечивается
+   отдельно — это и есть ответ на «подробно показать, где именно будет
+   заказ». */
+/* Критично: .topbar сам по себе создаёт свой stacking context —
+   из-за position: sticky (это само по себе уже создаёт новый контекст
+   в браузерах, независимо от z-index) И из-за backdrop-filter: blur()
+   (filter/backdrop-filter создают контекст ВСЕГДА, при любом position,
+   даже position: static). Из-за этого z-index: 110 на дочернем
+   .avatar-menu-anchor раньше был заперт ВНУТРИ контекста шапки и не
+   мог оказаться выше .onboarding-overlay (z-index: 100) — на практике
+   аватарка и раскрытое меню визуально и по кликам оказывались ПОД
+   затемнением, то есть вся эта «подсветка» не работала (проверено
+   рендером страницы headless-браузером и elementFromPoint — до этой
+   правки затемнение было самым верхним элементом даже в точке самой
+   аватарки). Снимаем оба триггера контекста у шапки на время подсказки —
+   тогда z-index дочернего элемента сравнивается уже на одном уровне
+   с затемнением и честно побеждает (110 > 100). */
+.order-tip-active .topbar {
+  position: static;
+  z-index: auto;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.order-tip-active .avatar-menu-anchor {
+  position: relative;
+  z-index: 110;
+}
+
+.order-tip-active .avatar-menu-anchor .icon-button {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.95), 0 0 20px 8px rgba(255, 255, 255, 0.55);
+}
+
+.order-tip-active .avatar-menu {
+  z-index: 111;
+}
+
+.order-tip-active .avatar-menu-item[data-action="go-orders"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* Подсказка-полоска рядом с аватаркой — отдельно от самой карточки попапа
+   и от раскрытого меню, выровнена по той же колонке var(--max-width), что
+   и шапка, чтобы на широких экранах не «уезжала» в сторону от реальной
+   аватарки. Переработано 09.10.2026 по просьбе Sg: раньше это был бабл
+   чуть НИЖЕ аватарки (top: 60px, под шапкой) — теперь тонкая полоска на
+   одном уровне с самой аватаркой (та же вертикаль, что и .icon-button в
+   шапке: padding-top шапки 14px + центр кнопки 19px). */
+.order-tip-hint-wrap {
   position: fixed;
-  top: 6px;
+  top: 23px;
   left: 0;
   right: 0;
   display: flex;
   justify-content: center;
   pointer-events: none;
-  z-index: 101;
+  z-index: 112;
 }
 
-.order-tip-pointer {
+.order-tip-hint {
   width: 100%;
   max-width: var(--max-width);
-  text-align: right;
-  padding-right: 22px;
   box-sizing: border-box;
-  font-size: 30px;
-  line-height: 1;
-  color: #fff;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-  animation: order-tip-bounce 1.1s ease-in-out infinite;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 60px;
 }
 
-@keyframes order-tip-bounce {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(5px, -5px); }
+.order-tip-hint span {
+  display: inline-block;
+  background: var(--gray-0, #fff);
+  color: var(--gray-900);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 7px 14px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  animation: order-tip-hint-in 0.2s ease-out;
+}
+
+@keyframes order-tip-hint-in {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Сама карточка «Заявка отправлена» теперь по центру экрана (а не нижней
+   шторкой, как остальные попапы сайта) — просьба Sg, со скруглением со
+   всех сторон. Классы-модификаторы добавляются ПОВЕРХ обычных
+   .onboarding-overlay/.onboarding-card (не заменяют их), чтобы вся общая
+   логика (закрытие по клику на фон, свайпом вверх/вниз — см.
+   wireOnboardingSwipe, кнопка «Понятно»/«✕») продолжала работать без
+   изменений. margin-top на карточке (а не padding-top на оверлее) —
+   сдвигает её вниз от истинного центра на фиксированную величину, не
+   завязываясь на высоту вьюпорта, чтобы на невысоких экранах низ карточки
+   не уезжал за пределы видимой области (просьба Sg 09.10.2026: карточку
+   пониже, чтобы раскрытое меню аккаунта её не перекрывало). */
+.order-tip-overlay {
+  align-items: center;
+  padding: 20px;
+}
+
+.order-tip-card {
+  max-height: 85vh;
+  border-radius: 24px;
+  margin-top: 245px;
+  animation: order-tip-pop 0.2s ease-out;
+}
+
+@keyframes order-tip-pop {
+  from { transform: scale(0.94); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 /* ---------- Полноэкранный просмотр фото (аватарка, вложения заказа) ---------- */
@@ -3096,6 +3191,11 @@ function dbUserToUser(row, skillsByUser) {
     accountPausedReason: row.account_paused_reason || '',
     accountPausedAt: row.account_paused_at || null,
     phoneChangeFlag: Boolean(row.phone_change_flag),
+    // «Больше не показывать» в поп-апе «Заявка отправлена» (просьба Sg
+    // 09.10.2026, см. renderOrderCreatedTipOverlay/patchUserFields) —
+    // намеренно за аккаунтом (а не localStorage), чтобы решение не
+    // забывалось при входе с другого устройства/браузера.
+    orderTipDismissed: Boolean(row.order_tip_dismissed),
   };
 }
 
@@ -3622,6 +3722,7 @@ const USER_DOMAIN_TO_DB_FIELD = {
   ratingCount: 'rating_count',
   customerRating: 'customer_rating',
   customerRatingCount: 'customer_rating_count',
+  orderTipDismissed: 'order_tip_dismissed',
 };
 function patchUserFields(userId, domainPatch) {
   const user = cache.users.find((u) => u.id === userId);
@@ -5799,13 +5900,26 @@ async function publishDraftInner() {
   );
 
   // Заказ дальше живёт только на экране заказа/в «Заказы» — с главного
-  // экрана он уходит сразу. Вместо обычного тихого тоста — поп-ап со
-  // стрелкой на аватарку (см. renderOrderCreatedTipOverlay), объясняющий,
-  // где теперь искать статус заказа, плюс приглашение привязать Telegram
-  // (просьба Sg 08.10.2026). Текст о модерации («обычно это быстро...»)
-  // теперь внутри самого поп-апа, отдельный showToast для него не нужен.
+  // экрана он уходит сразу. Вместо обычного тихого тоста — поп-ап (см.
+  // renderOrderCreatedTipOverlay), объясняющий, где теперь искать статус
+  // заказа, плюс приглашение привязать Telegram (просьба Sg 08.10.2026).
+  // Текст о модерации («обычно это быстро...») теперь внутри самого
+  // поп-апа, отдельный showToast для него не нужен. Пропускаем поп-ап
+  // целиком, если пользователь уже отметил «больше не показывать» —
+  // orderTipDismissed хранится в его профиле (users.order_tip_dismissed,
+  // не localStorage: просьба Sg 09.10.2026 — решение должно запоминаться
+  // именно за аккаунтом, а не за браузером/устройством).
   state.draft = null;
-  state.infoOverlay = 'order-created';
+  const customer = currentUser();
+  if (!customer || !customer.orderTipDismissed) {
+    state.infoOverlay = 'order-created';
+    orderTipDontShowChecked = false;
+    // Меню аккаунта раскрывается сразу вместе с поп-апом (просьба Sg
+    // 09.10.2026: «хочу, чтобы меню само открылось») — см. подсветку
+    // пункта «Заказы» в CSS (.order-tip-active .avatar-menu-item) и
+    // document.body.classList.toggle('order-tip-active', ...) в render().
+    avatarMenuOpen = true;
+  }
   go('orderDetail', { openOrderId: order.id });
 }
 
@@ -7945,6 +8059,15 @@ const ICON_PENCIL =
 // любого пункта меню (см. handleAction).
 let avatarMenuOpen = false;
 
+// Состояние чекбокса «больше не показывать» в поп-апе «Заявка отправлена»
+// (см. renderOrderCreatedTipOverlay) — сбрасывается в false при каждом
+// новом показе поп-апа (publishDraftInner), иначе отметка из прошлого
+// заказа в этой же сессии осталась бы «висеть» на новом. Сам факт отказа
+// сохраняется не сюда, а в профиль пользователя (orderTipDismissed,
+// users.order_tip_dismissed) — см. 'dismiss-onboarding'/нижний блок
+// handleAction.
+let orderTipDontShowChecked = false;
+
 // Защита от повторной отправки заявки (см. handleAction → 'publish-draft').
 // publishDraft() — асинхронная и небыстрая (AI-разбор текста заявки +
 // запись в БД), а сама кнопка «Отправить» раньше не блокировалась на время
@@ -9766,6 +9889,12 @@ function renderPhoneVerifyStep(st) {
 let lastRenderedScreen = null;
 
 function render() {
+  // Подсветка аватарки + поднятый z-index раскрытого меню на время поп-апа
+  // «Заявка отправлена» (см. renderOrderCreatedTipOverlay и CSS
+  // .order-tip-active) — класс на <body>, а не инлайн-стиль внутри шапки,
+  // чтобы работать с обычным затемнением (.onboarding-overlay) без вырезов
+  // в самом затемняющем слое: просто обычный z-index-стекинг поверх него.
+  document.body.classList.toggle('order-tip-active', state.infoOverlay === 'order-created');
   const app = document.getElementById('app');
   const prevScreenEl = app.querySelector('.screen');
   const preserveScroll = Boolean(prevScreenEl) && lastRenderedScreen === state.screen;
@@ -10262,30 +10391,50 @@ function renderTelegramOverlay() {
 
 // Подсказка сразу после отправки заказа (см. publishDraftInner) — заказ
 // уходит с главного экрана и дальше доступен только через меню (аватар в
-// шапке) → «Заказы» (просьба Sg 08.10.2026: нужен явный поп-ап со стрелкой
-// на аватарку, иначе непонятно, куда заказ делся). Стрелка — отдельный
-// бьющийся элемент над попапом (см. .order-tip-pointer, CSS), а не внутри
-// карточки: сама карточка — обычный нижний лист (.onboarding-overlay), как
-// и остальные попапы сайта, и выровнена по центру с шапкой общим
-// var(--max-width), так что стрелка в правом верхнем углу указывает ровно
-// туда, где на самом деле аватарка. Тут же — приглашение привязать Telegram
-// (та же кнопка «Подключить», что и в карточке заказа, см.
-// renderTelegramLinkPrompt) — один из «нескольких мест», откуда всплывает
-// общий попап привязки.
+// шапке) → «Заказы» (просьба Sg 08.10.2026: нужен явный поп-ап, иначе
+// непонятно, куда заказ делся). Переработано 09.10.2026 по развёрнутой
+// просьбе Sg: вместо прыгающей стрелки — настоящее затемнение всего
+// сайта (.onboarding-overlay само по себе уже затемняет фон) с живой
+// подсветкой аватарки (см. .order-tip-active в CSS и document.body.
+// classList.toggle('order-tip-active', ...) в render()) и САМО меню
+// аккаунта раскрыто (avatarMenuOpen = true выставляется одновременно со
+// state.infoOverlay = 'order-created' в publishDraftInner) — пункт
+// «Заказы» в нём подсвечен отдельно, это и есть «подробно показать, где
+// именно будет заказ». Карточка — по центру экрана, со скруглением со
+// всех сторон (.order-tip-card), а не нижней шторкой, как остальные
+// попапы сайта. Свечение статичное, без пульсации (прямая просьба Sg).
+// Тут же — приглашение привязать Telegram (та же кнопка «Подключить»,
+// что и в карточке заказа, см. renderTelegramLinkPrompt), и чекбокс
+// «больше не показывать» (просьба Sg 09.10.2026) — отмечается независимо
+// от самого закрытия (см. 'toggle-order-tip-dont-show' в handleAction, не
+// закрывает поп-ап), а решение сохраняется НЕ в localStorage, а в профиль
+// (orderTipDismissed) в момент закрытия поп-апа, если флажок стоит — см.
+// верхний блок handleAction («Поп-ап «Заявка отправлена»...»).
+// Правки 09.10.2026 (вторая итерация, просьба Sg): подсказка-полоска
+// переехала с уровня «под шапкой» на уровень самой аватарки (см.
+// .order-tip-hint-wrap) и текст сокращён до «Заказ и статус — тут»;
+// абзац «Заказ ушёл с главного экрана...» убран из карточки целиком —
+// подсказка у аватарки теперь сама это объясняет; карточка сдвинута
+// пониже (.order-tip-card margin-top), чтобы раскрытое меню аккаунта её
+// не перекрывало.
 function renderOrderCreatedTipOverlay() {
   const user = currentUser();
   if (!user) return '';
   return `
-    <div class="order-tip-pointer-wrap" aria-hidden="true"><span class="order-tip-pointer">↗</span></div>
-    <div class="onboarding-overlay" data-action="dismiss-onboarding">
-      <div class="onboarding-card" onclick="event.stopPropagation()">
-        <div class="onboarding-drag-handle"></div>
+    <div class="order-tip-hint-wrap" aria-hidden="true">
+      <div class="order-tip-hint"><span>Заказ и статус — тут</span></div>
+    </div>
+    <div class="onboarding-overlay order-tip-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card order-tip-card" onclick="event.stopPropagation()">
         <div class="onboarding-body" style="padding-top: 28px;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Заявка отправлена</h2>
           <p>Заказ проверяется — обычно это быстро, мастера увидят его сразу после одобрения.</p>
-          <p><b>Заказ ушёл с главного экрана</b> — смотреть его статус и переписку можно в любой момент через меню: аватар в правом верхнем углу ↗ → «Заказы».</p>
           ${renderTelegramLinkPrompt('сразу получать уведомления о статусе этого заказа')}
+          <label style="display:flex; align-items:center; gap:8px; margin:14px 0 2px; font-size:13px; color:var(--gray-600, var(--gray-500)); cursor:pointer;">
+            <input type="checkbox" data-action="toggle-order-tip-dont-show" ${orderTipDontShowChecked ? 'checked' : ''} style="width:17px; height:17px; flex-shrink:0; accent-color:var(--accent); margin:0;" />
+            Больше не показывать
+          </label>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
       </div>
@@ -11532,10 +11681,31 @@ async function handleAction(action, value) {
   // пункту меню, клик по чему угодно ещё на экране) — сам toggle
   // управляет собой ниже отдельным case'ом.
   if (avatarMenuOpen && action !== 'toggle-avatar-menu') avatarMenuOpen = false;
+  // Поп-ап «Заявка отправлена» (см. renderOrderCreatedTipOverlay) с авто-
+  // раскрытым меню — закрывается при ЛЮБОМ другом действии (клик по
+  // «Понятно»/«✕»/свайп, клик по пункту меню типа подсвеченного «Заказы»,
+  // да и вообще что угодно ещё на экране), а не только своей явной
+  // кнопкой — иначе он остался бы висеть поверх уже другого экрана.
+  // Единственное исключение — сам чекбокс «больше не показывать»: клик по
+  // нему не должен закрывать поп-ап, в котором он находится. Если флажок
+  // стоит — сохраняем отказ в профиль (users.order_tip_dismissed, не
+  // localStorage: просьба Sg 09.10.2026 — за аккаунтом, не за браузером).
+  if (state.infoOverlay === 'order-created' && action !== 'toggle-order-tip-dont-show') {
+    if (orderTipDontShowChecked) {
+      const u = currentUser();
+      // patchUserFields сам обновит и кэш (тот же объект, что вернёт
+      // currentUser() дальше), и БД — отдельно руками поле не трогаем.
+      if (u && !u.orderTipDismissed) patchUserFields(u.id, { orderTipDismissed: true });
+    }
+    state.infoOverlay = null;
+  }
 
   switch (action) {
     case 'toggle-avatar-menu':
       avatarMenuOpen = !avatarMenuOpen;
+      return render();
+    case 'toggle-order-tip-dont-show':
+      orderTipDontShowChecked = !orderTipDontShowChecked;
       return render();
     // Модалка сортировки/фильтра заказов (см. renderOrdersSortModal) — окно
     // на весь экран, по образцу «Сортировки на карте» в админке. В отличие
