@@ -232,6 +232,21 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
    координаты из карточки, заменить их иконками). Цветной — есть, светло-
    серый — нет. SVG заполняется currentColor, цвет переключается классом. */
 .card-row3 { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 5px; }
+
+/* Четвёртая строка свёрнутой карточки мастера/клиента — превью заметки
+   администратора (adminNotes, см. adminNoteHtml), мелким приглушённым
+   шрифтом, только если заметка есть (просьба Sg 09.10.2026: «если заметки
+   нет — карточка такая же, как есть, без поля»). Полный текст и
+   редактирование — только в развёрнутой карточке (adminNoteHtml внутри
+   masterFormHtml), тут — одна строка-превью с обрезкой длинного текста. */
+.card-note-preview {
+  font-size: 11.5px;
+  color: var(--gray-500);
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .status-badge { display: inline-flex; width: 17px; height: 17px; flex-shrink: 0; }
 .status-badge svg { width: 100%; height: 100%; display: block; }
 .status-badge.on.badge-avatar { color: var(--accent); }
@@ -3099,6 +3114,11 @@ function masterCardHtml(u) {
   const chatCount = u.telegramId ? messagesForTelegramId(u.telegramId).length : 0;
   const city = cityFromCoords(u.location.lat, u.location.lng);
   const hasLocation = Boolean(u.location.lat && u.location.lng);
+  // Превью заметки администратора на свёрнутой карточке — четвёртой строкой,
+  // только если заметка есть (см. .card-note-preview выше). adminNotes
+  // ключуется как `${entity_type}:${entity_id}`, та же Map, что и у
+  // adminNoteHtml в развёрнутой форме ниже (masterFormHtml).
+  const note = adminNotes.get(`user:${u.id}`) || '';
   const statusPills = [
     u.blocked ? '<span class="pill warn">заблокирован</span>' : '',
     u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : '',
@@ -3134,6 +3154,7 @@ function masterCardHtml(u) {
             ${chatCount ? `<span class="pill chat-count">💬 ${chatCount}</span>` : ''}
             ${statusPills}
           </div>
+          ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
@@ -3694,7 +3715,13 @@ function wireMasterForm(u) {
         try {
           await insertRow('notifications', {
             recipient_user_id: u.id,
-            recipient_role: u.availableAsWorker ? 'worker' : 'client',
+            // БАГ (найден 05.10.2026, исправлен 09.10.2026): было 'client' —
+            // такого значения recipient_role нигде в системе нет (везде
+            // используется 'customer', см. остальные insertRow('notifications'
+            // выше и в index.html) — из-за этого уведомление о снятии паузы
+            // клиенту (не мастеру) скорее всего не доходило по правильному
+            // фильтру получателя.
+            recipient_role: u.availableAsWorker ? 'worker' : 'customer',
             text: 'Пауза аккаунта (частая смена номера телефона) снята администратором.',
             channel: 'telegram',
           });
