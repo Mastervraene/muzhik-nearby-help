@@ -194,7 +194,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .map-toggle-wrap > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--gray-700); list-style: none; }
 .map-toggle-wrap > summary::-webkit-details-marker { display: none; }
 .map-toggle-wrap > summary::before { content: '📍 '; }
-.user-mini-map { width: 33%; min-width: 150px; height: 190px; margin-top: 8px; border-radius: 12px; overflow: hidden; border: 1px solid var(--gray-200); background: var(--gray-50); }
+.user-mini-map { width: 100%; height: 220px; margin-top: 8px; border-radius: 12px; overflow: hidden; border: 1px solid var(--gray-200); background: var(--gray-50); }
 .field-sm.dense { margin-bottom: 6px; }
 .field-sm.dense label { font-size: 10.5px; margin-bottom: 2px; }
 .field-sm.dense input, .field-sm.dense select {
@@ -3378,6 +3378,11 @@ function masterFormHtml(u) {
       </div>
 
       <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
+        <button class="btn-sm ${u.availableAsWorker ? 'danger' : 'ghost'}" id="toggle-worker-master-${u.id}" title="Быстро снять/вернуть статус мастера — отдельно от общей блокировки аккаунта, без похода в раздел «Профиль». Для старых мастеров без телеграма/телефона/аватарки, которых не получится предупредить уведомлением.">${u.availableAsWorker ? 'Мастер ❌' : 'Мастер ✅ (включить)'}</button>
+        <span class="save-hint" id="toggle-worker-master-hint-${u.id}" style="color:var(--gray-500);"></span>
+      </div>
+
+      <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
         <button class="btn-sm ${u.blocked ? 'ghost' : 'danger'}" id="toggle-block-master-${u.id}">${u.blocked ? 'Разблокировать' : 'Заблокировать'}</button>
         <span class="save-hint" id="toggle-block-master-hint-${u.id}" style="color:var(--gray-500);"></span>
       </div>
@@ -3741,10 +3746,10 @@ function wireMasterForm(u) {
     });
   }
 
-  // Узкая карта (1/3 ширины) прямо в карточке пользователя — просьба Sg
-  // 08.10.2026, по образцу <details> выше: карта (отдельный ymaps.Map на
-  // свой контейнер, не трогает общий window.__adminMap вкладки «Карта»)
-  // создаётся лениво, только при первом открытии.
+  // Карта прямо в карточке пользователя, на всю ширину карточки (просьба Sg
+  // 08.10.2026, высота 220px — по образцу <details> выше: карта (отдельный
+  // ymaps.Map на свой контейнер, не трогает общий window.__adminMap вкладки
+  // «Карта») создаётся лениво, только при первом открытии.
   const userMapDetails = document.getElementById(`mf-map-details-${u.id}`);
   if (userMapDetails) {
     userMapDetails.addEventListener('toggle', async () => {
@@ -3921,6 +3926,29 @@ function wireMasterForm(u) {
       if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Применить ко всем заказам'; }
     });
   }
+
+  document.getElementById(`toggle-worker-master-${u.id}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const label = u.displayName || u.phone || u.id;
+    const willEnable = !u.availableAsWorker;
+    // Быстрое выключение статуса мастера (просьба Sg 08.10.2026) — для
+    // мастеров, подключившихся ещё до требований по аватарке/телеграму/
+    // телефону: им нечем прислать предупреждение об отключении, поэтому
+    // нужна возможность снять статус мастера одной кнопкой прямо тут, не
+    // открывая select «Работает как мастер» в разделе «Профиль» и не трогая
+    // остальные поля формы (не завязано на кнопку «Сохранить»).
+    const ok = confirm(willEnable ? `Вернуть статус мастера пользователю «${label}»?` : `Снять статус мастера у пользователя «${label}»? Новые заказы приходить не будут, пока не включите обратно.`);
+    if (!ok) return;
+    const btn = document.getElementById(`toggle-worker-master-${u.id}`);
+    btn.disabled = true;
+    try {
+      await updateRow('users', u.id, { available_as_worker: willEnable });
+      await loadData({ keepOpen: true });
+    } catch (err) {
+      alert('Не удалось сохранить: ' + err.message);
+      btn.disabled = false;
+    }
+  });
 
   document.getElementById(`toggle-block-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
