@@ -1088,6 +1088,17 @@ body {
   box-shadow: var(--shadow-unread);
 }
 
+/* Блок с вопросом администратора при уточнении заказа (status=
+   clarification_requested, см. renderOrderDetail) — та же красная
+   подсветка, что и у непрочитанного уведомления, но без угасания и без
+   transition: держится весь срок, пока блок отрисован (просьба Sg
+   08.10.2026 — «гаснуть не должно вообще»). Блок исчезает сам, когда
+   статус заказа меняется (ответ отправлен), а не по таймеру. */
+.clarification-alert {
+  box-shadow: var(--shadow-unread);
+  border: 1px solid rgba(224, 36, 36, 0.35);
+}
+
 .order-card-top {
   display: flex;
   justify-content: space-between;
@@ -8244,13 +8255,18 @@ function diagnosisLogHtml(order) {
 function clarificationHistoryHtml(order) {
   const history = orderClarificationHistory(order);
   if (!history.length) return '';
+  // Раскрывающийся список (нативный <details>, без собственного состояния
+  // в state) — перенесено в самый конец карточки заказа, под кнопку «К
+  // списку заказов» (просьба Sg 08.10.2026): само активное уточнение с
+  // полем ответа живёт отдельным выделенным блоком внутри actions
+  // (clarification_requested) и не должно теряться среди старых раундов.
   return `
-    <div class="field-card" style="margin:8px 0;">
-      <p class="order-meta"><b>История уточнений</b></p>
+    <details class="field-card" style="margin-top:12px;">
+      <summary class="order-meta" style="cursor:pointer;"><b>История уточнений</b></summary>
       ${history
         .map(
           (c) => `
-        <div style="margin-bottom:6px;">
+        <div style="margin:8px 0 0;">
           <p class="order-meta"><span><b>Админ</b>${c.askedAt ? ' — ' + new Date(c.askedAt).toLocaleString('ru-RU') : ''}</span></p>
           <p style="margin:2px 0 0;">${escapeHtml(c.question || '')}</p>
           ${
@@ -8261,7 +8277,7 @@ function clarificationHistoryHtml(order) {
         </div>`
         )
         .join('')}
-    </div>
+    </details>
   `;
 }
 
@@ -8934,18 +8950,26 @@ function renderOrderDetail() {
       // кнопке «Отправить ответ» — тот же приём, что и с фото «до/после» у
       // мастера (renderOrderPhotoForm), чтобы фото не терялись, если текст
       // ответа ещё не готов.
+      // Отдельный блок с постоянной красной подсветкой (не угасает, в
+      // отличие от .notification-unread — просьба Sg 08.10.2026: клиент
+      // должен сразу видеть, куда нажимать). Подсветка держится весь срок,
+      // пока заказ ждёт ответа — блок рендерится только в этом статусе, так
+      // что отдельного таймера/снятия класса не нужно: как только ответ
+      // отправлен и статус сменился, блок просто перестаёт рендериться.
       actions = `
-        <p class="order-meta"><b>Администратору нужно уточнение:</b></p>
-        <p>${escapeHtml((orderClarificationHistory(order).slice(-1)[0] || {}).question || '')}</p>
-        <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2">${escapeHtml(clarificationAnswerDrafts[order.id] || '')}</textarea>
-        <div id="clarification-photos-${order.id}" class="attachment-preview">
-          ${(order.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
+        <div class="field-card clarification-alert" style="margin:8px 0;">
+          <p class="order-meta"><b>Администратору нужно уточнение:</b></p>
+          <p><b>${escapeHtml((orderClarificationHistory(order).slice(-1)[0] || {}).question || '')}</b></p>
+          <textarea id="clarification-answer-${order.id}" class="composer-textarea" placeholder="Ваш ответ…" rows="2">${escapeHtml(clarificationAnswerDrafts[order.id] || '')}</textarea>
+          <div id="clarification-photos-${order.id}" class="attachment-preview">
+            ${(order.attachments || []).map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
+          </div>
+          <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;margin-bottom:8px;">
+            📎 Прикрепить фото (до ${MAX_ORDER_PHOTOS} штук)
+            <input id="clarification-photos-file-${order.id}" type="file" accept="image/*" multiple style="display:none" />
+          </label>
+          <button class="primary-button" data-action="submit-clarification" data-value="${order.id}">Отправить ответ</button>
         </div>
-        <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;margin-bottom:8px;">
-          📎 Прикрепить фото (до ${MAX_ORDER_PHOTOS} штук)
-          <input id="clarification-photos-file-${order.id}" type="file" accept="image/*" multiple style="display:none" />
-        </label>
-        <button class="primary-button" data-action="submit-clarification" data-value="${order.id}">Отправить ответ</button>
       `;
     } else if (order.status === 'estimate_ready') {
       // Оплата — редирект на защищённую форму Т-Банка (см. payOrder), сайт
@@ -9095,23 +9119,7 @@ function renderOrderDetail() {
             : ''
         }
         ${diagnosisLogHtml(order)}
-        ${clarificationHistoryHtml(order)}
         ${partPurchaseHistoryHtml(order)}
-        ${
-          // Заказчик может добавить свою догадку о причине поломки в любой
-          // момент (не только по требованию) — доступно всегда, а не
-          // только для конкретного статуса, в отличие от остальных actions
-          // выше (продумано с Sg 24.09.2026).
-          isCustomer
-            ? `
-          <div class="field-card" style="margin:8px 0;">
-            <p class="order-meta"><b>Есть предположение, что сломалось?</b></p>
-            <textarea id="customer-diagnosis-note-${order.id}" class="composer-textarea" placeholder="Например: кажется, сломался ТЭН…" rows="2"></textarea>
-            <button class="secondary-button" data-action="add-diagnosis-note" data-value="${order.id}">Добавить комментарий</button>
-          </div>
-        `
-            : ''
-        }
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
         <div class="timeline">
           ${order.timeline
@@ -9126,6 +9134,7 @@ function renderOrderDetail() {
           : ''
       }
       <button class="secondary-button" data-action="go-orders">← К списку заказов</button>
+      ${clarificationHistoryHtml(order)}
     </div>
   `;
 }
@@ -9158,10 +9167,22 @@ function renderNotifications() {
                 // нужен не только факт «непрочитано», но и срок с момента
                 // прочтения.
                 const stillGlowing = isUnread || now - new Date(readAt).getTime() < NOTIFICATION_UNREAD_FADE_MS;
+                // Клик по уведомлению открывает соответствующий заказ — тот
+                // же data-action="open-order", что и у карточек в списках
+                // (см. orderCardHtml), так что отдельной «проводки» не
+                // нужно: общий обработчик ниже подхватит его сам (просьба
+                // Sg 08.10.2026 — должно быть интуитивно понятно, куда
+                // нажимать). Старые уведомления без order_id (если такие
+                // есть) остаются некликабельными.
                 return `
-        <div class="order-card${stillGlowing ? ' notification-unread' : ''}" data-notification-id="${escapeHtml(n.id)}" data-unread="${isUnread ? '1' : '0'}">
+        <div class="order-card${stillGlowing ? ' notification-unread' : ''}" data-notification-id="${escapeHtml(n.id)}" data-unread="${isUnread ? '1' : '0'}" ${
+                  n.orderId ? `data-action="open-order" data-value="${escapeHtml(n.orderId)}" style="cursor:pointer;"` : ''
+                }>
           <p>${escapeHtml(n.text)}</p>
-          <p class="order-meta"><span>${new Date(n.createdAt).toLocaleString('ru-RU')}</span></p>
+          <p class="order-meta">
+            <span>${new Date(n.createdAt).toLocaleString('ru-RU')}</span>
+            ${n.orderId ? '<span>Открыть заказ →</span>' : ''}
+          </p>
         </div>`;
               })
               .join('')

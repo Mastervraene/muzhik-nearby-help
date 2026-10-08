@@ -2285,31 +2285,29 @@ async function requestClarification(o) {
       timeline,
     });
 
-    // Уведомление клиенту в Telegram — best-effort: без него заказ всё
-    // равно ждёт ответа, просто клиент узнает об этом, только зайдя на
-    // сайт сам (см. sendAdminNotification выше — тот же принцип, что и
-    // уведомление о принудительном назначении мастера).
-    const customer = allUsers.find((u) => u.id === o.customerId);
-    if (customer && customer.telegramId) {
+    // Уведомление клиенту — ПРАВКА 08.10.2026 (заказ №75, жалоба Sg: «заказчику
+    // на сайте уведомление не пришло»). Раньше здесь был прямой fetch в
+    // Telegram в обход таблицы notifications, и срабатывал он только если у
+    // клиента уже привязан telegramId — если нет, клиент не получал вообще
+    // ничего, ни в Telegram, ни на сайте. Теперь — обычная запись в
+    // public.notifications, тот же путь, что у остальных системных
+    // уведомлений (см. триггеры notify_moderators_on_new_order и т.п. в БД):
+    // она сразу видна в разделе «Уведомления» на сайте независимо от
+    // Telegram, а в Telegram её (если telegram_id есть) отправит сама БД —
+    // триггер notify_telegram_on_new_notification на INSERT INTO
+    // notifications (channel по умолчанию 'telegram'), с учётом времени
+    // тишины 22:00–07:00. Best-effort — сбой не должен мешать самому
+    // уточнению: заказ всё равно уже переведён в clarification_requested.
+    try {
       const orderLabel = o.title || o.description || 'Заказ';
-      const text = `По заказу «${orderLabel}» нужно уточнение:\n\n${question}\n\nОтветьте в разделе «Заказы» на сайте — после ответа мы продолжим оформление: https://мастерврайоне.рф/`;
-      try {
-        const res = await sendAdminNotification([customer.telegramId], text);
-        if (res.configured && res.sent > 0) {
-          try {
-            await insertRow('telegram_messages', {
-              user_id: customer.id,
-              telegram_id: customer.telegramId,
-              direction: 'out',
-              text,
-            });
-          } catch (logErr) {
-            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
-          }
-        }
-      } catch (notifyErr) {
-        console.warn('Не удалось отправить уведомление об уточнении:', notifyErr);
-      }
+      await insertRow('notifications', {
+        recipient_user_id: o.customerId,
+        recipient_role: 'customer',
+        order_id: o.id,
+        text: `Нужно уточнение по заказу «${orderLabel}»: ${question}`,
+      });
+    } catch (notifyErr) {
+      console.warn('Не удалось создать уведомление об уточнении:', notifyErr);
     }
 
     await loadData({ keepOpen: true });
