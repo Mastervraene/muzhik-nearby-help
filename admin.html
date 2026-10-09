@@ -1230,6 +1230,14 @@ function dbOrderToOrder(row) {
     deviceModelHistory: row.device_model_history || [],
     diagnosisLog: row.diagnosis_log || [],
     refunds: row.refunds || [],
+    // Три поля про материалы/детали для мастера — заполняет админ при
+    // подтверждении заказа (просьба Sg 09.10.2026). Пустая строка — поле
+    // не показываем вообще (см. partsInfoHtml и в admin.html, и в
+    // index.html). В будущем планируется автозаполнение по похожим
+    // заказам — поэтому обычный текст, без доп. структуры пока что.
+    partsAlreadyHave: row.parts_already_have || '',
+    partsMaybeNeeded: row.parts_maybe_needed || '',
+    partsNeeded: row.parts_needed || '',
   };
 }
 
@@ -2735,6 +2743,18 @@ function orderFormHtml(o) {
           <input type="text" id="f-device-model-${o.id}" placeholder="Например: Bosch WAA24270" value="${escapeHtml(o.deviceModel || '')}" />
         </div>
       </div>
+      <div class="field-sm">
+        <label>Уже есть (у клиента/на объекте)</label>
+        <textarea id="f-parts-have-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;" placeholder="Пусто — мастер ничего не увидит">${escapeHtml(o.partsAlreadyHave || '')}</textarea>
+      </div>
+      <div class="field-sm">
+        <label>Может понадобиться</label>
+        <textarea id="f-parts-maybe-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;" placeholder="Пусто — мастер ничего не увидит">${escapeHtml(o.partsMaybeNeeded || '')}</textarea>
+      </div>
+      <div class="field-sm">
+        <label>Понадобится</label>
+        <textarea id="f-parts-need-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;" placeholder="Пусто — мастер ничего не увидит">${escapeHtml(o.partsNeeded || '')}</textarea>
+      </div>
       ${deviceModelHistoryHtml(o)}
       ${diagnosisLogHtmlAdmin(o)}
       ${refundsHtml(o)}
@@ -2783,6 +2803,14 @@ function wireOrderForm(o) {
     autosizeAdminTextarea(descTextareaEl);
     descTextareaEl.addEventListener('input', () => autosizeAdminTextarea(descTextareaEl));
   }
+  // Три поля про материалы для мастера (просьба Sg 09.10.2026) — та же
+  // автоподгонка высоты, что и у описания.
+  [`f-parts-have-${o.id}`, `f-parts-maybe-${o.id}`, `f-parts-need-${o.id}`].forEach((elId) => {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    autosizeAdminTextarea(el);
+    el.addEventListener('input', () => autosizeAdminTextarea(el));
+  });
   if (o.attachments && o.attachments.length) {
     const photos = o.attachments;
     document.querySelectorAll(`.order-photo-thumb[data-order-id="${o.id}"]`).forEach((thumbEl) => {
@@ -2830,6 +2858,12 @@ function wireOrderForm(o) {
         factors: o.estimate?.factors || [],
       },
       final_price: finalPriceRaw === '' ? null : Number(finalPriceRaw),
+      // Три поля про материалы для мастера (просьба Sg 09.10.2026) —
+      // пустая строка, а не null: dbOrderToOrder и partsInfoHtml уже
+      // трактуют '' как «не показывать», null усложнил бы сравнения зря.
+      parts_already_have: document.getElementById(`f-parts-have-${o.id}`).value.trim(),
+      parts_maybe_needed: document.getElementById(`f-parts-maybe-${o.id}`).value.trim(),
+      parts_needed: document.getElementById(`f-parts-need-${o.id}`).value.trim(),
     };
     if (statusChanged) {
       patch.timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];

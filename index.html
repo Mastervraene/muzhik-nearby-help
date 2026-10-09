@@ -3389,6 +3389,14 @@ function dbOrderToOrder(row) {
     deviceModelHistory: row.device_model_history || [],
     diagnosisLog: row.diagnosis_log || [],
     refunds: row.refunds || [],
+    // Три поля про материалы/детали для мастера — заполняет админ при
+    // подтверждении заказа (просьба Sg 09.10.2026). Пустая строка — поле
+    // не показываем вообще (см. partsInfoHtml). В будущем планируется
+    // автозаполнение по похожим заказам — поэтому обычный текст, без
+    // доп. структуры пока что.
+    partsAlreadyHave: row.parts_already_have || '',
+    partsMaybeNeeded: row.parts_maybe_needed || '',
+    partsNeeded: row.parts_needed || '',
   };
 }
 
@@ -3444,6 +3452,12 @@ function orderToDbOrder(order) {
     device_model_history: order.deviceModelHistory || [],
     diagnosis_log: order.diagnosisLog || [],
     refunds: order.refunds || [],
+    // Те же три поля про материалы (просьба Sg 09.10.2026) — index.html
+    // их не редактирует (только читает), но orderToDbOrder используется и
+    // для других записей заказа, так что поля нужно сохранять, а не терять.
+    parts_already_have: order.partsAlreadyHave || '',
+    parts_maybe_needed: order.partsMaybeNeeded || '',
+    parts_needed: order.partsNeeded || '',
   };
 }
 
@@ -4991,6 +5005,11 @@ function enterPasswordStep(user, onComplete = null) {
     // telegramRequesting/codeSource — см. requestTelegramResetCode ниже.
     telegramRequesting: false,
     codeSource: '',
+    // recoveryOpen — по просьбе Sg 09.10.2026: варианты восстановления
+    // пароля (Telegram/код от поддержки/написать в поддержку) изначально
+    // скрыты за одной ссылкой «Забыли пароль?», чтобы не захламлять экран
+    // входа тремя кнопками сразу — см. renderPasswordStepOverlay.
+    recoveryOpen: false,
     onComplete: onComplete || null,
   };
   render();
@@ -7684,11 +7703,13 @@ function renderPasswordStepOverlay(st) {
   }</button>
         ${
           !isCreate
-            ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-request-telegram-code" ${st.submitting ? 'disabled' : ''}>${
-                st.telegramRequesting ? 'Отправляем…' : 'Получить код в Telegram'
-              }</button>
+            ? st.recoveryOpen
+              ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-request-telegram-code" ${st.submitting ? 'disabled' : ''}>${
+                  st.telegramRequesting ? 'Отправляем…' : 'Получить код в Telegram'
+                }</button>
         <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-use-code">Есть код от поддержки?</button>
-        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Забыли пароль? Напишите в поддержку</button>`
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Написать в поддержку</button>`
+              : `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-toggle-recovery">Забыли пароль?</button>`
             : ''
         }
         <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-cancel">Отмена</button>
@@ -9272,6 +9293,29 @@ function formattedBriefHtml(brief) {
 }
 
 /**
+ * Три поля про материалы/детали, которые заполняет админ при подтверждении
+ * заказа — «уже есть», «может понадобиться», «понадобится» (просьба Sg
+ * 09.10.2026). Видно только мастеру (см. вызов ниже, gated на !isCustomer) —
+ * заказчику это не принципиально, но и не секрет, если увидит. Пустое поле —
+ * не показываем вообще, непустое — показываем как есть. Пока простой текст
+ * (без доп. структуры) — в будущем планируется автозаполнение по похожим
+ * заказам на основе накопленной истории.
+ */
+function partsInfoHtml(order) {
+  const rows = [
+    ['Уже есть', order.partsAlreadyHave],
+    ['Может понадобиться', order.partsMaybeNeeded],
+    ['Понадобится', order.partsNeeded],
+  ].filter(([, v]) => v && String(v).trim());
+  if (!rows.length) return '';
+  return `
+    <div class="order-card" style="background:#f6f8fa;margin:8px 0;">
+      ${rows.map(([label, value]) => `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`).join('')}
+    </div>
+  `;
+}
+
+/**
  * Блок «сколько мастер получит на руки» в карточке заказа — рядом со
  * стоимостью, которую видит заказчик, но заработок мастера подан крупнее и
  * акцентирован цветом (см. .worker-payout-* в CSS), похоже на то, как
@@ -9495,6 +9539,7 @@ function renderOrderDetail() {
         </p>
         <p>${escapeHtml(order.description)}</p>
         ${!isCustomer ? formattedBriefHtml(order.formattedBrief) : ''}
+        ${!isCustomer ? partsInfoHtml(order) : ''}
         ${
           showExact && hasValidLocation(order.exactLocation)
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
@@ -12161,6 +12206,10 @@ async function handleAction(action, value) {
       return render();
     case 'password-step-request-telegram-code':
       return requestTelegramResetCode();
+    case 'password-step-toggle-recovery':
+      if (!passwordStepState) return;
+      passwordStepState.recoveryOpen = !passwordStepState.recoveryOpen;
+      return render();
     case 'password-step-back-to-login':
       if (!passwordStepState) return;
       passwordStepState.mode = 'login';
