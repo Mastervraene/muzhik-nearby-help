@@ -1039,6 +1039,21 @@ body {
   margin-bottom: 10px;
 }
 
+/* ИСПРАВЛЕНО 09.10.2026 (жалоба Sg по скриншоту: поле ввода вопроса в
+   «Нужно купить деталь» почти не видно). Несколько textarea внутри
+   .field-card (clarification-answer, part-purchase-question,
+   diagnosis-only-comment) дополнительно несут класс .composer-textarea —
+   у него жёсткий height:24px, рассчитанный на собственный контекст (сам
+   композер заявки, без рамки/паддинга). Внутри .field-card это
+   складывается с padding:10px + border:1px (box-sizing:border-box) и
+   схлопывает видимую область почти до нуля. Отменяем здесь — именно для
+   этой комбинации классов, остальные .composer-textarea (сам композер,
+   оценки без рамки) не трогаем. */
+.field-card .composer-textarea {
+  height: auto;
+  min-height: 60px;
+}
+
 .chip-row {
   display: flex;
   gap: 8px;
@@ -8691,33 +8706,22 @@ function technicalInfoHtml(order) {
         .join('')}
     `
     : '';
-  return `
-    <details class="field-card" style="margin-top:12px;">
-      <summary class="order-meta" style="cursor:pointer;"><b>Техническая информация</b></summary>
-      ${timelineHtml}
-      ${historyHtml}
-    </details>
-  `;
-}
-
-/**
- * Полная история «нужна деталь» (см. admin.html requestPartPurchase) —
- * так же, как clarificationHistoryHtml выше, открыта и видна не только
- * заказчику и админу, но и мастеру, в том числе кандидату, ещё не
- * взявшему заказ. Только для чтения — записи добавляются через
- * requestPartPurchase в admin.html, ответы — через confirmPartPurchased /
- * confirmPartPurchasedWithQuestion выше.
- */
-function partPurchaseHistoryHtml(order) {
-  const history = orderPartPurchaseHistory(order);
-  if (!history.length) return '';
-  return `
-    <div class="field-card" style="margin:8px 0;">
-      <p class="order-meta"><b>История «нужна деталь»</b></p>
-      ${history
+  // ИСПРАВЛЕНО 09.10.2026 (жалоба Sg по скриншоту: история «нужна деталь»
+  // дублировалась с активным красным блоком вопроса — раньше жила в
+  // отдельной всегда-открытой карточке partPurchaseHistoryHtml прямо в
+  // теле заказа). Переносим сюда же, рядом с «Историей уточнений» — тот же
+  // принцип, что и у неё: редко нужная техническая информация, скрыта по
+  // умолчанию за <details>. Активный раунд с полем ответа (status ===
+  // 'part_purchase_requested') по-прежнему отдельный выделенный блок внутри
+  // actions — сюда не входит, чтобы не дублироваться.
+  const partHistory = orderPartPurchaseHistory(order);
+  const partHistoryHtml = partHistory.length
+    ? `
+      <p class="order-meta" style="margin-top:12px;"><b>История «нужна деталь»</b></p>
+      ${partHistory
         .map(
           (c) => `
-        <div style="margin-bottom:6px;">
+        <div style="margin:8px 0 0;">
           <p class="order-meta"><span><b>Админ</b>${c.askedAt ? ' — ' + new Date(c.askedAt).toLocaleString('ru-RU') : ''}</span></p>
           <p style="margin:2px 0 0;">${escapeHtml(c.comment || '')}</p>
           ${
@@ -8730,7 +8734,15 @@ function partPurchaseHistoryHtml(order) {
         </div>`
         )
         .join('')}
-    </div>
+    `
+    : '';
+  return `
+    <details class="field-card" style="margin-top:12px;">
+      <summary class="order-meta" style="cursor:pointer;"><b>Техническая информация</b></summary>
+      ${timelineHtml}
+      ${historyHtml}
+      ${partHistoryHtml}
+    </details>
   `;
 }
 
