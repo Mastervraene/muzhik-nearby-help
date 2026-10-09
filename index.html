@@ -11239,7 +11239,18 @@ function wireEvents() {
       gateSend.disabled = true;
       try {
         const user = await ensureUserByPhone(gatePhone.value, {});
-        await beginPhoneCallVerification(user);
+        // ИСПРАВЛЕНО 09.10.2026 (просьба Sg, срочно): раньше здесь был
+        // beginPhoneCallVerification(user) — обязательное подтверждение
+        // номера звонком ПЕРЕД экраном пароля, если user.phoneVerified
+        // ещё не true. На практике это блокировало обычный вход/восстановление
+        // пароля: человек с паролем на руках не мог попасть на экран пароля,
+        // пока кто-то физически не дозвонится до показанного номера. Привязка
+        // телефона звонком — необязательная функция (см. renderPhoneOverlay в
+        // профиле, где её можно пройти по желанию), а не условие входа. Теперь
+        // вход по номеру всегда ведёт сразу на экран пароля/восстановления —
+        // как и гостевой чекаут в композере (см. case 'publish-draft' выше),
+        // который так и работал с самого начала.
+        await finishPhoneGateLogin(user);
       } catch (err) {
         console.error('[phone-gate] failed', err);
         showToast('Не получилось продолжить — попробуйте ещё раз');
