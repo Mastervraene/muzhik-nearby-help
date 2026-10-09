@@ -3840,7 +3840,13 @@ function patchUserFields(userId, domainPatch) {
     if (dbField) dbPatch[dbField] = domainPatch[key];
   });
   if (Object.keys(dbPatch).length === 0) return;
-  updateRow('users', userId, dbPatch).catch((err) => reportError('обновление рейтинга пользователя', err));
+  // minimal: true — обязательно (аудит RLS/GRANT, окт.2026): у anon/authenticated
+  // на users теперь только точечный GRANT UPDATE на поля рейтинга и column-level
+  // SELECT на публичные поля (без phone/telegram_id/и т.п.), поэтому
+  // Prefer: return=representation (возврат всей строки) упадёт с ошибкой доступа
+  // к незаграненным колонкам. minimal: true шлёт return=minimal и не читает
+  // строку обратно — здесь это и не нужно, т.к. domainPatch уже применён к cache.users выше.
+  updateRow('users', userId, dbPatch, { minimal: true }).catch((err) => reportError('обновление рейтинга пользователя', err));
 }
 
 function addSkillForUser(userId, skill) {
