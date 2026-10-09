@@ -4971,6 +4971,9 @@ function enterPasswordStep(user, onComplete = null) {
     mode: user.hasPassword ? 'login' : 'create',
     error: '',
     submitting: false,
+    // telegramRequesting/codeSource — см. requestTelegramResetCode ниже.
+    telegramRequesting: false,
+    codeSource: '',
     onComplete: onComplete || null,
   };
   render();
@@ -5134,6 +5137,64 @@ async function submitResetCodeStep(codeValue, passwordValue, confirmValue) {
     passwordStepState.submitting = false;
     passwordStepState.error = 'Не получилось соединиться — попробуйте ещё раз';
     reportError('сброс пароля по коду', err);
+    render();
+  }
+}
+
+/**
+ * Самостоятельный сброс пароля через Telegram (кнопка «Получить код в
+ * Telegram» — см. renderPasswordStepOverlay) — альтернатива «Есть код от
+ * поддержки?», которая требует дозвониться/достучаться до админа. Если у
+ * аккаунта с этим номером привязан Telegram (см. submitTelegramLinkCode),
+ * код присылает сам бот — Edge Function request-telegram-reset-code (см.
+ * её комментарий: лимит 2 запроса в сутки на аккаунт считает она сама,
+ * здесь только показываем, что пришло в ответ). Код в ответе HTTP не
+ * приходит никогда — только в сам Telegram.
+ * По просьбе Sg 09.10.2026: если телефон не найден или Telegram не
+ * привязан — показываем честную ошибку как есть, без маскировки.
+ */
+async function requestTelegramResetCode() {
+  if (!passwordStepState || passwordStepState.submitting) return;
+  const { phone } = passwordStepState;
+  passwordStepState.submitting = true;
+  passwordStepState.telegramRequesting = true;
+  passwordStepState.error = '';
+  render();
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/request-telegram-reset-code`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ phone }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!passwordStepState) return;
+    if (!res.ok || !data || !data.ok) {
+      const messages = {
+        bad_phone: 'Не получилось определить номер — начните заново',
+        user_not_found: 'Телефон не найден',
+        telegram_not_linked: 'Telegram не привязан к этому аккаунту — попросите код у поддержки',
+        rate_limited: 'Слишком много запросов за сутки — попробуйте позже или напишите в поддержку',
+        telegram_send_failed: 'Не получилось отправить код в Telegram — попробуйте позже или напишите в поддержку',
+      };
+      passwordStepState.submitting = false;
+      passwordStepState.telegramRequesting = false;
+      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      return render();
+    }
+    passwordStepState.submitting = false;
+    passwordStepState.telegramRequesting = false;
+    passwordStepState.mode = 'reset';
+    passwordStepState.codeSource = 'telegram';
+    passwordStepState.error = '';
+    render();
+    showToast('Код отправлен в Telegram');
+  } catch (err) {
+    if (!passwordStepState) return;
+    passwordStepState.submitting = false;
+    passwordStepState.telegramRequesting = false;
+    passwordStepState.error = 'Не получилось соединиться — попробуйте ещё раз';
+    reportError('запрос кода сброса через Telegram', err);
     render();
   }
 }
@@ -7551,11 +7612,16 @@ function renderPasswordStepOverlay(st) {
   const isCreate = st.mode === 'create';
   const isReset = st.mode === 'reset';
   if (isReset) {
+    const viaTelegram = st.codeSource === 'telegram';
     return `
       <div class="map-picker-overlay">
         <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
-          <p><b>Код от поддержки</b></p>
-          <p class="order-meta">Введите код, который вам продиктовали или прислали, и новый пароль для номера ${escapeHtml(displayPhone(st.phone))}.</p>
+          <p><b>${viaTelegram ? 'Код из Telegram' : 'Код от поддержки'}</b></p>
+          <p class="order-meta">${
+            viaTelegram
+              ? `Мы отправили код в Telegram-бот — введите его и новый пароль для номера ${escapeHtml(displayPhone(st.phone))}.`
+              : `Введите код, который вам продиктовали или прислали, и новый пароль для номера ${escapeHtml(displayPhone(st.phone))}.`
+          }</p>
           ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
           <label>Код</label>
           <input type="text" id="password-step-code" autocomplete="one-time-code" autocapitalize="characters" ${st.submitting ? 'disabled' : ''} />
@@ -7566,6 +7632,13 @@ function renderPasswordStepOverlay(st) {
           <button class="primary-button" id="password-step-submit" style="margin-top:14px;" ${st.submitting ? 'disabled' : ''}>${
       st.submitting ? 'Проверяем…' : 'Сохранить пароль'
     }</button>
+          ${
+            viaTelegram
+              ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-request-telegram-code" ${st.submitting ? 'disabled' : ''}>${
+                  st.telegramRequesting ? 'Отправляем…' : 'Прислать код ещё раз'
+                }</button>`
+              : ''
+          }
           <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-back-to-login">Назад, у меня есть пароль</button>
           <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-cancel">Отмена</button>
         </div>
@@ -7594,7 +7667,10 @@ function renderPasswordStepOverlay(st) {
   }</button>
         ${
           !isCreate
-            ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-use-code">Есть код от поддержки?</button>
+            ? `<button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-request-telegram-code" ${st.submitting ? 'disabled' : ''}>${
+                st.telegramRequesting ? 'Отправляем…' : 'Получить код в Telegram'
+              }</button>
+        <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="password-step-use-code">Есть код от поддержки?</button>
         <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="show-support">Забыли пароль? Напишите в поддержку</button>`
             : ''
         }
@@ -12063,11 +12139,15 @@ async function handleAction(action, value) {
     case 'password-step-use-code':
       if (!passwordStepState) return;
       passwordStepState.mode = 'reset';
+      passwordStepState.codeSource = ''; // код от админа, не из Telegram — см. renderPasswordStepOverlay
       passwordStepState.error = '';
       return render();
+    case 'password-step-request-telegram-code':
+      return requestTelegramResetCode();
     case 'password-step-back-to-login':
       if (!passwordStepState) return;
       passwordStepState.mode = 'login';
+      passwordStepState.codeSource = '';
       passwordStepState.error = '';
       return render();
 
