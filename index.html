@@ -2607,6 +2607,23 @@ function headers(extra = {}) {
 }
 
 /**
+ * Текст ошибки для случаев, когда код ошибки от сервера не входит в
+ * локальный словарь messages (экраны пароля — submitPasswordStep,
+ * submitResetCodeStep, requestTelegramResetCode). Раньше в таких случаях
+ * показывалась общая фраза «Не получилось — попробуйте ещё раз» без
+ * подробностей, и разобраться, что сломалось, было невозможно (просьба
+ * Sg 09.10.2026, после неудачной попытки сброса пароля через Telegram).
+ * Теперь показываем сырой код ошибки (и detail, если сервер его прислал)
+ * прямо на экране.
+ */
+function describeUnknownError(data, res) {
+  const code = data && data.error;
+  if (!code) return `Не получилось — попробуйте ещё раз (HTTP ${res.status})`;
+  const detail = data && data.detail ? `: ${data.detail}` : '';
+  return `Не получилось — попробуйте ещё раз (ошибка: ${code}${detail})`;
+}
+
+/**
  * Обёртка над fetch с одним автоматическим повтором при явно временных
  * сбоях — обрыв соединения (fetch бросает TypeError до получения ответа,
  * например при обрыве VPN/мобильной сети) или 5xx от сервера/прокси
@@ -5068,7 +5085,7 @@ async function submitPasswordStep(passwordValue, confirmValue) {
       };
       if (!passwordStepState) return;
       passwordStepState.submitting = false;
-      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      passwordStepState.error = (data && messages[data.error]) || describeUnknownError(data, res);
       // Локальная догадка «пароль уже есть?» устарела (например, его
       // задали с другого устройства) — переключаем ту же форму на вход,
       // а не оставляем тупик на экране «Придумайте пароль».
@@ -5128,7 +5145,7 @@ async function submitResetCodeStep(codeValue, passwordValue, confirmValue) {
       };
       if (!passwordStepState) return;
       passwordStepState.submitting = false;
-      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      passwordStepState.error = (data && messages[data.error]) || describeUnknownError(data, res);
       return render();
     }
     completePasswordLogin(passwordStepState.userId, data.token);
@@ -5179,7 +5196,7 @@ async function requestTelegramResetCode() {
       };
       passwordStepState.submitting = false;
       passwordStepState.telegramRequesting = false;
-      passwordStepState.error = (data && messages[data.error]) || 'Не получилось — попробуйте ещё раз';
+      passwordStepState.error = (data && messages[data.error]) || describeUnknownError(data, res);
       return render();
     }
     passwordStepState.submitting = false;
