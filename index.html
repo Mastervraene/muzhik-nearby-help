@@ -8799,7 +8799,7 @@ function orderCardHtml(order, { viewer }) {
         // деталях заказа) и вместо неё показать подсказку, что подробности
         // смотрятся по клику на карточку (вся карточка и так кликабельна).
         order.isPrecedent
-          ? `<p class="order-card-more-hint">Нажмите, чтоб смотреть подробней</p>`
+          ? `<p class="order-card-more-hint">Нажмите, чтобы смотреть подробней</p>`
           : typeof order.finalPrice === 'number'
           ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
@@ -9631,7 +9631,20 @@ function renderOrderDetail() {
             : ''
         }
         ${diagnosisLogHtml(order)}
-        ${partPurchaseHistoryHtml(order)}
+        ${
+          // ИСПРАВЛЕНО 09.10.2026 (срочно, жалоба Sg: «не нажимается форма
+          // заказа», свайпы работают, другие страницы работают — именно
+          // заказы не открываются). Причина: функцию partPurchaseHistoryHtml
+          // удалили при переносе истории «нужна деталь» внутрь
+          // technicalInfoHtml (см. выше, партия правок с красной подсветкой
+          // part_purchase_requested), а этот вызов здесь — забыли. Он падал
+          // с ReferenceError на КАЖДОМ открытии ЛЮБОГО заказа (вызывается
+          // безусловно, не только для part_purchase_requested), из-за чего
+          // render() всего экрана заказа рушился молча — клик по карточке
+          // ничего не делал. Сама история уже рендерится ниже, внутри
+          // technicalInfoHtml() — отдельный вызов здесь просто лишний.
+          ''
+        }
         ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
         <div style="margin-top:12px;">${actions}</div>
       </div>
