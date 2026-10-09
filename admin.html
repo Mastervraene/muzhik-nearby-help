@@ -2236,29 +2236,31 @@ async function requestPartPurchase(o) {
       timeline,
     });
 
-    // Уведомление клиенту в Telegram — best-effort, тот же принцип, что и
-    // у requestClarification ниже.
-    const customer = allUsers.find((u) => u.id === o.customerId);
-    if (customer && customer.telegramId) {
+    // ИСПРАВЛЕНО 09.10.2026 (срочная просьба Sg: «нажал купить деталь,
+    // уведомления у клиента не было, я думал мы это уже исправляли») —
+    // раньше здесь был прямой fetch в Telegram в обход таблицы
+    // notifications (как requestClarification ДО правки 08.10.2026, заказ
+    // №75) — срабатывал только если у клиента уже привязан telegramId, а
+    // если нет — клиент не получал вообще ничего, ни в Telegram, ни на
+    // сайте. Эту же правку (requestClarification, см. ниже) тогда
+    // применили не везде — здесь пропустили. Теперь — обычная запись в
+    // public.notifications, тот же путь, что и у остальных системных
+    // уведомлений: сразу видна в разделе «Уведомления» на сайте независимо
+    // от Telegram, а в Telegram её (если telegram_id есть) отправит сама БД
+    // — триггер notify_telegram_on_new_notification, с учётом тишины
+    // 22:00–07:00. Best-effort — сбой не должен мешать самой заявке на
+    // покупку детали: заказ всё равно уже переведён в
+    // part_purchase_requested.
+    try {
       const orderLabel = o.title || o.description || 'Заказ';
-      const text = `По заказу «${orderLabel}» нужно купить деталь:\n\n${comment}\n\nКогда купите — отметьте это в разделе «Заказы» на сайте: https://мастерврайоне.рф/`;
-      try {
-        const res = await sendAdminNotification([customer.telegramId], text);
-        if (res.configured && res.sent > 0) {
-          try {
-            await insertRow('telegram_messages', {
-              user_id: customer.id,
-              telegram_id: customer.telegramId,
-              direction: 'out',
-              text,
-            });
-          } catch (logErr) {
-            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
-          }
-        }
-      } catch (notifyErr) {
-        console.warn('Не удалось отправить уведомление о покупке детали:', notifyErr);
-      }
+      await insertRow('notifications', {
+        recipient_user_id: o.customerId,
+        recipient_role: 'customer',
+        order_id: o.id,
+        text: `По заказу «${orderLabel}» нужно купить деталь:\n\n${comment}\n\nКогда купите — отметьте это в разделе «Заказы» на сайте.`,
+      });
+    } catch (notifyErr) {
+      console.warn('Не удалось создать уведомление о покупке детали:', notifyErr);
     }
 
     await loadData({ keepOpen: true });
@@ -2890,7 +2892,7 @@ function wireOrderForm(o) {
     if (workerChanged && newWorkerId) {
       newWorker = allUsers.find((u) => u.id === newWorkerId);
       const label = newWorker ? (newWorker.displayName || newWorker.phone || newWorker.id) : newWorkerId;
-      const ok = confirm(`Принудительно назначить этот заказ мастеру «${label}»?\n\nЕсли у него привязан Telegram — придёт уведомление о назначении.`);
+      const ok = confirm(`Принудительно назначить этот заказ мастеру «${label}»?\n\nЕму придёт уведомление о назначении (в приложении, и в Telegram, если привязан).`);
       if (!ok) return;
     } else if (workerChanged && !newWorkerId) {
       const ok = confirm('Снять текущего мастера с заказа?');
@@ -2903,29 +2905,24 @@ function wireOrderForm(o) {
     try {
       await updateRow('orders', o.id, patch);
 
-      // Уведомление мастеру о принудительном назначении — best-effort: если
-      // рассылка не настроена или у мастера нет Telegram, заказ всё равно
-      // остаётся назначенным, просто без пуша.
-      if (workerChanged && newWorkerId && newWorker && newWorker.telegramId) {
+      // ИСПРАВЛЕНО 09.10.2026 (тот же баг, что и у requestPartPurchase выше —
+      // прямой Telegram-send в обход public.notifications, срабатывал
+      // только при наличии telegramId у мастера). Теперь обычная запись в
+      // notifications — её, если telegram_id есть, в Telegram отправит
+      // сама БД (триггер notify_telegram_on_new_notification), а на сайте
+      // уведомление видно в любом случае.
+      if (workerChanged && newWorkerId && newWorker) {
         const orderLabel = patch.title || o.title || 'Заказ';
         const districtLabel = patch.district || o.district || '';
-        const text = `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`;
         try {
-          const res = await sendAdminNotification([newWorker.telegramId], text);
-          if (res.configured && res.sent > 0) {
-            try {
-              await insertRow('telegram_messages', {
-                user_id: newWorker.id,
-                telegram_id: newWorker.telegramId,
-                direction: 'out',
-                text,
-              });
-            } catch (logErr) {
-              console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
-            }
-          }
+          await insertRow('notifications', {
+            recipient_user_id: newWorker.id,
+            recipient_role: 'worker',
+            order_id: o.id,
+            text: `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`,
+          });
         } catch (notifyErr) {
-          console.warn('Не удалось отправить уведомление о назначении:', notifyErr);
+          console.warn('Не удалось создать уведомление о назначении:', notifyErr);
         }
       }
 
@@ -4804,33 +4801,24 @@ async function quickAssignWorkerToOrder(orderId, workerId) {
     return;
   }
   const label = worker.displayName || worker.phone || worker.id;
-  const ok = confirm(
-    `Принудительно назначить заказ «${order.title || 'без названия'}» мастеру «${label}»?\n\nЕсли у него привязан Telegram — придёт уведомление о назначении.`
-  );
+  const ok = confirm(`Принудительно назначить заказ «${order.title || 'без названия'}» мастеру «${label}»?\n\nЕму придёт уведомление о назначении (в приложении, и в Telegram, если привязан).`);
   if (!ok) return;
   try {
     await updateRow('orders', order.id, { assigned_worker_id: worker.id });
-    if (worker.telegramId) {
-      const orderLabel = order.title || 'Заказ';
-      const districtLabel = order.district || '';
-      const text = `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`;
-      try {
-        const res = await sendAdminNotification([worker.telegramId], text);
-        if (res.configured && res.sent > 0) {
-          try {
-            await insertRow('telegram_messages', {
-              user_id: worker.id,
-              telegram_id: worker.telegramId,
-              direction: 'out',
-              text,
-            });
-          } catch (logErr) {
-            console.warn('Не удалось сохранить исходящее сообщение в историю:', logErr);
-          }
-        }
-      } catch (notifyErr) {
-        console.warn('Не удалось отправить уведомление о назначении:', notifyErr);
-      }
+    // ИСПРАВЛЕНО 09.10.2026 (тот же баг, что и у requestPartPurchase/
+    // wireOrderForm выше) — обычная запись в notifications вместо прямого
+    // Telegram-send в обход неё.
+    const orderLabel = order.title || 'Заказ';
+    const districtLabel = order.district || '';
+    try {
+      await insertRow('notifications', {
+        recipient_user_id: worker.id,
+        recipient_role: 'worker',
+        order_id: order.id,
+        text: `Вам назначен заказ: «${orderLabel}»${districtLabel ? ` (район: ${districtLabel})` : ''}. Подробности — в разделе «Заказы, которые я выполняю» на сайте, с вами свяжется администратор.`,
+      });
+    } catch (notifyErr) {
+      console.warn('Не удалось создать уведомление о назначении:', notifyErr);
     }
     await loadData({ keepOpen: true });
     renderMap();

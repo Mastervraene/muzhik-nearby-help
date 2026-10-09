@@ -8769,7 +8769,14 @@ function orderCardHtml(order, { viewer }) {
           </div>
         </div>
         <span class="status-pill ${
-          order.status === 'clarification_requested' ? 'danger' : ['cancelled', 'issue_reported'].includes(order.status) ? '' : 'muted'
+          // part_purchase_requested добавлен 09.10.2026 (просьба Sg) — та
+          // же логика, что и у clarification_requested: клиенту ждут
+          // действия, статус должен сразу бросаться в глаза в списке.
+          ['clarification_requested', 'part_purchase_requested'].includes(order.status)
+            ? 'danger'
+            : ['cancelled', 'issue_reported'].includes(order.status)
+            ? ''
+            : 'muted'
         }">${STATUS_LABELS[order.status]}</span>
       </div>
       ${
@@ -9494,13 +9501,19 @@ function renderOrderDetail() {
       // requestPartPurchase, история — partPurchaseHistoryHtml выше). Две
       // кнопки: без вопроса — сразу в поиск мастера, минуя повторную
       // модерацию; с вопросом — на модерацию, как обычное уточнение.
+      // Красная подсветка — та же .clarification-alert, что и у
+      // «Нужно уточнение» выше (просьба Sg 09.10.2026: «мы точно это уже
+      // делали» — суть та же, админ ждёт действия клиента, должно сразу
+      // бросаться в глаза).
       const lastPartRequest = orderPartPurchaseHistory(order).slice(-1)[0] || {};
       actions = `
-        <p class="order-meta"><b>Нужно купить деталь:</b></p>
-        <p>${escapeHtml(lastPartRequest.comment || '')}</p>
-        <textarea id="part-purchase-question-${order.id}" class="composer-textarea" placeholder="Если по детали есть вопрос — напишите здесь (необязательно)…" rows="2"></textarea>
-        <button class="primary-button" data-action="confirm-part-purchased" data-value="${order.id}">Деталь куплена</button>
-        <button class="secondary-button" data-action="confirm-part-purchased-with-question" data-value="${order.id}">Деталь куплена, есть вопрос</button>
+        <div class="field-card clarification-alert" style="margin:8px 0;">
+          <p class="order-meta"><b>Нужно купить деталь:</b></p>
+          <p><b>${escapeHtml(lastPartRequest.comment || '')}</b></p>
+          <textarea id="part-purchase-question-${order.id}" class="composer-textarea" placeholder="Если по детали есть вопрос — напишите здесь (необязательно)…" rows="2"></textarea>
+          <button class="primary-button" data-action="confirm-part-purchased" data-value="${order.id}">Деталь куплена</button>
+          <button class="secondary-button" data-action="confirm-part-purchased-with-question" data-value="${order.id}">Деталь куплена, есть вопрос</button>
+        </div>
       `;
     }
   }
