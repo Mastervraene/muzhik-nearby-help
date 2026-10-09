@@ -852,6 +852,54 @@ const STATUS_KEYS = Object.keys(STATUS_LABELS);
 // тот же набор, что ARCHIVED_ORDER_STATUSES в index.html (личный кабинет).
 const ARCHIVED_ORDER_STATUSES = ['rated', 'cancelled'];
 
+// -----------------------------------------------------------------------
+// Уведомление о РУЧНОЙ смене статуса заказа админом — отложенная просьба Sg
+// (09.10.2026): «если я в админке меняю статус заказа вручную - чтобы
+// приходили все уведомления - и на сайт и в телеграм». Раньше смена статуса
+// через поле «Статус» в развёрнутой карточке заказа (см. wireOrderForm,
+// save-order) и массовая смена статуса у всех заказов пользователя (см.
+// bulk-status-apply-master) вообще не писали в notifications — заказчик и
+// назначенный мастер узнавали о новом статусе, только случайно зайдя на
+// сайт. Остальные места, где статус меняется ЦЕЛЕНАПРАВЛЕННЫМ действием
+// (approveOrder, requestClarification, requestPartPurchase, принудительное
+// назначение мастера) — уже шлют СВОЙ, более подробный текст, их это не
+// касается и не дублирует.
+//
+// Текст намеренно общий (просто новый статус человеческим языком, без
+// деталей заказа) — у 15 статусов слишком разный контекст, чтобы расписывать
+// каждый отдельно, а часть смен — чисто технические (админ поправил тестовый
+// заказ) и не должны пугать клиента длинным текстом. Та же запись, что и
+// везде — в Telegram её (если telegram_id привязан) отправит сама БД, триггер
+// notify_telegram_on_new_notification, с учётом «тихих часов» 22:00–07:00.
+// Best-effort — сбой уведомления не должен блокировать саму смену статуса,
+// каждый insert в своём try/catch.
+async function notifyManualStatusChange(o, newStatus) {
+  const orderLabel = o.title || o.description || 'Заказ';
+  const text = `Статус вашего заказа «${orderLabel}» изменён: ${STATUS_LABELS[newStatus] || newStatus}. Подробности на сайте: https://мастерврайоне.рф/`;
+  try {
+    await insertRow('notifications', {
+      recipient_user_id: o.customerId,
+      recipient_role: 'customer',
+      order_id: o.id,
+      text,
+    });
+  } catch (err) {
+    console.warn('[notifyManualStatusChange] не удалось уведомить заказчика:', err);
+  }
+  if (o.assignedWorkerId) {
+    try {
+      await insertRow('notifications', {
+        recipient_user_id: o.assignedWorkerId,
+        recipient_role: 'worker',
+        order_id: o.id,
+        text,
+      });
+    } catch (err) {
+      console.warn('[notifyManualStatusChange] не удалось уведомить мастера:', err);
+    }
+  }
+}
+
 // Расшифровка машинного kind у admin_tasks (вкладка «Задачи») — незнакомый
 // kind показывается как есть, см. dbAdminTaskToTask.
 const ADMIN_TASK_KIND_LABELS = {
@@ -2947,6 +2995,15 @@ function wireOrderForm(o) {
         }
       }
 
+      // Ручная смена статуса через это поле — отдельное уведомление, общее
+      // для всех статусов (см. notifyManualStatusChange выше, просьба Sg
+      // 09.10.2026). customerId/title у заказа не меняются этой формой —
+      // берём как есть у o, но assignedWorkerId — уже актуальный (newWorkerId),
+      // на случай если статус и назначение мастера поменяли одновременно.
+      if (statusChanged) {
+        await notifyManualStatusChange({ ...o, assignedWorkerId: newWorkerId, title: patch.title }, newStatus);
+      }
+
       await loadData({ keepOpen: true });
       const hint = document.getElementById(`save-hint-${o.id}`);
       if (hint) {
@@ -3992,6 +4049,11 @@ function wireMasterForm(u) {
           const timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
           await updateRow('orders', o.id, { status: newStatus, timeline });
           okCount++;
+          // Та же общая просьба Sg 09.10.2026, что и у save-order выше —
+          // массовая смена статуса тоже должна уведомлять (сайт + Telegram).
+          if (newStatus !== o.status) {
+            await notifyManualStatusChange(o, newStatus);
+          }
         } catch (err) {
           failCount++;
           console.warn(`Не удалось изменить статус заказа ${o.id}:`, err);
