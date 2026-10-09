@@ -2186,8 +2186,16 @@ const ALLOWED_TRANSITIONS = {
   // эквайринга нет, см. paymentAdapter. «Оплатить» переводит заказ сразу
   // в paid и следом в searching (см. payOrder) — «оплачено» видно как шаг
   // в истории заказа, а искать мастеров начинаем с того же клика.
-  estimate_ready: ['paid', 'cancelled'],
-  paid: ['searching', 'cancelled'],
+  // part_purchase_requested добавлен 09.10.2026 (правило Sg: «Сначала надо
+  // выставить цену, а потом покупать деталь») — админ теперь может
+  // попросить купить деталь уже после того, как цена выставлена, не
+  // дожидаясь оплаты (см. admin.html requestPartPurchase).
+  estimate_ready: ['paid', 'cancelled', 'part_purchase_requested'],
+  // part_purchase_requested здесь же — та же просьба Sg 09.10.2026: оплатить
+  // можно и ДО покупки детали (заказ остаётся paid, админ просит деталь),
+  // поиск мастера в этом случае стартует уже после подтверждения покупки
+  // (см. confirmPartPurchased и supabase/functions/payment-notification).
+  paid: ['searching', 'cancelled', 'part_purchase_requested'],
   searching: ['assigned', 'cancelled'],
   // awaiting_part из assigned/in_progress — мастер приехал, но деталь
   // (запчасть для ремонта техники) не подошла или заказчик её ещё не
@@ -2207,15 +2215,19 @@ const ALLOWED_TRANSITIONS = {
   // с сохранённой лентой диагностики (diagnosis_log), так что новый (или
   // тот же) мастер видит всю историю, а не начинает разбираться с нуля.
   awaiting_part: ['searching', 'cancelled'],
-  // part_purchase_requested — админ на ПЕРВИЧНОЙ модерации попросил купить
-  // деталь (см. admin.html requestPartPurchase), ещё до назначения мастера.
-  // В этот статус заказ переводит ТОЛЬКО админ напрямую в базе (минуя эту
-  // машину состояний, как и clarification_requested выше). Обратно —
-  // заказчик одной из двух кнопок (см. index.html confirmPartPurchased /
-  // confirmPartPurchasedWithQuestion): «Деталь куплена» → сразу searching,
-  // минуя повторную модерацию; «есть вопрос» → назад в collecting_details,
-  // как обычное уточнение. Просьба Sg 25.09.2026.
-  part_purchase_requested: ['collecting_details', 'searching', 'cancelled'],
+  // part_purchase_requested — админ попросил купить деталь (см. admin.html
+  // requestPartPurchase), уже после того как цена выставлена (estimate_ready
+  // или paid), ещё до назначения мастера. В этот статус заказ переводит
+  // ТОЛЬКО админ напрямую в базе (минуя эту машину состояний, как и
+  // clarification_requested выше). Обратно — заказчик одной из двух кнопок
+  // (см. index.html confirmPartPurchased / confirmPartPurchasedWithQuestion):
+  // «Деталь куплена» → searching, если заказ уже оплачен, иначе обратно в
+  // estimate_ready — ждать оплаты (правило Sg 09.10.2026: поиск мастера
+  // начинается только когда заказ и оплачен, и деталь куплена); «есть
+  // вопрос» → назад в collecting_details, как обычное уточнение (старое
+  // поведение, до 09.10.2026 это был единственный путь входа в этот
+  // статус — оставлено для заказов из той эпохи).
+  part_purchase_requested: ['collecting_details', 'estimate_ready', 'searching', 'cancelled'],
 };
 
 class InvalidTransitionError extends Error {
@@ -6492,11 +6504,26 @@ function renderOrderPhotoForm(order, kind) {
 // прежняя имитация — иначе демо перестало бы работать без реального банка.
 async function payOrder(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
-  if (!order || order.status !== 'estimate_ready') return;
+  // ИСПРАВЛЕНО 09.10.2026 (правило Sg: оплатить можно и до, и после покупки
+  // детали) — раньше платёж был доступен только из estimate_ready; теперь
+  // разрешаем и из part_purchase_requested (деталь ещё не куплена, но
+  // заказчик хочет оплатить заранее), симметрично серверной проверке в
+  // create-payment.
+  if (!order || (order.status !== 'estimate_ready' && order.status !== 'part_purchase_requested')) return;
+  if (order.payment && order.payment.status === 'prepayment_paid') return;
   const amount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
 
   if (!isSupabaseConfigured()) {
     order.payment = confirmMockPayment(initiatePayment('online_stub', amount));
+    // ИСПРАВЛЕНО 09.10.2026 — если деталь ещё не куплена (part_purchase_requested),
+    // остаёмся в этом статусе после оплаты (как и прод-версия в
+    // payment-notification, см. её partPending): поиск мастера начнётся
+    // только когда заказчик подтвердит покупку (confirmPartPurchased).
+    if (order.status === 'part_purchase_requested') {
+      order = await saveOrder(order);
+      showToast('Оплата прошла (демо) — осталось купить деталь');
+      return render();
+    }
     order = transition(order, 'paid');
     order = transition(order, 'searching');
     order = await saveOrder(order);
@@ -6690,10 +6717,24 @@ function orderPartPurchaseHistory(order) {
 
 /**
  * Заказчик подтверждает: деталь куплена, вопросов нет — пропускаем
- * повторное одобрение админом и сразу возвращаемся в общий поиск мастера
- * (просьба Sg 25.09.2026). Нет текста для ввода — простой клик, поэтому
- * без явного await updateRow (как в confirmPartPurchasedWithQuestion ниже),
- * тот же паттерн, что и у confirmPartReady выше.
+ * повторное одобрение админом (просьба Sg 25.09.2026). Нет текста для
+ * ввода — простой клик, поэтому без явного await updateRow (как в
+ * confirmPartPurchasedWithQuestion ниже), тот же паттерн, что и у
+ * confirmPartReady выше.
+ *
+ * ИСПРАВЛЕНО 09.10.2026 (правило Sg: «Поиск мастера должен начинаться
+ * только когда заказ оплачен... Если не оплачен, но деталь куплена, то
+ * после оплаты») — раньше отсюда всегда уходили сразу в searching, считая
+ * заказ уже оплаченным (это было верно, пока part_purchase_requested можно
+ * было поставить только до выставления цены). Теперь деталь можно
+ * попросить купить и ДО оплаты (см. ALLOWED_TRANSITIONS), поэтому здесь
+ * ветвимся: если оплата уже прошла (payment.status === 'prepayment_paid')
+ * — в searching, как раньше, и сами вызываем notifyNearbyWorkers, т.к.
+ * сервер (payment-notification) намеренно пропустил этот вызов, пока
+ * деталь висела неподтверждённой (см. его комментарий про partPending);
+ * если оплаты ещё не было — в estimate_ready, заказчику нужно сначала
+ * оплатить (кнопка «Оплатить», см. payOrder), а сервер сам переведёт в
+ * searching, когда банк подтвердит платёж.
  */
 function confirmPartPurchased(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
@@ -6703,9 +6744,15 @@ function confirmPartPurchased(orderId) {
   const partPurchaseHistory = history.map((c, i) =>
     i === history.length - 1 ? { ...c, resolution: 'bought', answerComment: null, answeredAt } : c
   );
-  order = transition({ ...order, partPurchaseHistory }, 'searching');
+  const alreadyPaid = order.payment && order.payment.status === 'prepayment_paid';
+  order = transition({ ...order, partPurchaseHistory }, alreadyPaid ? 'searching' : 'estimate_ready');
   saveOrder(order);
-  showToast('Отлично — снова ищем мастера');
+  if (alreadyPaid) {
+    notifyNearbyWorkers(order.id);
+    showToast('Отлично — снова ищем мастера');
+  } else {
+    showToast('Деталь куплена — теперь можно оплатить заказ');
+  }
   render();
 }
 
@@ -9518,10 +9565,25 @@ function renderOrderDetail() {
       // делали» — суть та же, админ ждёт действия клиента, должно сразу
       // бросаться в глаза).
       const lastPartRequest = orderPartPurchaseHistory(order).slice(-1)[0] || {};
+      // ИСПРАВЛЕНО 09.10.2026 (правило Sg про порядок оплаты/покупки детали) —
+      // деталь теперь можно попросить купить и до оплаты заказа, поэтому
+      // подсказываем, что будет после подтверждения покупки: если заказ ещё
+      // не оплачен — оплатить, если уже оплачен — просто ждать мастера.
+      const partAlreadyPaid = order.payment && order.payment.status === 'prepayment_paid';
+      const partAmount = typeof order.finalPrice === 'number' ? order.finalPrice : order.estimate.min;
       actions = `
         <div class="field-card clarification-alert" style="margin:8px 0;">
           <p class="order-meta"><b>Нужно купить деталь:</b></p>
           <p><b>${escapeHtml(lastPartRequest.comment || '')}</b></p>
+          <p class="order-meta">${partAlreadyPaid ? 'Заказ уже оплачен — после покупки сразу начнём искать мастера.' : 'Можно оплатить сейчас или после покупки — поиск мастера начнётся, когда будут выполнены оба условия.'}</p>
+          ${
+            // Оплата доступна и отсюда (просьба Sg 09.10.2026: оплатить можно
+            // и до покупки детали, и после) — та же кнопка/обработчик, что и
+            // на экране «Ожидает оплаты» (см. payOrder).
+            !partAlreadyPaid
+              ? `<button class="primary-button" id="pay-order-${order.id}" data-action="pay-order" data-value="${order.id}" style="margin-bottom:8px;">Оплатить ${partAmount} ₽</button>`
+              : ''
+          }
           <textarea id="part-purchase-question-${order.id}" class="composer-textarea" placeholder="Если по детали есть вопрос — напишите здесь (необязательно)…" rows="2"></textarea>
           <button class="primary-button" data-action="confirm-part-purchased" data-value="${order.id}">Деталь куплена</button>
           <button class="secondary-button" data-action="confirm-part-purchased-with-question" data-value="${order.id}">Деталь куплена, есть вопрос</button>
@@ -9619,7 +9681,14 @@ function renderOrderDetail() {
             : renderWorkerPayoutBlock(order)
         }
         ${isCustomer && typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
-        <p class="order-meta"><span>Оплата: ${PAYMENT_METHOD_LABELS[order.payment.method] || order.payment.method}, статус — ${PAYMENT_STATUS_LABELS[order.payment.status] || order.payment.status}</span></p>
+        ${
+          // УБРАНО 09.10.2026 (просьба Sg: «У нас нет оплаты на месте») —
+          // раньше здесь всегда показывалась строка «Оплата: на месте,
+          // статус — не требуется» (order.payment.method изначально
+          // 'on_site' по умолчанию, см. initiatePayment) — вводила в
+          // заблуждение, оплата на сайте только онлайн через Т-Банк.
+          ''
+        }
         ${
           order.attachments && order.attachments.length
             ? `<div class="attachment-preview" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">${order.attachments
@@ -9645,7 +9714,20 @@ function renderOrderDetail() {
           // technicalInfoHtml() — отдельный вызов здесь просто лишний.
           ''
         }
-        ${order.warnings.map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`).join('')}
+        ${
+          // ИСПРАВЛЕНО 09.10.2026 (жалоба Sg: «Точная цена не найдена в
+          // каталоге — предложите свою цену» не должна постоянно висеть на
+          // экране заказа — «это один раз можно сообщить и больше не
+          // надо»). Текст про прецедент лежит в order.warnings с самого
+          // создания заказа (см. isPrecedent-ветку выше) и раньше
+          // показывался на КАЖДОМ открытии карточки. В краткой карточке
+          // списка (orderCardHtml) его уже скрывали той же фильтрацией —
+          // здесь, в детальной карточке, применяем тот же фильтр.
+          order.warnings
+            .filter((w) => !w.includes('Точная цена не найдена'))
+            .map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`)
+            .join('')
+        }
         <div style="margin-top:12px;">${actions}</div>
       </div>
       ${
