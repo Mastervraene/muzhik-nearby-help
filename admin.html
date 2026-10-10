@@ -1262,6 +1262,18 @@ function dbOrderToOrder(row) {
     customerReviewSeenByAdmin: Boolean(row.customer_review_seen_by_admin),
     workerReviewComment: row.worker_review_comment || '',
     workerReviewSeenByAdmin: Boolean(row.worker_review_seen_by_admin),
+    // ДОБАВЛЕНО 10.10.2026 — сами звёзды (workerRating/customerRating)
+    // раньше сюда не маппились вообще (orderReviewsHtml ниже на них
+    // ссылался, но всегда получал undefined — число звёзд рядом с
+    // текстом отзыва никогда не отображалось). Заодно — новые поля для
+    // модерации оценок (см. applyRatingDecision) и отдельная оценка
+    // сервиса (чисто статистика, см. раздел «Статистика»).
+    workerRating: row.worker_rating ?? null,
+    customerRating: row.customer_rating ?? null,
+    workerRatingCounted: row.worker_rating_counted ?? null,
+    customerRatingCounted: row.customer_rating_counted ?? null,
+    serviceRating: row.service_rating ?? null,
+    serviceRatingComment: row.service_rating_comment || '',
     // Время прибытия, названное мастером в форме «Буду через» на сайте
     // (см. advanceToEnRoute/renderEtaPicker в index.html).
     etaMinutes: row.eta_minutes ?? null,
@@ -1396,6 +1408,11 @@ function dbDailyStatToStat(row) {
     completedOrdersValue: Number(row.completed_orders_value ?? 0),
     avgWorkerRating: row.avg_worker_rating === null || row.avg_worker_rating === undefined ? null : Number(row.avg_worker_rating),
     avgCustomerRating: row.avg_customer_rating === null || row.avg_customer_rating === undefined ? null : Number(row.avg_customer_rating),
+    // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «оценка сервиса... накапливает
+    // данные в разделе статистика») — считает ночной job compute-daily-stats
+    // по полю orders.service_rating (бакетируется по service_rated_at, см.
+    // комментарий у этого поля в index.html).
+    avgServiceRating: row.avg_service_rating === null || row.avg_service_rating === undefined ? null : Number(row.avg_service_rating),
     issueReports: Number(row.issue_reports ?? 0),
     avgTimeToAssignMinutes: row.avg_time_to_assign_minutes === null || row.avg_time_to_assign_minutes === undefined ? null : Number(row.avg_time_to_assign_minutes),
     activeWorkers: Number(row.active_workers ?? 0),
@@ -1418,6 +1435,7 @@ const STATS_ROWS = [
   { key: 'completedOrdersValue', label: 'Стоимость выполненных заказов, ₽', fmt: 'money' },
   { key: 'avgWorkerRating', label: 'Средний рейтинг исполнителей', fmt: 'rating' },
   { key: 'avgCustomerRating', label: 'Средний рейтинг заказчиков', fmt: 'rating' },
+  { key: 'avgServiceRating', label: 'Средняя оценка сервиса', fmt: 'rating' },
   { group: 'Дополнительные метрики' },
   { key: 'issueReports', label: 'Заявленных проблем' },
   { key: 'avgTimeToAssignMinutes', label: 'Среднее время до назначения мастера, мин', fmt: 'rating' },
@@ -2434,6 +2452,16 @@ function orderCardHtml(o) {
   const nameDistrict = o.district ? `${customerName} · ${o.district}` : customerName;
   const hasUnreadReview =
     (o.customerReviewComment && !o.customerReviewSeenByAdmin) || (o.workerReviewComment && !o.workerReviewSeenByAdmin);
+  // ДОБАВЛЕНО 10.10.2026 — отдельный от hasUnreadReview баннер: оценка
+  // звёздами (мастера/заказчика) может прийти и БЕЗ комментария, и тогда
+  // hasUnreadReview выше её не заметит (она смотрит только на текст
+  // отзыва). «Просмотрено» для этого баннера не считается открытием
+  // карточки (как у hasUnreadReview, см. markOrderReviewsSeen) — он живёт,
+  // пока админ явно не нажмёт «учитывать»/«не учитывать» (см.
+  // orderReviewsHtml/applyRatingDecision).
+  const hasPendingRatingDecision =
+    (typeof o.workerRating === 'number' && o.workerRatingCounted == null) ||
+    (typeof o.customerRating === 'number' && o.customerRatingCounted == null);
   return `
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
@@ -2442,6 +2470,7 @@ function orderCardHtml(o) {
           <p class="card-title">${escapeHtml(nameDistrict)}</p>
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
+          ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
             <span>${fmtDate(orderLastActivityAt(o))}</span>
@@ -2563,24 +2592,131 @@ function orderQualityPhotosHtml(o, kind, label) {
   `;
 }
 
-/** Текстовые отзывы заказчика о работе и мастера о заказчике — читаются на модерации, звёзды видны отдельно в списке статистики. */
+/** Статус решения админа по конкретной оценке — см. orderReviewsHtml/applyRatingDecision ниже. */
+function ratingDecisionStatusHtml(counted) {
+  if (counted === true) return `<span style="color:#1a7f37;font-size:13px;">✓ учтено в рейтинге</span>`;
+  if (counted === false) return `<span style="color:var(--gray-500,#888);font-size:13px;">не учтено (решение зафиксировано)</span>`;
+  return '';
+}
+
+/**
+ * Отзывы и оценки по заказу — отзыв заказчика о мастере (с оценкой мастера
+ * по звёздам) и отзыв мастера о заказчике (с оценкой заказчика). ИЗМЕНЕНО
+ * 10.10.2026 (просьба Sg: «разделим оценку мастера и оценку сервиса... в
+ * админке эти оценки и комментарии должны быть видны в заказе и под ними
+ * кнопка «учитывать» и «не учитывать»») — раньше это был просто текст (и
+ * то, сами звёзды рядом никогда не показывались — см. фикс маппинга в
+ * dbOrderToOrder выше, их туда вообще не читали). Пока
+ * o.workerRatingCounted/o.customerRatingCounted равны null, рейтинг
+ * мастера/заказчика в users.* не меняется — клиент (index.html) больше не
+ * пересчитывает его сам при выставлении оценки (см. rateOrder/rateCustomer
+ * там), это теперь делает только applyRatingDecision ниже, по явному клику
+ * «учитывать»/«не учитывать». Показываем блок, даже если комментарий не
+ * оставили — отдельно от текста есть сама оценка звёздами, её тоже нужно
+ * либо учесть, либо отклонить.
+ *
+ * o.serviceRating — отдельная, сугубо статистическая оценка сервиса «Мужик»
+ * (не мастера и не заказчика) — решения «учитывать» не требует вообще
+ * (просьба Sg: «Оценка сервиса пока пусть будет чисто статистической»),
+ * просто показываем для контекста; агрегирует её раздел «Статистика» (см.
+ * buildStatsHtml ниже).
+ */
 function orderReviewsHtml(o) {
-  if (!o.customerReviewComment && !o.workerReviewComment) return '';
+  const hasWorkerRating = typeof o.workerRating === 'number';
+  const hasCustomerRating = typeof o.customerRating === 'number';
+  const hasServiceRating = typeof o.serviceRating === 'number';
+  if (!hasWorkerRating && !hasCustomerRating && !hasServiceRating) return '';
+
+  const noComment = '<i style="color:var(--gray-500,#888);">без комментария</i>';
+
+  const workerBlock = hasWorkerRating
+    ? `
+      <div style="margin:4px 0 10px;">
+        <p style="margin:4px 0;"><b>Заказчик о мастере (${o.workerRating}★):</b> ${o.customerReviewComment ? escapeHtml(o.customerReviewComment) : noComment}</p>
+        ${
+          o.workerRatingCounted == null
+            ? `<div style="display:flex;gap:8px;">
+                 <button type="button" class="btn-sm primary" id="rating-count-worker-${o.id}">✓ Учитывать</button>
+                 <button type="button" class="btn-sm ghost" id="rating-exclude-worker-${o.id}">✕ Не учитывать</button>
+               </div>`
+            : ratingDecisionStatusHtml(o.workerRatingCounted)
+        }
+      </div>
+    `
+    : '';
+
+  const customerBlock = hasCustomerRating
+    ? `
+      <div style="margin:4px 0 10px;">
+        <p style="margin:4px 0;"><b>Мастер о заказчике (${o.customerRating}★):</b> ${o.workerReviewComment ? escapeHtml(o.workerReviewComment) : noComment}</p>
+        ${
+          o.customerRatingCounted == null
+            ? `<div style="display:flex;gap:8px;">
+                 <button type="button" class="btn-sm primary" id="rating-count-customer-${o.id}">✓ Учитывать</button>
+                 <button type="button" class="btn-sm ghost" id="rating-exclude-customer-${o.id}">✕ Не учитывать</button>
+               </div>`
+            : ratingDecisionStatusHtml(o.customerRatingCounted)
+        }
+      </div>
+    `
+    : '';
+
+  const serviceBlock = hasServiceRating
+    ? `
+      <div style="margin:4px 0;">
+        <p style="margin:4px 0;"><b>Оценка сервиса (${o.serviceRating}★):</b> ${o.serviceRatingComment ? escapeHtml(o.serviceRatingComment) : noComment} <span style="color:var(--gray-500,#888);font-size:13px;">— статистика, без модерации</span></p>
+      </div>
+    `
+    : '';
+
   return `
     <div class="field-sm" style="background:#f6f8fa;border-radius:8px;padding:10px 12px;">
-      <label>Отзывы по заказу</label>
-      ${
-        o.customerReviewComment
-          ? `<p style="margin:4px 0;"><b>Заказчик о работе${typeof o.workerRating === 'number' ? ` (${o.workerRating}★)` : ''}:</b> ${escapeHtml(o.customerReviewComment)}</p>`
-          : ''
-      }
-      ${
-        o.workerReviewComment
-          ? `<p style="margin:4px 0;"><b>Мастер о заказчике${typeof o.customerRating === 'number' ? ` (${o.customerRating}★)` : ''}:</b> ${escapeHtml(o.workerReviewComment)}</p>`
-          : ''
-      }
+      <label>Отзывы и оценки по заказу</label>
+      ${workerBlock}
+      ${customerBlock}
+      ${serviceBlock}
     </div>
   `;
+}
+
+/**
+ * Решение админа «учитывать»/«не учитывать» по конкретной оценке — см.
+ * orderReviewsHtml выше. side: 'worker' (заказчик оценил мастера) |
+ * 'customer' (мастер оценил заказчика). decision: true — учитывать
+ * (пересчитываем средний рейтинг соответствующего пользователя по той же
+ * формуле, что раньше жила в Edge Function rate-user — она оставлена
+ * нетронутой на сервере на случай отката, но из клиента больше не
+ * вызывается, см. rateOrder/rateCustomer в index.html), false — не
+ * учитывать (рейтинг не трогаем, просто фиксируем решение, чтобы кнопки не
+ * предлагались повторно). Решение одноразовое — обратного переключения
+ * («учли», потом «передумали») сейчас нет, как и просил Sg.
+ */
+async function applyRatingDecision(o, side, decision) {
+  const isWorkerSide = side === 'worker';
+  const targetUserId = isWorkerSide ? o.assignedWorkerId : o.customerId;
+  const ratingValue = isWorkerSide ? o.workerRating : o.customerRating;
+  const orderField = isWorkerSide ? 'worker_rating_counted' : 'customer_rating_counted';
+  const btnCount = document.getElementById(`rating-count-${side}-${o.id}`);
+  const btnExclude = document.getElementById(`rating-exclude-${side}-${o.id}`);
+  [btnCount, btnExclude].forEach((b) => { if (b) b.disabled = true; });
+  try {
+    if (decision && targetUserId) {
+      const target = allUsers.find((u) => u.id === targetUserId);
+      if (!target) throw new Error('Пользователь не найден (мастер/заказчик удалён из базы?)');
+      const ratingField = isWorkerSide ? 'rating' : 'customer_rating';
+      const countField = isWorkerSide ? 'rating_count' : 'customer_rating_count';
+      const oldRating = Number(isWorkerSide ? target.rating : target.customerRating) || 0;
+      const oldCount = Number(isWorkerSide ? target.ratingCount : target.customerRatingCount) || 0;
+      const newCount = oldCount + 1;
+      const newRating = Math.round(((oldRating * oldCount + ratingValue) / newCount) * 10) / 10;
+      await updateRow('users', targetUserId, { [ratingField]: newRating, [countField]: newCount });
+    }
+    await updateRow('orders', o.id, { [orderField]: Boolean(decision) });
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось сохранить решение по оценке: ' + err.message);
+    [btnCount, btnExclude].forEach((b) => { if (b) b.disabled = false; });
+  }
 }
 
 // Подписи автора записи в ленте диагностики — те же роли, что в index.html
@@ -3057,6 +3193,18 @@ function wireOrderForm(o) {
       }
     });
   }
+
+  // «Учитывать»/«не учитывать» по оценке мастера и заказчика — см.
+  // orderReviewsHtml и applyRatingDecision выше.
+  [
+    ['worker', 'rating-count-worker', true],
+    ['worker', 'rating-exclude-worker', false],
+    ['customer', 'rating-count-customer', true],
+    ['customer', 'rating-exclude-customer', false],
+  ].forEach(([side, idPrefix, decision]) => {
+    const btn = document.getElementById(`${idPrefix}-${o.id}`);
+    if (btn) btn.addEventListener('click', () => applyRatingDecision(o, side, decision));
+  });
 
   wireAdminNote('order', o.id, renderOrders);
 }

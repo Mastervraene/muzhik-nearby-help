@@ -3367,6 +3367,27 @@ function dbOrderToOrder(row) {
     customerReviewSeenByAdmin: Boolean(row.customer_review_seen_by_admin),
     workerReviewComment: row.worker_review_comment || '',
     workerReviewSeenByAdmin: Boolean(row.worker_review_seen_by_admin),
+    // ДОБАВЛЕНО 10.10.2026 (просьба Sg: разделить оценку мастера и оценку
+    // сервиса) — оценка сервиса отдельна от оценки мастера, чисто
+    // статистическая, не влияет ни на чей рейтинг, живёт только в
+    // «Статистика» в админке. *_counted — решение админа «учитывать»
+    // (true) / «не учитывать» (false) конкретную оценку мастера/заказчика
+    // в их среднем рейтинге; null — решение ещё не принято (см. rateOrder/
+    // rateCustomer в index.html — они больше НЕ обновляют рейтинг сразу,
+    // это теперь делает только админка кнопками «учитывать»/«не
+    // учитывать», см. applyRatingDecision в admin.html).
+    serviceRating: row.service_rating ?? null,
+    serviceRatingComment: row.service_rating_comment || '',
+    // ДОБАВЛЕНО 10.10.2026 — в отличие от worker_rating (привязан к
+    // переходу в статус 'rated', см. o.timeline) и customer_rating (свой
+    // customer_rated_at), у оценки сервиса не было отметки времени вообще —
+    // ночной job compute-daily-stats не смог бы понять, в какой день её
+    // засчитать (см. Edge Function, авг.рейтинг сервиса — statDate берётся
+    // из окна «вчера по МСК»). Пишется в rateService() ниже, по аналогии с
+    // customerRatedAt.
+    serviceRatedAt: row.service_rated_at || null,
+    workerRatingCounted: row.worker_rating_counted ?? null,
+    customerRatingCounted: row.customer_rating_counted ?? null,
     // Структурированное ТЗ для исполнителя — сформировано ассистентом
     // (/format-brief) сразу при создании заказа, см. requestFormattedBrief().
     // Может быть null: ассистент не настроен, запрос не удался, или заказ
@@ -3467,6 +3488,15 @@ function orderToDbOrder(order) {
     customer_review_seen_by_admin: order.customerReviewSeenByAdmin ?? false,
     worker_review_comment: order.workerReviewComment || null,
     worker_review_seen_by_admin: order.workerReviewSeenByAdmin ?? false,
+    // См. комментарий у этих же полей в dbOrderToOrder() — *_counted сюда
+    // просто round-trip'ится (клиент их никогда сам не выставляет, только
+    // читает — решение принимает админка), ?? null на случай старых
+    // заказов без этих колонок.
+    service_rating: order.serviceRating ?? null,
+    service_rating_comment: order.serviceRatingComment || null,
+    service_rated_at: order.serviceRatedAt || null,
+    worker_rating_counted: order.workerRatingCounted ?? null,
+    customer_rating_counted: order.customerRatingCounted ?? null,
     formatted_brief: order.formattedBrief || null,
     clarification: order.clarification || null,
     clarification_history: order.clarificationHistory || [],
@@ -6449,6 +6479,17 @@ function advanceWorkerStatus(orderId, nextStatus) {
 // ordersSortModalOpenFor у остальных мини-форм на весь экран не открытых.
 let etaCustomOpenFor = null;
 
+// ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «оценка уходит при нажатии на
+// звёзды», нужна отдельная кнопка «Оценить») — выбор звезды теперь только
+// подсвечивает её в UI (как set-skill-level у навыков, см. star-picker
+// в CSS), а не отправляет оценку сразу. Реальная отправка — по кнопке
+// «Оценить», читает отсюда уже выбранное число. Ключ — `${orderId}:${kind}`,
+// kind ∈ 'worker' (заказчик оценивает мастера) | 'customer' (мастер
+// оценивает заказчика) | 'service' (заказчик оценивает сервис — отдельное
+// поле, см. rateService). Не персистится — переживает только текущий
+// сеанс/рендеры экрана заказа, как etaCustomOpenFor выше.
+let ratingDrafts = {};
+
 /**
  * Текст уведомления заказчику про время прибытия — пресет в минутах
  * («Мастер будет в течение 10 минут.») либо точное время
@@ -6935,6 +6976,13 @@ function confirmPartReady(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
   order = transition(order, 'searching');
   saveOrder(order);
+  // ИСПРАВЛЕНО 10.10.2026 (просьба Sg: «уведомления должны приходить при
+  // любой смене статуса») — здесь заказ возвращается в общий поиск
+  // мастера (awaiting_part → searching), но пуш мастерам рядом раньше не
+  // уходил вообще (в отличие от того же перехода в confirmPartPurchased
+  // выше) — мастера узнавали о заказе только случайно, перезайдя на
+  // экран «Заказы». Best-effort, как и везде рядом.
+  notifyNearbyWorkers(order.id);
   showToast('Отлично — снова ищем мастера');
   render();
 }
@@ -7001,44 +7049,56 @@ function rateOrder(orderId, rating) {
     order.customerReviewSeenByAdmin = false;
   }
   saveOrder(order);
-  if (order.assignedWorkerId) {
+  // ИЗМЕНЕНО 10.10.2026 (просьба Sg: «оценки мастера и заказчика должны
+  // попадать в рейтинг только после решения админа — кнопки «учитывать»/
+  // «не учитывать»») — раньше здесь сразу вызывалась Edge Function
+  // rate-user, которая пересчитывала средний рейтинг мастера. Теперь
+  // оценка (order.workerRating + комментарий, уже сохранены строкой выше)
+  // только ЛОЖИТСЯ на заказ и ждёт модерации в админке (см. applyRatingDecision
+  // в admin.html) — на users.rating она повлияет, только когда админ явно
+  // нажмёт «учитывать» на карточке заказа. worker_rating_counted остаётся
+  // NULL (решение не принято) до тех пор. Сама Edge Function rate-user
+  // больше не вызывается отсюда — её серверный код оставлен нетронутым на
+  // случай отката, но из клиента теперь не используется.
+  //
+  // В демо-режиме (без Supabase) админки/модерации нет вообще, поэтому
+  // здесь сознательно оставлено старое поведение — мгновенный пересчёт
+  // среднего на клиенте — иначе оценка в прототипе ничего бы не делала.
+  if (!isSupabaseConfigured() && order.assignedWorkerId) {
     const worker = getUsers().find((u) => u.id === order.assignedWorkerId);
-    if (!isSupabaseConfigured()) {
-      if (worker) {
-        const newCount = worker.ratingCount + 1;
-        const newRating = (worker.rating * worker.ratingCount + rating) / newCount;
-        patchUserFields(worker.id, { rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
-      }
-    } else {
-      // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше среднее считалось на клиенте
-      // (значение можно было подделать через консоль браузера) и писалось
-      // прямым PATCH users анонимным ключом (patchUserFields), без всякой
-      // проверки, что оценивающий вообще имеет отношение к этому заказу.
-      // Теперь — Edge Function rate-user: проверяет sessionToken, что userId —
-      // заказчик именно этого заказа, что мастер назначен и ещё не оценён
-      // с этой стороны, и сама считает среднее на сервере из текущих
-      // значений в БД.
-      const sessionToken = loadSessionToken();
-      if (sessionToken) {
-        callSecureFn('rate-user', {
-          userId: state.currentUserId,
-          sessionToken,
-          orderId,
-          role: 'worker',
-          ratingValue: rating,
-        })
-          .then((data) => {
-            if (worker) {
-              worker.rating = data.rating;
-              worker.ratingCount = data.ratingCount;
-              render();
-            }
-          })
-          .catch((err) => reportError('оценка мастера', err));
-      }
+    if (worker) {
+      const newCount = worker.ratingCount + 1;
+      const newRating = (worker.rating * worker.ratingCount + rating) / newCount;
+      patchUserFields(worker.id, { rating: Math.round(newRating * 10) / 10, ratingCount: newCount });
     }
   }
-  showToast('Спасибо за оценку!');
+  delete ratingDrafts[`${orderId}:worker`];
+  showToast('Спасибо за оценку! Она появится в рейтинге мастера после проверки администратором.');
+  render();
+}
+
+/**
+ * Оценка сервиса «Мужик» в целом (не конкретного мастера) — отдельное
+ * поле рядом с оценкой мастера (см. renderOrderDetail, просьба Sg
+ * 10.10.2026). Статус заказа не трогает (в отличие от rateOrder — это не
+ * часть машины состояний заказа) и ни на чей рейтинг не влияет вообще:
+ * чисто статистика для раздела «Статистика» в админке, без модерации
+ * («учитывать»/«не учитывать» здесь не нужны — см. applyRatingDecision).
+ */
+function rateService(orderId, rating) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order) return;
+  const commentEl = document.getElementById(`rating-comment-service-${orderId}`);
+  const comment = commentEl ? commentEl.value.trim() : '';
+  // serviceRatedAt — время самой оценки (не заказа!), нужно ночному job'у
+  // compute-daily-stats, чтобы засчитать оценку в статистику ЗА ТОТ ДЕНЬ,
+  // когда её поставили, а не когда создан заказ (см. комментарий у
+  // serviceRatedAt в dbOrderToOrder выше).
+  order = { ...order, serviceRating: rating, serviceRatedAt: new Date().toISOString() };
+  if (comment) order.serviceRatingComment = comment;
+  saveOrder(order);
+  delete ratingDrafts[`${orderId}:service`];
+  showToast('Спасибо за оценку сервиса!');
   render();
 }
 
@@ -7057,37 +7117,18 @@ function rateCustomer(orderId, rating) {
     order.workerReviewSeenByAdmin = false;
   }
   saveOrder(order);
+  // ИЗМЕНЕНО 10.10.2026: та же логика, что и в rateOrder() выше («Так же и
+  // с заказчиком» — просьба Sg) — мгновенного пересчёта users.customer_rating
+  // больше нет, оценка ждёт «учитывать»/«не учитывать» в админке
+  // (customer_rating_counted). В демо-режиме — как раньше, сразу.
   const customer = getUsers().find((u) => u.id === order.customerId);
-  if (!isSupabaseConfigured()) {
-    if (customer) {
-      const newCount = (customer.customerRatingCount || 0) + 1;
-      const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
-      patchUserFields(customer.id, { customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
-    }
-  } else {
-    // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: см. тот же комментарий в rateOrder()
-    // выше — здесь та же замена клиентского расчёта и прямого PATCH на
-    // Edge Function rate-user (role: 'customer').
-    const sessionToken = loadSessionToken();
-    if (sessionToken) {
-      callSecureFn('rate-user', {
-        userId: state.currentUserId,
-        sessionToken,
-        orderId,
-        role: 'customer',
-        ratingValue: rating,
-      })
-        .then((data) => {
-          if (customer) {
-            customer.customerRating = data.rating;
-            customer.customerRatingCount = data.ratingCount;
-            render();
-          }
-        })
-        .catch((err) => reportError('оценка заказчика', err));
-    }
+  if (!isSupabaseConfigured() && customer) {
+    const newCount = (customer.customerRatingCount || 0) + 1;
+    const newRating = ((customer.customerRating || 0) * (customer.customerRatingCount || 0) + rating) / newCount;
+    patchUserFields(customer.id, { customerRating: Math.round(newRating * 10) / 10, customerRatingCount: newCount });
   }
-  showToast('Спасибо за оценку заказчика!');
+  delete ratingDrafts[`${orderId}:customer`];
+  showToast('Спасибо за оценку заказчика! Она появится в его рейтинге после проверки администратором.');
   render();
 }
 
@@ -9458,6 +9499,25 @@ function partsInfoHtml(order) {
  * WORKER_PAYOUT_RATE/workerPayout().
  */
 function renderWorkerPayoutBlock(order) {
+  // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg, заказ №73, тест за реальные деньги) —
+  // раньше order.isPrecedent проверялся ПЕРВЫМ: если у прецедента не было
+  // negotiation.customerOffer (а после прохождения модерации его и не
+  // бывает — это предложение клиента ДО согласования, админ потом ставит
+  // свою order.finalPrice через approveOrder), мастер навсегда видел
+  // «сумма не согласована», даже когда заказ уже одобрен, оплачен и ищет
+  // мастера (т.е. finalPrice давно есть). Источник истины — именно
+  // finalPrice, как только он появился; isPrecedent имеет значение только
+  // ДО того, как админ выставил финальную цену (та же логика, что у
+  // «Оплачено»/«Итого к оплате» в блоке заказчика выше).
+  if (typeof order.finalPrice === 'number') {
+    return `
+      <div class="worker-payout">
+        <p class="worker-payout-price">Стоимость заказа ${order.finalPrice} ₽</p>
+        <p class="worker-payout-earn-label">Вы заработаете</p>
+        <p class="worker-payout-earn-amount">${workerPayout(order.finalPrice)} ₽</p>
+      </div>
+    `;
+  }
   if (order.isPrecedent) {
     const offer = order.negotiation && order.negotiation.customerOffer;
     if (!offer) {
@@ -9468,15 +9528,6 @@ function renderWorkerPayoutBlock(order) {
         <p class="worker-payout-price">Стоимость заказа ${offer} ₽</p>
         <p class="worker-payout-earn-label">Вы заработаете</p>
         <p class="worker-payout-earn-amount">${workerPayout(offer)} ₽</p>
-      </div>
-    `;
-  }
-  if (typeof order.finalPrice === 'number') {
-    return `
-      <div class="worker-payout">
-        <p class="worker-payout-price">Стоимость заказа ${order.finalPrice} ₽</p>
-        <p class="worker-payout-earn-label">Вы заработаете</p>
-        <p class="worker-payout-earn-amount">${workerPayout(order.finalPrice)} ₽</p>
       </div>
     `;
   }
@@ -9557,17 +9608,27 @@ function renderOrderDetail() {
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
     // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
-    // Комментарий — необязательный текст рядом со звёздами; читается из
-    // textarea в момент клика по звезде (см. rateCustomer()), а не через
-    // отдельный шаг «сначала звезда, потом отправить» — так его не теряет
-    // повторный render() между вводом и оценкой.
+    // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «оценка уходит при нажатии на
+    // звёзды», нужна отдельная кнопка) — клик по звезде теперь только
+    // выбирает значение (ratingDrafts, см. комментарий у её объявления),
+    // отправка — по кнопке «Оценить» ниже, читает и звёзды, и то, что уже
+    // написано в комментарии. Кнопка неактивна, пока звезда не выбрана.
+    // Красивые звёзды — тот же star-picker/star-btn, что и у навыков
+    // мастера (просьба Sg: «сами звёзды надо сделать красивее»).
     if (['completed', 'confirmed', 'rated'].includes(order.status) && !order.customerRating) {
+      const draft = ratingDrafts[`${order.id}:customer`] || 0;
       actions += `
-        <p class="order-meta">Оцените заказчика:</p>
-        <textarea id="rating-comment-customer-${order.id}" class="composer-textarea" placeholder="Этот комментарий увидит только команда разработчиков (необязательно)…" rows="2"></textarea>
-        <div class="chip-row">
-          ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-customer" data-value="${order.id}:${n}">${n}★</button>`).join('')}
+        <p class="order-meta"><b>Оцените заказчика:</b></p>
+        <div class="star-picker" role="radiogroup" aria-label="Оценка заказчика">
+          ${[1, 2, 3, 4, 5]
+            .map(
+              (n) =>
+                `<button type="button" class="star-btn ${n <= draft ? 'filled' : ''}" data-action="select-rating-draft" data-value="${order.id}:customer:${n}" aria-label="${n} из 5">★</button>`
+            )
+            .join('')}
         </div>
+        <textarea id="rating-comment-customer-${order.id}" class="composer-textarea" placeholder="Этот комментарий увидит только команда разработчиков (необязательно)…" rows="2"></textarea>
+        <button type="button" class="primary-button" data-action="rate-customer" data-value="${order.id}" ${!draft ? 'disabled' : ''}>Оценить</button>
       `;
     }
   } else if (isCustomer) {
@@ -9622,14 +9683,51 @@ function renderOrderDetail() {
         <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение</button>
         <button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>
       `;
-    } else if (order.status === 'confirmed') {
-      actions = `
-        <p class="order-meta">Оцените работу:</p>
-        <textarea id="rating-comment-order-${order.id}" class="composer-textarea" placeholder="Комментарий по работе (необязательно)…" rows="2"></textarea>
-        <div class="chip-row">
-          ${[1, 2, 3, 4, 5].map((n) => `<button data-action="rate-order" data-value="${order.id}:${n}">${n}★</button>`).join('')}
-        </div>
-      `;
+    } else if (order.status === 'confirmed' || order.status === 'rated') {
+      // ИЗМЕНЕНО 10.10.2026 (просьба Sg: «разделим оценку мастера и оценку
+      // сервиса — 2 поля») — раньше здесь была одна оценка (мастеру), и
+      // ровно она же переводила заказ в статус 'rated', поэтому блок жил
+      // только в 'confirmed'. Теперь оценка сервиса — отдельное поле, не
+      // привязанное к машине состояний (rateService не трогает order.status),
+      // и должна остаться доступна, даже если заказчик уже оценил мастера
+      // (статус уже 'rated') — поэтому условие расширено на оба статуса, а
+      // каждый из двух блоков ниже показывается независимо, пока
+      // соответствующее поле ещё не заполнено. Звёзды — кнопка «Оценить»
+      // отдельно, как и у rateCustomer (см. комментарий там) — тот же
+      // star-picker/star-btn.
+      actions = '';
+      if (!order.workerRating) {
+        const masterDraft = ratingDrafts[`${order.id}:worker`] || 0;
+        actions += `
+          <p class="order-meta"><b>Оцените мастера:</b></p>
+          <div class="star-picker" role="radiogroup" aria-label="Оценка мастера">
+            ${[1, 2, 3, 4, 5]
+              .map(
+                (n) =>
+                  `<button type="button" class="star-btn ${n <= masterDraft ? 'filled' : ''}" data-action="select-rating-draft" data-value="${order.id}:worker:${n}" aria-label="${n} из 5">★</button>`
+              )
+              .join('')}
+          </div>
+          <textarea id="rating-comment-order-${order.id}" class="composer-textarea" placeholder="Комментарий по работе (необязательно)…" rows="2"></textarea>
+          <button type="button" class="primary-button" data-action="rate-order" data-value="${order.id}" ${!masterDraft ? 'disabled' : ''}>Оценить мастера</button>
+        `;
+      }
+      if (order.serviceRating == null) {
+        const serviceDraft = ratingDrafts[`${order.id}:service`] || 0;
+        actions += `
+          <p class="order-meta" style="margin-top:12px;"><b>Оцените сервис «Мужик»:</b></p>
+          <div class="star-picker" role="radiogroup" aria-label="Оценка сервиса">
+            ${[1, 2, 3, 4, 5]
+              .map(
+                (n) =>
+                  `<button type="button" class="star-btn ${n <= serviceDraft ? 'filled' : ''}" data-action="select-rating-draft" data-value="${order.id}:service:${n}" aria-label="${n} из 5">★</button>`
+              )
+              .join('')}
+          </div>
+          <textarea id="rating-comment-service-${order.id}" class="composer-textarea" placeholder="Комментарий о сервисе (необязательно)…" rows="2"></textarea>
+          <button type="button" class="primary-button" data-action="rate-service" data-value="${order.id}" ${!serviceDraft ? 'disabled' : ''}>Оценить сервис</button>
+        `;
+      }
     } else if (order.status === 'awaiting_part') {
       // Мастер приезжал, деталь не подошла (см. reportDiagnosisOnly) — см.
       // ленту диагностики ниже для точного комментария. Как только деталь
@@ -9765,7 +9863,22 @@ function renderOrderDetail() {
               : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`
             : renderWorkerPayoutBlock(order)
         }
-        ${isCustomer && typeof order.finalPrice === 'number' ? `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>` : ''}
+        ${
+          // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «после оплаты написано «итого
+          // к оплате», нужно «оплачено»») — order.finalPrice выставляется
+          // один раз модератором и дальше не меняется, поэтому раньше эта
+          // строка показывала «Итого к оплате» на ВСЕХ статусах после
+          // estimate_ready, включая searching/assigned/en_route/.../rated,
+          // хотя оплата (payment.status === 'prepayment_paid') к этому
+          // моменту уже прошла. Источник правды — именно payment.status,
+          // не order.status (деталь можно попросить купить и до, и после
+          // оплаты — см. комментарии у payOrder/confirmPartPurchased).
+          isCustomer && typeof order.finalPrice === 'number'
+            ? order.payment && order.payment.status === 'prepayment_paid'
+              ? `<p><b>Оплачено: ${order.finalPrice} ₽</b></p>`
+              : `<p><b>Итого к оплате: ${order.finalPrice} ₽</b></p>`
+            : ''
+        }
         ${
           // УБРАНО 09.10.2026 (просьба Sg: «У нас нет оплаты на месте») —
           // раньше здесь всегда показывалась строка «Оплата: на месте,
@@ -12641,13 +12754,31 @@ async function handleAction(action, value) {
       return confirmPartPurchasedWithQuestion(value);
     case 'add-diagnosis-note':
       return submitCustomerDiagnosisNote(value);
+    // ИЗМЕНЕНО 10.10.2026 — data-value теперь просто orderId (не
+    // "orderId:n"): число звёзд больше не приходит с кликом по кнопке
+    // «Оценить», оно уже выбрано заранее и лежит в ratingDrafts (см.
+    // select-rating-draft ниже и комментарий у объявления ratingDrafts).
     case 'rate-order': {
-      const [orderId, n] = value.split(':');
-      return rateOrder(orderId, Number(n));
+      const draft = ratingDrafts[`${value}:worker`];
+      if (!draft) return;
+      return rateOrder(value, draft);
     }
     case 'rate-customer': {
-      const [orderId, n] = value.split(':');
-      return rateCustomer(orderId, Number(n));
+      const draft = ratingDrafts[`${value}:customer`];
+      if (!draft) return;
+      return rateCustomer(value, draft);
+    }
+    case 'rate-service': {
+      const draft = ratingDrafts[`${value}:service`];
+      if (!draft) return;
+      return rateService(value, draft);
+    }
+    // Клик по звезде (и у мастера/заказчика, и у сервиса) — только выбор
+    // значения, без отправки. data-value: "orderId:kind:n".
+    case 'select-rating-draft': {
+      const [orderId, kind, n] = value.split(':');
+      ratingDrafts[`${orderId}:${kind}`] = Number(n);
+      return render();
     }
 
     case 'use-geo-profile':
