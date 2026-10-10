@@ -3538,6 +3538,15 @@ function dbOrderToOrder(row) {
     partsAlreadyHave: row.parts_already_have || '',
     partsMaybeNeeded: row.parts_maybe_needed || '',
     partsNeeded: row.parts_needed || '',
+    // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «добавить имя мастера, который
+    // выполнил заказ, если их двое и более — все в строчку») — список
+    // ВСЕХ мастеров, когда-либо назначенных на этот заказ (не только
+    // текущего assignedWorkerId), копится, а не перезаписывается — см.
+    // appendWorkerHistory() ниже. Нужен, например, когда мастер снимается
+    // с заказа (см. reportDiagnosisOnly — «деталь не подошла») и позже
+    // приезжает другой: заказчик и админ должны видеть обоих, а не только
+    // того, кто в итоге довёл дело до конца.
+    workerHistory: row.worker_history || [],
   };
 }
 
@@ -3608,6 +3617,7 @@ function orderToDbOrder(order) {
     parts_already_have: order.partsAlreadyHave || '',
     parts_maybe_needed: order.partsMaybeNeeded || '',
     parts_needed: order.partsNeeded || '',
+    worker_history: order.workerHistory || [],
   };
 }
 
@@ -4575,6 +4585,17 @@ const STATUS_LABELS = {
 // ХХ» рядом с renderOrdersSectionHeader) до тех пор, пока пользователь сам
 // не нажмёт кнопку, чтобы их показать.
 const ARCHIVED_ORDER_STATUSES = ['rated', 'cancelled'];
+
+/**
+ * Заказ закрыт («Завершено») — просьба Sg 10.10.2026: когда заказ закрыт,
+ * в контактах видно только ИМЯ (и мастеру, и заказчику), без телефона и
+ * точного адреса — после «Завершено» звонить/ехать больше незачем, а
+ * хранить/показывать эти данные дальше — лишний риск. Пока заказ активен
+ * (ищется/в работе), полный контакт нужен как раньше.
+ */
+function isOrderClosed(order) {
+  return ARCHIVED_ORDER_STATUSES.includes(order.status);
+}
 
 // Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
 // вынесены сюда, а не в разметку карточки заказа, потому что после
@@ -6277,7 +6298,11 @@ async function acceptOrder(orderId) {
   if (!order) return;
 
   if (!isSupabaseConfigured()) {
-    let localOrder = { ...order, assignedWorkerId: state.currentUserId };
+    let localOrder = {
+      ...order,
+      assignedWorkerId: state.currentUserId,
+      workerHistory: appendWorkerHistory(order.workerHistory, state.currentUserId),
+    };
     localOrder = transition(localOrder, 'assigned');
     saveOrder(localOrder);
     pushNotification(
@@ -6331,6 +6356,20 @@ async function acceptOrder(orderId) {
   }
 
   const updated = dbOrderToOrder(data.order);
+  // ДОБАВЛЕНО 10.10.2026 (просьба Sg про имя мастера на заказе) — accept-order
+  // (Edge Function, сервисный ключ) сам worker_history не трогает, он просто
+  // атомарно выставляет assigned_worker_id. Дописываем историю отдельным
+  // best-effort PATCH тем же способом, что и остальные некритичные поля
+  // заказа (см. saveOrder) — если не получится, в худшем случае заказ
+  // просто не попадёт в список «мастеров заказа» до следующего назначения,
+  // сам приём заказа это никак не блокирует.
+  const alreadyInHistory = (order.workerHistory || []).some((h) => h.workerId === updated.assignedWorkerId);
+  updated.workerHistory = appendWorkerHistory(order.workerHistory, updated.assignedWorkerId);
+  if (!alreadyInHistory && updated.assignedWorkerId) {
+    updateRow('orders', updated.id, { worker_history: updated.workerHistory }, { minimal: true }).catch((err) =>
+      console.warn('[acceptOrder] не удалось сохранить историю мастеров заказа', err)
+    );
+  }
   const idx = cache.orders.findIndex((o) => o.id === updated.id);
   if (idx >= 0) cache.orders[idx] = updated;
   else cache.orders.push(updated);
@@ -9090,6 +9129,50 @@ function diagnosisLogPreviewHtml(order) {
   return `<p class="order-meta"><span>🔧 ${log.length > 1 ? `Диагностика (${log.length}): ` : 'Диагностика: '}<b>${escapeHtml(DIAGNOSIS_AUTHOR_LABELS[last.authorRole] || last.authorRole)}:</b> «${escapeHtml(text)}»</span></p>`;
 }
 
+// ---------------------------------------------------------------------
+// История мастеров заказа (просьба Sg 10.10.2026: «добавить имя мастера,
+// который выполнил заказ, если их двое и более — все в строчку») —
+// см. order.workerHistory (dbOrderToOrder/orderToDbOrder) и admin.html
+// (тот же приём, своя копия appendWorkerHistory/orderWorkerNamesLabel).
+// ---------------------------------------------------------------------
+
+/**
+ * Добавляет мастера в историю заказа, если его там ещё нет (один и тот же
+ * мастер не дублируется, даже если его сняли и назначили заново). Не
+ * мутирует существующий массив — возвращает новый.
+ * @param {Array<{workerId:string, at:string}>|undefined} history
+ * @param {string|null} workerId
+ */
+function appendWorkerHistory(history, workerId) {
+  const list = history || [];
+  if (!workerId) return list;
+  if (list.some((h) => h.workerId === workerId)) return list;
+  return [...list, { workerId, at: new Date().toISOString() }];
+}
+
+/**
+ * Имя(имена) мастера(ов), когда-либо выполнявших заказ — все в одну строку
+ * через запятую. Для старых заказов (сохранённых до появления
+ * workerHistory) подстраховка — просто текущий assignedWorkerId.
+ * @param {Object} order
+ * @returns {string} пусто, если мастера ещё не было вообще
+ */
+function orderWorkerNamesLabel(order) {
+  const ids =
+    order.workerHistory && order.workerHistory.length
+      ? [...new Set(order.workerHistory.map((h) => h.workerId))]
+      : order.assignedWorkerId
+      ? [order.assignedWorkerId]
+      : [];
+  if (!ids.length) return '';
+  return ids
+    .map((id) => {
+      const u = getUsers().find((x) => x.id === id);
+      return u ? u.displayName || u.phone || id : id;
+    })
+    .join(', ');
+}
+
 function orderCardHtml(order, { viewer }) {
   const catTitle = CATEGORY_TITLES[order.categoryId] || order.categoryId;
   // Для карточек-кандидатов из available-orders точных координат заказа нет
@@ -9140,6 +9223,14 @@ function orderCardHtml(order, { viewer }) {
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
       }
       ${
+        // Имя мастера(ов) — просьба Sg 10.10.2026, см. orderWorkerNamesLabel.
+        // Только заказчику и только в карточке списка (свёрнутый вид) —
+        // полная версия с теми же данными повторяется ещё раз в renderOrderDetail.
+        viewer === 'customer' && orderWorkerNamesLabel(order)
+          ? `<div class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></div>`
+          : ''
+      }
+      ${
         // Контакт заказчика — прямо в карточке списка «Заказы, которые я
         // выполняю», а не только после открытия деталей заказа (просьба Sg
         // от 18.09.2026: мастеру неудобно тыкать в каждый заказ, чтобы
@@ -9147,16 +9238,23 @@ function orderCardHtml(order, { viewer }) {
         // renderOrderDetail — если контакта ещё нет в кэше, сам подгрузит
         // и вызовет render() по готовности.
         viewer === 'worker' && order.assignedWorkerId === state.currentUserId
-          ? (() => {
-              const contact = ensureCustomerContact(order);
-              if (contact === 'loading' || contact === null) {
-                return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
-              }
-              if (contact === 'error') {
-                return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
-              }
-              return `<p class="order-meta"><span>${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
-            })()
+          ? isOrderClosed(order)
+            ? // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «когда заказ закрыт, видно
+              // только имя — без телефона и адреса») — заказ завершён,
+              // звонить больше незачем. Имя не секрет (оно и так в общем
+              // публичном кэше, см. orderWorkerNamesLabel), телефон для
+              // закрытого заказа отдельно не запрашиваем вообще.
+              `<p class="order-meta"><span>Заказчик: ${escapeHtml((getUsers().find((u) => u.id === order.customerId) || {}).displayName || 'без имени')}</span></p>`
+            : (() => {
+                const contact = ensureCustomerContact(order);
+                if (contact === 'loading' || contact === null) {
+                  return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
+                }
+                if (contact === 'error') {
+                  return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
+                }
+                return `<p class="order-meta"><span>${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
+              })()
           : ''
       }
       ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
@@ -9977,7 +10075,9 @@ function renderOrderDetail() {
     }
   }
 
-  const showExact = isCustomer || isAssignedWorker;
+  // ИЗМЕНЕНО 10.10.2026 (просьба Sg: «когда заказ закрыт, без телефонов и
+  // адресов») — точный адрес виден, только пока заказ ещё активен.
+  const showExact = (isCustomer || isAssignedWorker) && !isOrderClosed(order);
 
   return `
     <div class="screen">
@@ -10009,6 +10109,15 @@ function renderOrderDetail() {
           <span>${escapeHtml(CATEGORY_TITLES[order.categoryId] || '')}</span>
           <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
         </p>
+        ${
+          // Имя мастера(ов) — просьба Sg 10.10.2026. Только заказчику (без
+          // ссылок, см. orderWorkerNamesLabel) — мастеру незачем видеть
+          // это про себя самого, а ненайденным кандидатам заказ ещё не
+          // назначен вообще.
+          isCustomer && orderWorkerNamesLabel(order)
+            ? `<p class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></p>`
+            : ''
+        }
         <p>${escapeHtml(order.description)}</p>
         ${!isCustomer ? formattedBriefHtml(order.formattedBrief) : ''}
         ${!isCustomer ? partsInfoHtml(order) : ''}
@@ -10027,21 +10136,27 @@ function renderOrderDetail() {
           // заказчика мастер не видит. Подъезд/домофон/квартиру мастер
           // уточнит по телефону сам — это не критично для отображения.
           isAssignedWorker
-            ? (() => {
-                // Полного профиля заказчика (с телефоном) в общем кэше теперь
-                // может не быть — bulk-загрузка отдаёт только users_public
-                // (см. initDb). Запрашиваем контакт отдельно и по требованию
-                // (см. ensureCustomerContact) — как только ответ придёт,
-                // ensureCustomerContact сам вызовет render().
-                const contact = ensureCustomerContact(order);
-                if (contact === 'loading' || contact === null) {
-                  return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
-                }
-                if (contact === 'error') {
-                  return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
-                }
-                return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
-              })()
+            ? isOrderClosed(order)
+              ? // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «когда заказ закрыт,
+                // видно только имя — без телефона и адреса») — имя не
+                // секрет (публичный кэш), телефон для закрытого заказа
+                // отдельно не запрашиваем.
+                `<p class="order-meta"><span>Заказчик: ${escapeHtml((getUsers().find((u) => u.id === order.customerId) || {}).displayName || 'без имени')}</span></p>`
+              : (() => {
+                  // Полного профиля заказчика (с телефоном) в общем кэше теперь
+                  // может не быть — bulk-загрузка отдаёт только users_public
+                  // (см. initDb). Запрашиваем контакт отдельно и по требованию
+                  // (см. ensureCustomerContact) — как только ответ придёт,
+                  // ensureCustomerContact сам вызовет render().
+                  const contact = ensureCustomerContact(order);
+                  if (contact === 'loading' || contact === null) {
+                    return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
+                  }
+                  if (contact === 'error') {
+                    return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
+                  }
+                  return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
+                })()
             : ''
         }
         ${
@@ -13111,6 +13226,31 @@ async function boot() {
       // устройстве, доверяем ему и не спрашиваем пароль заново при
       // каждом открытии (это и есть «запомнить устройство», см. README).
       state.currentUserId = user.id;
+      // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «пусть сайт проверяет токен при
+      // загрузке страницы») — раньше протухший токен обнаруживался только
+      // реактивно, при первом защищённом действии (см. handleUnauthorizedResponse
+      // выше). Человек мог какое-то время ходить по сайту с виду залогиненным
+      // и упираться в ошибку только при попытке что-то сделать. Теперь сразу
+      // после восстановления сессии, не блокируя отрисовку главного экрана,
+      // тихо дёргаем get-my-profile этим же токеном — если он не прошёл
+      // проверку на сервере, сработает тот же handleUnauthorizedResponse
+      // внутри callSecureFn и человека сразу вернёт на обычный вход по паролю.
+      callSecureFn('get-my-profile', { userId: user.id, sessionToken: savedToken })
+        .then((data) => {
+          if (!data.user) return;
+          const i = cache.users.findIndex((u) => u.id === user.id);
+          const fresh = dbUserToUser(data.user, {});
+          if (i >= 0) {
+            fresh.skills = cache.users[i].skills || [];
+            cache.users[i] = fresh;
+            render();
+          }
+        })
+        .catch((err) => {
+          if (!isStaleSessionError(err)) {
+            console.error('[boot] не удалось проверить токен сессии', err);
+          }
+        });
     } else if (user && !savedToken) {
       // Раньше отсюда тихо выпускался токен по одному лишь сохранённому
       // id из localStorage — без единой проверки (см. README/памятку про

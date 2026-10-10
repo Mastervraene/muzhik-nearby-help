@@ -106,6 +106,13 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; cursor: pointer; }
 .card-head-main { min-width: 0; flex: 1; }
 .card-title { font-weight: 700; font-size: 15px; color: var(--gray-900); margin: 0 0 4px; }
+/* ДОБАВЛЕНО 10.10.2026 (просьба Sg) — переход на страницу мастера/заказчика
+   прямо из карточки заказа (см. openUserProfile ниже). */
+.user-link { color: var(--accent-strong, #2563eb); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+.user-link:hover { text-decoration-style: solid; }
+.order-user-row { padding: 7px 2px; border-bottom: 1px solid var(--gray-100); cursor: pointer; font-size: 13px; }
+.order-user-row:last-child { border-bottom: none; }
+.order-user-row:hover { background: var(--gray-50, #f9fafb); }
 .card-order-number { font-size: 11.5px; font-weight: 700; color: var(--gray-500); margin: 0 0 3px; letter-spacing: 0.02em; }
 .card-meta { font-size: 12.5px; color: var(--gray-500); display: flex; gap: 10px; flex-wrap: wrap; }
 .pill {
@@ -1299,6 +1306,11 @@ function dbOrderToOrder(row) {
     partsAlreadyHave: row.parts_already_have || '',
     partsMaybeNeeded: row.parts_maybe_needed || '',
     partsNeeded: row.parts_needed || '',
+    // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «имя мастера, который выполнил
+    // заказ, если их двое и более — все в строчку») — см. то же поле и
+    // appendWorkerHistory() в index.html. Список ВСЕХ мастеров, когда-либо
+    // назначенных на заказ — не только текущего assignedWorkerId.
+    workerHistory: row.worker_history || [],
   };
 }
 
@@ -1866,6 +1878,37 @@ function userName(id) {
   return u ? u.displayName || u.phone || id : '—';
 }
 
+// -----------------------------------------------------------------------
+// История мастеров заказа (просьба Sg 10.10.2026: «имя мастера, который
+// выполнил заказ, если их двое и более — все в строчку») — см. то же поле
+// и appendWorkerHistory() в index.html; тут своя копия (отдельный файл), а
+// заодно HTML-версия со ссылками на профиль мастера (в index.html ссылок
+// нет — просьба Sg «у заказчика перекрёстные ссылки делать не нужно»).
+// -----------------------------------------------------------------------
+function appendWorkerHistory(history, workerId) {
+  const list = history || [];
+  if (!workerId) return list;
+  if (list.some((h) => h.workerId === workerId)) return list;
+  return [...list, { workerId, at: new Date().toISOString() }];
+}
+
+/** @returns {string[]} id всех мастеров, когда-либо назначенных на заказ (подстраховка — текущий assignedWorkerId, если истории ещё нет). */
+function orderWorkerIds(o) {
+  if (o.workerHistory && o.workerHistory.length) {
+    return [...new Set(o.workerHistory.map((h) => h.workerId))];
+  }
+  return o.assignedWorkerId ? [o.assignedWorkerId] : [];
+}
+
+/** Имя(имена) мастера(ов) заказа — каждое кликабельная ссылка на карточку мастера (см. window.goToMasterCard). */
+function orderWorkerLinksHtml(o) {
+  const ids = orderWorkerIds(o);
+  if (!ids.length) return '';
+  return ids
+    .map((id) => `<span class="user-link" data-user-id="${id}" title="Открыть мастера">${escapeHtml(userName(id))}</span>`)
+    .join(', ');
+}
+
 function skillsForUser(userId) {
   return allSkills.filter((s) => s.userId === userId);
 }
@@ -2071,6 +2114,15 @@ function wireOrderCards(list) {
       openOrderId = openOrderId === o.id ? null : o.id;
       renderOrders();
       if (openOrderId === o.id) markOrderReviewsSeen(o);
+    });
+    // Ссылки на профиль заказчика/мастера(ов) в шапке карточки (просьба Sg
+    // 10.10.2026) — stopPropagation, чтобы клик по имени не разворачивал/
+    // сворачивал саму карточку заказа (см. head.addEventListener выше).
+    head.querySelectorAll('[data-user-id]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.goToMasterCard(el.getAttribute('data-user-id'));
+      });
     });
     if (openOrderId === o.id) {
       wireOrderForm(o);
@@ -2573,7 +2625,13 @@ function orderHasPendingRatingDecision(o) {
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
-  const nameDistrict = o.district ? `${customerName} · ${o.district}` : customerName;
+  const districtSuffix = o.district ? ` · ${escapeHtml(o.district)}` : '';
+  // ДОБАВЛЕНО 10.10.2026 (просьба Sg) — имя заказчика кликабельно, ведёт на
+  // его карточку в «Мастера» (та вкладка на деле список ВСЕХ пользователей,
+  // не только мастеров — см. masterCardHtml/applyMastersFilters). См.
+  // window.goToMasterCard и wireOrderCards ниже (там же обработчик клика).
+  const customerNameHtml = `<span class="user-link" data-user-id="${o.customerId}" title="Открыть заказчика">${escapeHtml(customerName)}</span>`;
+  const workerLinksHtml = orderWorkerLinksHtml(o);
   const hasUnreadReview =
     (o.customerReviewComment && !o.customerReviewSeenByAdmin) || (o.workerReviewComment && !o.workerReviewSeenByAdmin);
   const hasPendingRatingDecision = orderHasPendingRatingDecision(o);
@@ -2582,7 +2640,8 @@ function orderCardHtml(o) {
       <div class="card-head" id="order-head-${o.id}">
         <div class="card-head-main">
           ${o.orderNumber ? `<p class="card-order-number">Заказ №${o.orderNumber}</p>` : ''}
-          <p class="card-title">${escapeHtml(nameDistrict)}</p>
+          <p class="card-title">${customerNameHtml}${districtSuffix}</p>
+          ${workerLinksHtml ? `<p class="card-meta" style="margin:0 0 4px;">Мастер: ${workerLinksHtml}</p>` : ''}
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
@@ -3202,6 +3261,13 @@ function wireOrderForm(o) {
     if (statusChanged) {
       patch.timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
     }
+    // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «имя мастера, который выполнил
+    // заказ») — ручное назначение мастера в этой форме тоже копится в
+    // worker_history, не только перезаписывает assigned_worker_id (см.
+    // appendWorkerHistory выше и тот же приём в quickAssignWorkerToOrder).
+    if (workerChanged && newWorkerId) {
+      patch.worker_history = appendWorkerHistory(o.workerHistory, newWorkerId);
+    }
 
     // Модель устройства — история пишется, только если значение реально
     // изменилось (см. deviceModelHistoryHtml выше и просьбу Sg 24.09.2026
@@ -3566,11 +3632,53 @@ function chatThreadHtml(telegramId) {
     .join('');
 }
 
+// ДОБАВЛЕНО 10.10.2026 (просьба Sg: «в админке у мастера должен быть
+// раскрывающийся список заказов с номером, именем и датой — клик по строке
+// открывает заказ») — вкладка «Мастера» на деле список ВСЕХ пользователей
+// (см. applyMastersFilters/masterCardHtml выше), так что это же работает
+// и для карточки заказчика, не только мастера — ровно то, что просил Sg
+// («в админке было бы хорошо иметь возможность перейти... на страницу
+// заказчика»). Роль — заказчик/мастер — считается по каждому заказу
+// отдельно (один и тот же человек мог побывать и тем, и другим).
+function ordersForUser(userId) {
+  return allOrders
+    .map((o) => {
+      const roles = [];
+      if (o.customerId === userId) roles.push('заказчик');
+      if (orderWorkerIds(o).includes(userId)) roles.push('мастер');
+      return roles.length ? { order: o, roleLabel: roles.join(' / ') } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(orderLastActivityAt(b.order)) - new Date(orderLastActivityAt(a.order)));
+}
+
+function userOrdersListHtml(u) {
+  const list = ordersForUser(u.id);
+  return `
+    <details class="requests-history" id="user-orders-details-${u.id}">
+      <summary>Заказы пользователя${list.length ? ` (${list.length})` : ''}</summary>
+      <div class="chat-thread">
+        ${list.length
+          ? list
+              .map(
+                ({ order: o, roleLabel }) => `
+            <div class="order-user-row" data-order-id="${o.id}">
+              <b>№${o.orderNumber ?? '—'}</b> · ${escapeHtml(o.title || 'без названия')} · ${escapeHtml(fmtDate(orderLastActivityAt(o)))} · <span style="color:var(--gray-500);">${escapeHtml(roleLabel)}</span>
+            </div>`
+              )
+              .join('')
+          : '<div class="chat-empty">Заказов пока нет</div>'}
+      </div>
+    </details>
+  `;
+}
+
 function masterFormHtml(u) {
   const skills = skillsForUser(u.id);
   const requestsHistory = requestsHistoryForMaster(u);
   return `
     <div class="card-body open" id="master-body-${u.id}">
+      ${userOrdersListHtml(u)}
       ${u.masterStatus !== 'none' ? `
       <p class="form-section-label">Заявка в мастера</p>
       <div class="field-sm dense" style="margin-bottom:10px;">
@@ -3807,6 +3915,19 @@ function masterFormHtml(u) {
 }
 
 function wireMasterForm(u) {
+  // Клик по строке заказа в «Заказы пользователя» (просьба Sg 10.10.2026) —
+  // сразу на карточку этого заказа во вкладке «Заказы» (см. userOrdersListHtml
+  // выше и window.goToOrderCard). stopPropagation — строка внутри <details>,
+  // который сам по себе не должен сворачиваться/разворачиваться от этого клика.
+  const userOrdersDetailsEl = document.getElementById(`user-orders-details-${u.id}`);
+  if (userOrdersDetailsEl) {
+    userOrdersDetailsEl.querySelectorAll('.order-user-row').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.goToOrderCard(row.getAttribute('data-order-id'));
+      });
+    });
+  }
   document.getElementById(`save-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
     const telegramRaw = document.getElementById(`mf-telegram-${u.id}`).value.trim();
@@ -5162,7 +5283,12 @@ async function quickAssignWorkerToOrder(orderId, workerId) {
   const ok = confirm(`Принудительно назначить заказ «${order.title || 'без названия'}» мастеру «${label}»?\n\nЕму придёт уведомление о назначении (в приложении, и в Telegram, если привязан).`);
   if (!ok) return;
   try {
-    await updateRow('orders', order.id, { assigned_worker_id: worker.id });
+    await updateRow('orders', order.id, {
+      assigned_worker_id: worker.id,
+      // ДОБАВЛЕНО 10.10.2026 — см. appendWorkerHistory выше, тот же приём,
+      // что и в wireOrderForm (форма карточки заказа).
+      worker_history: appendWorkerHistory(order.workerHistory, worker.id),
+    });
     // ИСПРАВЛЕНО 09.10.2026 (тот же баг, что и у requestPartPurchase/
     // wireOrderForm выше) — обычная запись в notifications вместо прямого
     // Telegram-send в обход неё.
