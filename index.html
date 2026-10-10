@@ -9875,6 +9875,7 @@ function renderProfile() {
 
       <div class="section-title">Документы</div>
       <a href="/dogovor.html" class="secondary-button" style="display:block; box-sizing:border-box; text-align:center; text-decoration:none;">Договор оказания услуг</a>
+      <button type="button" class="secondary-button" data-action="open-cookie-settings" style="display:block; box-sizing:border-box; text-align:center; margin-top:8px;">🍪 Настройки cookie</button>
     </div>
   `;
 }
@@ -12272,6 +12273,9 @@ async function handleAction(action, value) {
     case 'go-profile': return go('profile');
     case 'go-master-panel': return go('masterPanel');
     case 'go-worker-balance': return go('workerBalance');
+    case 'open-cookie-settings':
+      if (typeof window.openCookieConsentBanner === 'function') window.openCookieConsentBanner();
+      return;
     case 'submit-master-application':
       return handleSubmitMasterApplication();
     case 'open-order': return go('orderDetail', { openOrderId: value });
@@ -12808,6 +12812,13 @@ if ('serviceWorker' in navigator) {
 }
 
 })();
+  </script>
+  <script>
+    // Основной сайт сам показывает ссылку «Cookie» внизу профиля (см.
+    // renderProfile / data-action="open-cookie-settings"), поэтому плавающая
+    // кнопка в углу экрана здесь не нужна — прячем её (см. комментарий в
+    // начале cookie-consent.js).
+    window.COOKIE_CONSENT_UI = { hideReopenButton: true };
   </script>
   <script defer src="/cookie-consent.js"></script>
 </body>

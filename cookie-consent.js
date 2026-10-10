@@ -9,6 +9,13 @@
  *      но только у тех посетителей, кто нажал «Принять» в баннере.
  *      Пока ID не вписан (null) — счётчик нигде не грузится и никакие
  *      данные никуда не уходят, несмотря на то что баннер уже показывается.
+ *
+ * На странице с собственной навигацией (например, index.html — профиль
+ * пользователя) плавающую кнопку «Cookie» в углу экрана можно спрятать и
+ * вместо неё вызвать баннер по клику из самого интерфейса сайта:
+ *   <script>window.COOKIE_CONSENT_UI = { hideReopenButton: true };</script>
+ *   <script defer src="/cookie-consent.js"></script>
+ *   ... window.openCookieConsentBanner() — показать баннер повторно.
  */
 window.COOKIE_ANALYTICS_CONFIG = window.COOKIE_ANALYTICS_CONFIG || {
   yandexMetrikaId: null, // например: 12345678
@@ -151,7 +158,8 @@ window.COOKIE_ANALYTICS_CONFIG = window.COOKIE_ANALYTICS_CONFIG || {
 
   function init() {
     injectStyles();
-    renderReopenControl();
+    var hideReopen = window.COOKIE_CONSENT_UI && window.COOKIE_CONSENT_UI.hideReopenButton;
+    if (!hideReopen) renderReopenControl();
     var consent = getConsent();
     if (!consent) {
       renderBanner();
@@ -159,6 +167,14 @@ window.COOKIE_ANALYTICS_CONFIG = window.COOKIE_ANALYTICS_CONFIG || {
       loadAnalyticsIfConsented();
     }
   }
+
+  // Публичный вызов — показать баннер повторно (например, по ссылке «Cookie»
+  // внизу профиля в index.html, когда плавающая кнопка в углу спрятана через
+  // COOKIE_CONSENT_UI.hideReopenButton).
+  window.openCookieConsentBanner = function () {
+    injectStyles();
+    renderBanner();
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
