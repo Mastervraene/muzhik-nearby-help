@@ -509,7 +509,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
   </div>
   <div class="tabs">
-    <button class="tab-btn active" data-tab="orders">Заказы</button>
+    <button class="tab-btn active" data-tab="orders">Заказы<span id="orders-rating-badge" title="Оценки, ожидающие решения «учитывать»/«не учитывать»" style="display:none; margin-left:6px; background:#d97706; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span><span id="masters-task-review-badge" title="Ждут подтверждения задания" style="display:none; margin-left:6px; background:#e08a24; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="tasks">Задачи<span id="admin-tasks-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="map">Карта</button>
@@ -523,6 +523,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <input type="text" id="orders-search" placeholder="Поиск по любому полю…" />
       <button type="button" class="sort-btn" id="orders-sort-toggle" aria-label="Сортировка" title="Сортировка"></button>
       <button type="button" class="toggle-pill" id="orders-group-toggle">Группировать по заказчику</button>
+      <button type="button" class="toggle-pill" id="orders-rating-toggle" style="display:none;">⭐ Оценки на модерации</button>
       <span class="count-hint" id="orders-count"></span>
     </div>
     <div id="orders-list"></div>
@@ -1767,6 +1768,13 @@ let ordersStatusFilters = new Set();
 let ordersShowArchived = false;
 let ordersSearchQuery = '';
 let ordersGroupByCustomer = false;
+// «Оценки на модерации» (просьба Sg 10.10.2026) — отдельный переключатель
+// поверх обычных фильтров, не часть ordersStatusFilters/ordersShowArchived:
+// заказы с оценкой, ждущей решения «учитывать»/«не учитывать» (см.
+// orderHasPendingRatingDecision), нужно уметь увидеть ВСЕ разом одним
+// кликом, независимо от того, какой статус сейчас выбран и скрыты ли
+// завершённые — см. applyOrdersFilters.
+let ordersRatingFilterOnly = false;
 let collapsedCustomerGroups = new Set(); // id заказчиков со свёрнутой группой (по умолчанию все развёрнуты)
 // Новая панель вкладки «Мастера» (просьба Sg 08.10.2026, по образцу
 // «Заказы»): вместо одного select'а — быстрые кнопки «М»/«К» (роль),
@@ -1928,8 +1936,23 @@ function userSearchHaystack(u) {
 // и для счётчика на бейдже кнопки сортировки (без учёта текста поиска,
 // который к самому фильтру отношения не имеет).
 function applyOrdersFilters(list) {
+  // «Оценки на модерации» перекрывает остальные фильтры целиком (см.
+  // объявление ordersRatingFilterOnly выше) — это самостоятельный режим
+  // просмотра, а не ещё один пункт мультивыбора статусов: оценка, ждущая
+  // решения, может висеть на заказе в любом статусе (обычно confirmed/rated,
+  // но мультивыбор по статусам тут ни к чему).
+  if (ordersRatingFilterOnly) return list.filter(orderHasPendingRatingDecision);
   let result = ordersStatusFilters.size ? list.filter((o) => ordersStatusFilters.has(o.status)) : list;
-  if (!ordersShowArchived) result = result.filter((o) => !ARCHIVED_ORDER_STATUSES.includes(o.status));
+  // Чекбокс «показывать завершённые и отменённые» скрывает архивные статусы
+  // только когда статус НЕ выбран явно в фильтре выше — иначе получалось
+  // противоречие: человек явно тычет пилюлю «Завершено и оценено» (rated),
+  // а строка applyOrdersFilters тут же вырезает её обратно, потому что
+  // чекбокс не стоит, и список выглядит пустым (баг, жалоба Sg 10.10.2026).
+  // Явный выбор статуса — это и есть просьба показать именно его, чекбокс
+  // в этом случае избыточен.
+  if (!ordersShowArchived && !ordersStatusFilters.size) {
+    result = result.filter((o) => !ARCHIVED_ORDER_STATUSES.includes(o.status));
+  }
   return result;
 }
 
@@ -1949,9 +1972,37 @@ function renderOrdersGroupToggleUi() {
   if (btn) btn.classList.toggle('active', ordersGroupByCustomer);
 }
 
+// Бейдж на вкладке «Заказы» + сама кнопка-переключатель «⭐ Оценки на
+// модерации» (просьба Sg 10.10.2026, см. ordersRatingFilterOnly выше) — по
+// образцу masters-pending-badge/admin-tasks-badge (loadData), только
+// пересчитывается при каждом renderOrders, а не только в loadData: счётчик
+// должен обновиться сразу же, как админ нажмёт «учитывать»/«не учитывать»
+// у последней оценки в списке (applyRatingDecision зовёт renderOrders, не
+// полный loadData).
+function updateOrdersRatingBadge() {
+  const count = allOrders.filter(orderHasPendingRatingDecision).length;
+  const badge = document.getElementById('orders-rating-badge');
+  if (badge) {
+    badge.textContent = count > 9 ? '9+' : String(count);
+    badge.style.display = count ? 'inline-block' : 'none';
+  }
+  const toggleBtn = document.getElementById('orders-rating-toggle');
+  if (toggleBtn) {
+    // Кнопка-фильтр видна, только когда есть что фильтровать — но если она
+    // уже активна (список сейчас показан отфильтрованным), не прячем её
+    // даже при count=0 (последнюю оценку только что разобрали) — иначе
+    // кнопка пропадёт из-под курсора посреди работы, а фильтр останется
+    // включённым незаметно для админа.
+    toggleBtn.style.display = count || ordersRatingFilterOnly ? '' : 'none';
+    toggleBtn.classList.toggle('active', ordersRatingFilterOnly);
+    toggleBtn.textContent = `⭐ Оценки на модерации${count ? ` (${count})` : ''}`;
+  }
+}
+
 function renderOrders() {
   renderOrdersToolbar();
   renderOrdersGroupToggleUi();
+  updateOrdersRatingBadge();
   let list = applyOrdersFilters(allOrders);
   const q = ordersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((o) => orderSearchHaystack(o).includes(q));
@@ -2052,6 +2103,13 @@ function wireOrderCards(list) {
       buyPartBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         requestPartPurchase(o);
+      });
+    }
+    const resolveIssueBtn = document.getElementById(`resolve-issue-order-${o.id}`);
+    if (resolveIssueBtn) {
+      resolveIssueBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        resolveIssue(o);
       });
     }
     const partPurchaseToggle = document.getElementById(`part-purchase-toggle-${o.id}`);
@@ -2346,6 +2404,56 @@ async function requestPartPurchase(o) {
   }
 }
 
+/**
+ * Статус, в котором заказ был непосредственно ПЕРЕД тем, как сработало
+ * «Сообщить о проблеме» (см. index.html reportIssue) — ищем в ленте
+ * последнюю запись issue_reported и берём статус перед ней. Не фиксированный
+ * статус: «Есть проблема» приходит и от мастера (assigned/en_route/
+ * in_progress), и от заказчика (completed) — один захардкоженный статус
+ * подошёл бы не всем случаям. Если в ленте ничего не нашлось (старый заказ
+ * без записи, или issue_reported — вообще первая запись) — запасной
+ * вариант: 'in_progress', если мастер уже назначен, иначе 'searching'.
+ */
+function statusBeforeIssue(o) {
+  const tl = o.timeline || [];
+  let lastIssueIdx = -1;
+  tl.forEach((t, i) => {
+    if (t.status === 'issue_reported') lastIssueIdx = i;
+  });
+  if (lastIssueIdx > 0) return tl[lastIssueIdx - 1].status;
+  return o.assignedWorkerId ? 'in_progress' : 'searching';
+}
+
+/**
+ * «Проблема решена» (просьба Sg 10.10.2026) — одна кнопка вместо похода в
+ * раскрытую карточку за полем «Статус» и ручного подбора, куда вернуть
+ * заказ (см. statusBeforeIssue выше). Уведомление — тем же общим путём,
+ * что и любая другая ручная смена статуса админом, см.
+ * notifyManualStatusChange выше (просьба Sg 09.10.2026 — у ручных смен
+ * статуса должны уходить все уведомления, и на сайт, и в Telegram).
+ */
+async function resolveIssue(o) {
+  const newStatus = statusBeforeIssue(o);
+  const btn = document.getElementById(`resolve-issue-order-${o.id}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Сохраняю…';
+  }
+  try {
+    const timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
+    await updateRow('orders', o.id, { status: newStatus, timeline });
+    await notifyManualStatusChange(o, newStatus);
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось снять проблему: ' + err.message);
+    const freshBtn = document.getElementById(`resolve-issue-order-${o.id}`);
+    if (freshBtn) {
+      freshBtn.disabled = false;
+      freshBtn.textContent = '✅ Проблема решена';
+    }
+  }
+}
+
 async function requestClarification(o) {
   // Пустое поле, а не старый вопрос (как было раньше) — кнопка «Уточнить»
   // видна только когда предыдущий раунд уже закрыт (см. orderCardHtml:
@@ -2446,22 +2554,29 @@ function orderLastActivityAt(o) {
   return o.timeline && o.timeline.length ? o.timeline[o.timeline.length - 1].at : o.createdAt;
 }
 
+// ДОБАВЛЕНО 10.10.2026 — вынесено из orderCardHtml в отдельную функцию:
+// нужна и для самой карточки (баннер-плашка), и для бейджа на вкладке
+// «Заказы»/кнопки-фильтра «На модерации» в тулбаре (см. ниже, applyOrdersFilters
+// и updateOrdersRatingBadge) — иначе пришлось бы дублировать то же условие.
+// Оценка звёздами (мастера/заказчика) может прийти и БЕЗ текстового отзыва,
+// и тогда обычный «непрочитанный отзыв» (hasUnreadReview в orderCardHtml)
+// её не заметит — он смотрит только на текст. «Решено» здесь не считается
+// открытием карточки — висит, пока админ явно не нажмёт «учитывать»/«не
+// учитывать» (см. orderReviewsHtml/applyRatingDecision).
+function orderHasPendingRatingDecision(o) {
+  return (
+    (typeof o.workerRating === 'number' && o.workerRatingCounted == null) ||
+    (typeof o.customerRating === 'number' && o.customerRatingCounted == null)
+  );
+}
+
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
   const nameDistrict = o.district ? `${customerName} · ${o.district}` : customerName;
   const hasUnreadReview =
     (o.customerReviewComment && !o.customerReviewSeenByAdmin) || (o.workerReviewComment && !o.workerReviewSeenByAdmin);
-  // ДОБАВЛЕНО 10.10.2026 — отдельный от hasUnreadReview баннер: оценка
-  // звёздами (мастера/заказчика) может прийти и БЕЗ комментария, и тогда
-  // hasUnreadReview выше её не заметит (она смотрит только на текст
-  // отзыва). «Просмотрено» для этого баннера не считается открытием
-  // карточки (как у hasUnreadReview, см. markOrderReviewsSeen) — он живёт,
-  // пока админ явно не нажмёт «учитывать»/«не учитывать» (см.
-  // orderReviewsHtml/applyRatingDecision).
-  const hasPendingRatingDecision =
-    (typeof o.workerRating === 'number' && o.workerRatingCounted == null) ||
-    (typeof o.customerRating === 'number' && o.customerRatingCounted == null);
+  const hasPendingRatingDecision = orderHasPendingRatingDecision(o);
   return `
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
@@ -2511,6 +2626,18 @@ function orderCardHtml(o) {
         o.status === 'estimate_ready' || o.status === 'paid'
           ? `<div class="card-moderation-bar">
                <button type="button" class="btn-sm ghost" id="buy-part-order-${o.id}">🧩 Купить деталь</button>
+             </div>`
+          : ''
+      }
+      ${
+        // «Проблема решена» (просьба Sg 10.10.2026, тот же сегмент, что и
+        // уведомление админу при «Есть проблема» — см. index.html reportIssue
+        // и TEMPLATES.issue_reported_admin) — одна кнопка вместо похода в
+        // раскрытую карточку за полем «Статус» и ручного подбора, куда
+        // вернуть заказ. См. resolveIssue/statusBeforeIssue ниже.
+        o.status === 'issue_reported'
+          ? `<div class="card-moderation-bar">
+               <button type="button" class="btn-sm primary" id="resolve-issue-order-${o.id}">✅ Проблема решена</button>
              </div>`
           : ''
       }
@@ -5493,6 +5620,10 @@ function showApp() {
   });
   document.getElementById('orders-group-toggle').addEventListener('click', () => {
     ordersGroupByCustomer = !ordersGroupByCustomer;
+    renderOrders();
+  });
+  document.getElementById('orders-rating-toggle').addEventListener('click', () => {
+    ordersRatingFilterOnly = !ordersRatingFilterOnly;
     renderOrders();
   });
   document.getElementById('admin-tasks-resolved-toggle').addEventListener('click', () => {

@@ -2537,6 +2537,17 @@ function toWorkerOrderView(order, requestingUserId) {
 // действие (зайти и что-то сделать) — по просьбе Sg от 17.09.2026: «В каждом
 // уведомлении, требующего действия на сайте должна быть ссылка на сайт».
 const SITE_URL = 'https://мастерврайоне.рф/';
+const ADMIN_URL = 'https://мастерврайоне.рф/admin.html';
+
+// Единственный пользователь с is_admin/is_moderator=true в БД на 10.10.2026
+// (Андрей Симкин/Sg) — см. reportIssue ниже: при «Есть проблема» шлём
+// уведомление не только заказчику, но и напрямую ему (в его Telegram, тем
+// же триггером notify_telegram_on_new_notification, что и у всех остальных
+// уведомлений — ему ничего спец. делать не нужно). Если когда-нибудь
+// появится больше одного админа/модератора — переходить на подбор списка
+// id через secure-функцию (как eligibleWorkerIds в notify-nearby-workers),
+// а не хардкодить; пока одна строка с запасом не стоит того усложнения.
+const ADMIN_USER_ID = '47d50c75-0eaa-4bd6-9bcb-2111860e7e7b';
 
 const TEMPLATES = {
   // Заказ на этом этапе ещё не виден мастерам — он только что ушёл на
@@ -2557,6 +2568,15 @@ const TEMPLATES = {
   work_started: () => 'Мастер начал работу.',
   work_completed: () => `Заказ выполнен. Пожалуйста, оцените качество работы: ${SITE_URL}`,
   issue_reported: () => 'По заказу зарегистрирована проблема, мы уже разбираемся.',
+  // Та же проблема, но текст для админа/модератора (ADMIN_USER_ID) — не для
+  // заказчика. Просьба Sg 10.10.2026: раньше «Есть проблема» уведомляла
+  // только заказчика (мол, «мы разбираемся»), а по факту никто не узнавал,
+  // что разбираться вообще надо — админ видел это только если сам открывал
+  // панель и замечал малиновую карточку в списке. ctx.reporterLabel —
+  // «мастер» или «заказчик» (см. reportIssue), ctx.orderTitle — короткое
+  // описание заказа для быстрой идентификации в списке.
+  issue_reported_admin: (ctx) =>
+    `⚠️ Жалоба по заказу «${ctx.orderTitle || ctx.orderId}»: ${ctx.reporterLabel} сообщил о проблеме. ${ADMIN_URL}`,
   new_matching_order: (ctx) => `Рядом появился подходящий заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_cancelled: () => 'Заказ отменён или изменён заказчиком.',
@@ -7009,10 +7029,26 @@ async function confirmPartPurchasedWithQuestion(orderId) {
 
 function reportIssue(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
+  // «Сообщить о проблеме» доступна и мастеру (assigned/en_route/in_progress),
+  // и заказчику (completed, см. orderActionsHtml) — статус ДО перехода
+  // однозначно говорит, кто из них нажал: 'completed' бывает только когда
+  // заказчик не подтвердил выполнение, остальные — когда заказ ещё у
+  // мастера. Берём это ДО transition(), пока order.status ещё старый.
+  const reporterLabel = order.status === 'completed' ? 'заказчик' : 'мастер';
   order = transition(order, 'issue_reported');
   order.warnings = [...order.warnings, 'Зарегистрирована проблема, ожидает разбора.'];
   saveOrder(order);
   pushNotification(createNotification(order.customerId, 'customer', order.id, 'issue_reported'));
+  // ДОБАВЛЕНО 10.10.2026 (просьба Sg) — см. ADMIN_USER_ID/TEMPLATES.issue_reported_admin
+  // выше: раньше о проблеме узнавал только заказчик, админ — только если
+  // сам заглядывал в панель.
+  pushNotification(
+    createNotification(ADMIN_USER_ID, 'moderator', order.id, 'issue_reported_admin', {
+      orderId: order.id,
+      orderTitle: order.title,
+      reporterLabel,
+    })
+  );
   showToast('Проблема зарегистрирована');
   render();
 }
