@@ -4547,6 +4547,15 @@ function go(screen, extra = {}) {
   } else {
     stopAvailableOrdersPolling();
   }
+  if (isMyOrdersScreen()) {
+    // См. комментарий у refreshMyOrders/startMyOrdersPolling выше — те же
+    // соображения, что и для refreshAvailableOrders чуть выше: не блокируем
+    // переход, список обновится повторным render() внутри refreshMyOrders().
+    refreshMyOrders();
+    startMyOrdersPolling();
+  } else {
+    stopMyOrdersPolling();
+  }
   if (screen === 'workerBalance') refreshWorkerPayouts();
 }
 
@@ -5544,6 +5553,7 @@ function resetComposerDraft() {
 
 function logout() {
   stopAvailableOrdersPolling();
+  stopMyOrdersPolling();
   clearSession();
   state.currentUserId = null;
   state.screen = 'home';
@@ -6307,6 +6317,59 @@ async function refreshAvailableOrders(isRetry) {
   }
   cache.availableOrdersLoading = false;
   if (state.screen === 'orders') render();
+}
+
+// ---------------------------------------------------------------------
+// Автообновление статуса заказов заказчика/исполнителя («Мои заказы» и
+// «Заказы, которые я выполняю»). Раньше cache.orders заполнялся только один
+// раз, при старте страницы (см. initDb) и больше никогда не перечитывался —
+// поэтому если мастер нажимал «Готово» на заказе, заказчик видел смену
+// статуса только после полной перезагрузки страницы. Ниже — лёгкий поллинг
+// той же таблицы orders, пока открыт экран «Заказы» или карточка конкретного
+// заказа (orderDetail) — полностью в фоне, без какой-либо видимой кнопки или
+// индикатора загрузки (просьба Sg от 10.10.2026: «Кнопка, показывающая
+// процесс обновления не нужна вообще — пусть продолжает обновлять все
+// заказы фоном»). По тому же образцу, что и startAvailableOrdersPolling выше.
+// ---------------------------------------------------------------------
+const MY_ORDERS_POLL_MS = 15000;
+let myOrdersPollTimer = null;
+
+function isMyOrdersScreen() {
+  return state.screen === 'orders' || state.screen === 'orderDetail';
+}
+
+function startMyOrdersPolling() {
+  if (myOrdersPollTimer) return;
+  myOrdersPollTimer = setInterval(() => {
+    if (isMyOrdersScreen() && !document.hidden) refreshMyOrders();
+  }, MY_ORDERS_POLL_MS);
+}
+
+function stopMyOrdersPolling() {
+  if (!myOrdersPollTimer) return;
+  clearInterval(myOrdersPollTimer);
+  myOrdersPollTimer = null;
+}
+
+/**
+ * Перечитывает таблицу orders целиком (тот же запрос, что initDb делает при
+ * старте) и обновляет cache.orders — без этого «Мои заказы»/«Заказы, которые
+ * я выполняю» не узнавали об изменениях статуса, сделанных другим человеком
+ * (например, мастер отметил заказ выполненным), пока страница не
+ * перезагружена. Никакой видимой кнопки или индикатора загрузки — тихо
+ * молчит и при сетевой ошибке (данные останутся прошлыми до следующего
+ * тика), чтобы не дёргать тостами при плохом интернете.
+ */
+async function refreshMyOrders() {
+  if (!isSupabaseConfigured()) return;
+  try {
+    const orderRows = await getRows('orders');
+    cache.orders = orderRows.map(dbOrderToOrder);
+  } catch (err) {
+    console.error('[orders] не удалось обновить список заказов', err);
+    return;
+  }
+  if (isMyOrdersScreen()) render();
 }
 
 /**
@@ -9212,7 +9275,7 @@ function renderOrders() {
   const candidatesBodyHtml = !hasSkills
     ? `<div class="empty-state">Добавьте навык в профиле, чтобы видеть подходящие заказы поблизости</div>`
     : showsServerList && cache.availableOrdersError && !candidatesSorted.length
-    ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение и нажмите «Обновить» выше.</div>`
+    ? `<div class="available-orders-error">Не удалось обновить список заказов — проверьте соединение, список обновится автоматически.</div>`
     : candidatesSorted.length
     ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
     : candidateOrders.length
@@ -9228,11 +9291,9 @@ function renderOrders() {
       ${renderOrdersBlock('Подходит вам рядом', 'candidates', candidatesBodyHtml, {
         count: candidatesCount,
         newCount: newCandidatesCount,
-        extraButtonHtml: showsServerList
-          ? `<button class="section-refresh-btn" type="button" data-action="refresh-available-orders" onclick="event.stopPropagation()" ${
-              cache.availableOrdersLoading ? 'disabled' : ''
-            }>${cache.availableOrdersLoading ? 'Обновляем…' : 'Обновить'}</button>`
-          : '',
+        // Кнопка «Обновить»/«Обновляем…» убрана по просьбе Sg от 10.10.2026 —
+        // список и так обновляется сам в фоне (см. startAvailableOrdersPolling),
+        // видимая кнопка/индикатор прогресса не нужны вообще.
       })}
     </div>
     ${ordersSortModalOpenFor ? renderOrdersSortModal(ordersSortModalOpenFor) : ''}
@@ -12769,6 +12830,15 @@ async function boot() {
   console.info(assistantDemoNotice());
   render();
 
+  // Если старт страницы сразу привёл на «Заказы» или на карточку конкретного
+  // заказа (например, возврат с оплаты — см. paid_order/failed_order чуть
+  // выше), это не проходит через go() — запускаем фоновый поллинг заказов
+  // явно здесь же (см. refreshMyOrders/startMyOrdersPolling выше).
+  if (isMyOrdersScreen()) {
+    refreshMyOrders();
+    startMyOrdersPolling();
+  }
+
   // Доспрашиваем незавершённое подтверждение телефона, если вкладка, где оно
   // ждалось, не пережила переход в фон (см. комментарий про баг от 04.10.2026
   // у PENDING_PHONE_VERIFY_KEY). Делаем это после render() с чистым экраном,
@@ -12786,6 +12856,10 @@ boot();
 // дожидаясь следующего тика поллинга (см. startAvailableOrdersPolling выше).
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.screen === 'orders') refreshAvailableOrders();
+
+  // То же самое для «Мои заказы»/«Заказы, которые я выполняю»/карточки
+  // заказа — см. refreshMyOrders/startMyOrdersPolling выше.
+  if (!document.hidden && isMyOrdersScreen()) refreshMyOrders();
 
   // Вернулись на вкладку, пока ждали подтверждения звонком, — переспрашиваем
   // сразу, не дожидаясь обычного 3-секундного тика: на мобильных вкладка в
@@ -12820,6 +12894,6 @@ if ('serviceWorker' in navigator) {
     // начале cookie-consent.js).
     window.COOKIE_CONSENT_UI = { hideReopenButton: true };
   </script>
-  <script defer src="/cookie-consent.js"></script>
+  <script defer src="/cookie-consent.js?v=2"></script>
 </body>
 </html>
