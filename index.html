@@ -2861,6 +2861,34 @@ function forceReloginDueToStaleSession() {
   clearSession();
   state.currentUserId = null;
   showToast('Сессия на этом устройстве устарела — войдите заново.');
+  render();
+}
+
+/**
+ * ДОБАВЛЕНО 10.10.2026 (просьба Sg: «не должно быть такого, что человек
+ * вдруг разлогинен, а сайт продолжает работать — если токен устарел, пусть
+ * сайт проверяет это и запрашивает пароль ещё раз») — до этой правки
+ * error:'unauthorized' был обработан только в паре мест (callSecureFn через
+ * create-order, см. forceReloginDueToStaleSession выше); остальные прямые
+ * fetch с sessionToken (accept-order, create-payment/payOrder,
+ * available-orders, worker-balance) либо просто показывали toast «Сессия
+ * истекла — зайдите заново», не выходя из аккаунта на самом деле (человек
+ * оставался в полу-залогиненном состоянии и получал ту же ошибку на
+ * следующем действии), либо вообще не различали 401 от обычного сбоя сети.
+ * Теперь единая точка: ЛЮБОЙ ответ защищённой функции с error:'unauthorized'
+ * приводит к одному и тому же результату — настоящий выход на этом
+ * устройстве и обычный экран входа, а не притворно-живой интерфейс.
+ * @param {*} data — уже распарсенный JSON-ответ Edge Function (или null)
+ * @returns {boolean} true, если это была ошибка протухшей сессии — она уже
+ *   обработана целиком (разлогинили и перерисовали), вызывающему коду
+ *   обычно достаточно сразу return.
+ */
+function handleUnauthorizedResponse(data) {
+  if (data && data.error === 'unauthorized') {
+    forceReloginDueToStaleSession();
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -2918,6 +2946,13 @@ async function callSecureFn(name, body) {
   });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data || data.ok === false) {
+    // ДОБАВЛЕНО 10.10.2026 — единая точка для ВСЕХ вызовов callSecureFn
+    // (см. handleUnauthorizedResponse): протухшая сессия теперь сама
+    // разлогинивает устройство здесь, а не ждёт, пока это сделает (или
+    // забудет сделать) каждый вызывающий код по отдельности. Ошибку всё
+    // равно бросаем — вызывающий .catch(), если он у него есть, просто
+    // получит её уже после того, как пользователь увидел экран входа.
+    handleUnauthorizedResponse(data);
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.code = data && data.error;
     err.missing = data && data.missing;
@@ -6276,11 +6311,14 @@ async function acceptOrder(orderId) {
     });
     data = await res.json().catch(() => ({}));
     if (!res.ok || !data || !data.ok) {
+      // ДОБАВЛЕНО 10.10.2026 — см. handleUnauthorizedResponse: протухшая
+      // сессия теперь реально разлогинивает, а не просто показывает toast
+      // поверх всё ещё «залогиненного» интерфейса.
+      if (handleUnauthorizedResponse(data)) return;
       const messages = {
         already_taken: 'Заказ уже взял другой мастер',
         too_far: 'Этот заказ уже вне вашего радиуса',
         not_eligible: 'Этот заказ вам больше не подходит',
-        unauthorized: 'Сессия истекла — зайдите заново',
       };
       showToast(messages[data && data.error] || 'Не получилось принять заказ — попробуйте ещё раз');
       cache.availableOrders = cache.availableOrders.filter((o) => o.id !== orderId);
@@ -6397,8 +6435,16 @@ async function refreshAvailableOrders(isRetry) {
       headers: headers(),
       body: JSON.stringify({ workerId: user.id, sessionToken: token }),
     });
-    if (!res.ok) throw new Error(`available-orders failed: ${res.status}`);
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      // ДОБАВЛЕНО 10.10.2026 — см. handleUnauthorizedResponse: это фоновый
+      // поллинг (см. комментарий выше у startAvailableOrdersPolling), без
+      // этой проверки протухшая сессия тут выглядела как обычный сбой сети
+      // («не удалось загрузить», кнопка «Обновить» по кругу), а на самом
+      // деле человек уже не залогинен и обновление ничего не исправит.
+      if (handleUnauthorizedResponse(data)) return;
+      throw new Error(`available-orders failed: ${res.status}`);
+    }
     cache.availableOrders = (data.orders || []).map((o) => ({
       id: o.id,
       title: o.title,
@@ -6544,8 +6590,12 @@ async function refreshWorkerPayouts(isRetry) {
       headers: headers(),
       body: JSON.stringify({ workerId: user.id, sessionToken: token }),
     });
-    if (!res.ok) throw new Error(`worker-balance failed: ${res.status}`);
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      // ДОБАВЛЕНО 10.10.2026 — см. handleUnauthorizedResponse/available-orders выше.
+      if (handleUnauthorizedResponse(data)) return;
+      throw new Error(`worker-balance failed: ${res.status}`);
+    }
     cache.workerPayouts = (data.payouts || []).map((p) => ({
       id: p.id,
       orderId: p.order_id,
@@ -6772,10 +6822,14 @@ async function payOrder(orderId) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data || !data.ok || !data.paymentUrl) {
       console.error('[payOrder] create-payment failed', res.status, data);
+      // ДОБАВЛЕНО 10.10.2026 — см. handleUnauthorizedResponse: без этого
+      // человек видел «Сессия истекла», кнопка «Оплатить» возвращалась в
+      // обычное состояние, а сам он так и оставался на экране заказа как
+      // залогиненный — нажимал ещё раз и получал ту же ошибку по кругу.
+      if (handleUnauthorizedResponse(data)) return;
       const messages = {
         wrong_status: 'Заказ уже оплачен или отменён — обновите страницу',
         no_price: 'У заказа ещё не выставлена цена — обновите страницу',
-        unauthorized: 'Сессия истекла — зайдите заново',
       };
       showToast(messages[data && data.error] || 'Не получилось перейти к оплате — попробуйте ещё раз');
       if (btn) {
@@ -9386,9 +9440,18 @@ function renderOrders() {
           hasValidLocation(o.exactLocation) &&
           distanceKm(user.location, o.exactLocation) <= (o.searchRadiusKm || user.searchRadiusKm || 3)
       );
-  const assignedToMe = getOrders().filter(
-    (o) => o.assignedWorkerId === state.currentUserId && !['rated', 'cancelled'].includes(o.status)
-  );
+  // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «заказы, которые я выполняю — закрытых
+  // заказов там нет вообще») — раньше здесь был жёсткий фильтр
+  // `!['rated','cancelled'].includes(o.status)`, отрезающий завершённые и
+  // отменённые заказы ДО того, как до них доходит кнопка «Завершено ХХ»
+  // (см. archivedCount/applyOrdersBlockSettings ниже — тот же механизм,
+  // что у «Мои заказы»). В итоге archivedCount для этого блока всегда был
+  // 0, кнопка «Завершено» вообще не появлялась, и оценённые заказы мастера
+  // были не видны НИКАК, а не просто спрятаны за переключателем. Теперь
+  // массив — все заказы, где я назначенный мастер, без исключений; показ/
+  // скрытие rated/cancelled по умолчанию делает тот же showArchived, что и
+  // у «Мои заказы».
+  const assignedToMe = getOrders().filter((o) => o.assignedWorkerId === state.currentUserId);
   // Кнопка «Обновить» и разделение «ошибка / честный ноль» имеют смысл
   // только пока список реально считает сервер (см. refreshAvailableOrders) —
   // в демо-режиме без Supabase candidateOrders считается синхронно тут же,
@@ -9414,6 +9477,7 @@ function renderOrders() {
   // число не «прыгало» в зависимости от того, включена ли сейчас сама
   // кнопка, и не зависело от ручного фильтра статусов в модалке сортировки.
   const myArchivedCount = myOrders.filter((o) => ARCHIVED_ORDER_STATUSES.includes(o.status)).length;
+  const assignedArchivedCount = assignedToMe.filter((o) => ARCHIVED_ORDER_STATUSES.includes(o.status)).length;
 
   // Серый счётчик в шапке каждого блока — сколько заказов покажется, если
   // развернуть блок прямо сейчас (т.е. уже с учётом фильтра статусов и
@@ -9458,7 +9522,7 @@ function renderOrders() {
     <div class="screen">
       ${renderOrdersBlock('Мои заказы', 'my', myBodyHtml, { archivedCount: myArchivedCount, count: myCount })}
 
-      ${renderOrdersBlock('Заказы, которые я выполняю', 'assigned', assignedBodyHtml, { count: assignedCount })}
+      ${renderOrdersBlock('Заказы, которые я выполняю', 'assigned', assignedBodyHtml, { archivedCount: assignedArchivedCount, count: assignedCount })}
 
       ${renderOrdersBlock('Подходит вам рядом', 'candidates', candidatesBodyHtml, {
         count: candidatesCount,
