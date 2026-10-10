@@ -9195,7 +9195,12 @@ function applyOrdersBlockSettings(list, blockKey) {
   if (settings.statuses.size > 0) {
     result = result.filter((o) => settings.statuses.has(o.status));
   }
-  if (!settings.showArchived) {
+  // ИСПРАВЛЕНО 10.10.2026 — тот же баг, что нашёлся и в admin.html
+  // (applyOrdersFilters, жалоба Sg): если явно выбран статус через фильтр
+  // (settings.statuses), кнопка «Завершено ХХ» не должна его перебивать —
+  // иначе выбрать «Завершено и оценено» в фильтре и получить пустой список,
+  // пока не нажата ещё и кнопка «Завершено», тот же тупик.
+  if (!settings.showArchived && !settings.statuses.size) {
     result = result.filter((o) => !ARCHIVED_ORDER_STATUSES.includes(o.status));
   }
   if (settings.byStatus) {
