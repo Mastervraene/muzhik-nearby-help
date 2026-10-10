@@ -6368,6 +6368,21 @@ function isMyOrdersScreen() {
   return state.screen === 'orders' || state.screen === 'orderDetail';
 }
 
+// ДОБАВЛЕНО 10.10.2026 (жалоба Sg: «невозможно написать отзыв — страница
+// постоянно обновляется, моргает каждые 15 секунд») — render() всегда
+// полностью пересоздаёт DOM экрана (app.innerHTML = ..., см. render() ниже),
+// поэтому фоновый поллинг обнулял любое незасохранённое поле ввода
+// (комментарий к оценке, ответ на уточнение и т.п.) и сбивал фокус/курсор
+// прямо во время набора текста. Используется в refreshMyOrders ниже, чтобы
+// отложить перерисовку, пока человек реально печатает.
+function isEditingInApp() {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName !== 'TEXTAREA' && el.tagName !== 'INPUT') return false;
+  const app = document.getElementById('app');
+  return Boolean(app && app.contains(el));
+}
+
 function startMyOrdersPolling() {
   if (myOrdersPollTimer) return;
   myOrdersPollTimer = setInterval(() => {
@@ -6399,7 +6414,12 @@ async function refreshMyOrders() {
     console.error('[orders] не удалось обновить список заказов', err);
     return;
   }
-  if (isMyOrdersScreen()) render();
+  // См. isEditingInApp() выше — пока человек печатает в поле на этом экране,
+  // кэш обновляем молча, а саму перерисовку откладываем до следующего тика
+  // (данные не теряются, просто не дёргаем экран и не сбрасываем набранный
+  // текст); как только фокус уйдёт из поля — следующий тик перерисует как
+  // обычно.
+  if (isMyOrdersScreen() && !isEditingInApp()) render();
 }
 
 /**
