@@ -9210,7 +9210,9 @@ function renderOrders() {
         (o) =>
           o.status === 'searching' &&
           o.customerId !== state.currentUserId &&
-          user.skills.some((s) => s.categoryId === o.categoryId) &&
+          // См. комментарий у iCanAccept в renderOrderDetail() — категория
+          // "other" видна любому мастеру с навыками, как и на сервере.
+          (o.categoryId === 'other' || user.skills.some((s) => s.categoryId === o.categoryId)) &&
           hasValidLocation(o.exactLocation) &&
           distanceKm(user.location, o.exactLocation) <= (o.searchRadiusKm || user.searchRadiusKm || 3)
       );
@@ -9496,10 +9498,26 @@ function renderOrderDetail() {
   const isCustomer = order.customerId === state.currentUserId;
   const isAssignedWorker = order.assignedWorkerId === state.currentUserId;
   const user = currentUser();
+  // БАГ-ФИКС 10.10.2026: заказ категории "other" (универсальная/прецедентная,
+  // когда под проблему ещё нет готовой категории — пример: «Холодильник не
+  // работает») сервер (Edge Function available-orders, см. её .or(...) с
+  // category_id.eq.other) намеренно показывает ЛЮБОМУ мастеру — заказ с такой
+  // категорией никогда не совпадёт ни с одним конкретным навыком буквально
+  // (ни у кого нет навыка "other"). Здесь же раньше проверялось только точное
+  // совпадение категории — поэтому заказ появлялся в «Подходит вам рядом», но
+  // при открытии карточки кнопки «Принять заказ» не было вообще (сообщение Sg
+  // от 10.10.2026: «заказ виден в подходящих, но я не могу его взять — где
+  // кнопка?»). Уточнение Sg (тот же день): категорию "other" может взять
+  // ЛЮБОЙ, кто стал мастером (availableAsWorker), вне зависимости от набора
+  // навыков — специально никаких навыков не требуем. Когда позже появится
+  // более гранулярная фильтрация по специализациям, этот список сузится —
+  // пока сознательно оставляем широко. Для обычных категорий правило как и
+  // раньше — нужен конкретный совпадающий навык.
   const iCanAccept =
     !isCustomer &&
     order.status === 'searching' &&
-    user.skills.some((s) => s.categoryId === order.categoryId);
+    user.availableAsWorker &&
+    (order.categoryId === 'other' || user.skills.some((s) => s.categoryId === order.categoryId));
 
   let actions = '';
   if (iCanAccept) {
