@@ -4529,6 +4529,10 @@ function buildInitialDb() {
 const TELEGRAM_BOT_USERNAME =
   (typeof window !== 'undefined' && window.__ENV__?.TELEGRAM_BOT_USERNAME) || 'mastervraenebot';
 
+// ВРЕМЕННО (12.10.2026): БотХелп не работает (DDoS на Яндекс), привязка Telegram
+// недоступна — прячем кнопку «Открыть бота» и форму кода. Когда починят — false.
+const TELEGRAM_LINK_TEMP_DISABLED = true;
+
 // Поддержка пользователей — личный аккаунт в Telegram (не бот), номер
 // телефона той же SIM-карты. Кнопка «поддержка» в шапке (см. renderTopbar/
 // renderTopbarNoUser) открывает всплывающее окно с этими контактами.
@@ -5986,6 +5990,9 @@ function renderTelegramLinkCard(purposeText) {
   if (!user) return '';
   if (user.telegramId) {
     return `<p class="order-meta"><span>✓ Telegram подключён — уведомления приходят туда</span> <small style="opacity:.7;">с 07:00 до 22:00 по вашему времени${hasValidLocation(user.location) ? '' : ', пока по Москве — укажите локацию в профиле'}</small></p>`;
+  }
+  if (TELEGRAM_LINK_TEMP_DISABLED) {
+    return `<div class="field-card"><p class="order-meta">Привязка Telegram временно недоступна — скоро вернём. Уведомления пока видны в приложении.</p></div>`;
   }
   const limit = getTelegramLinkLimitState();
   let hint = '';
@@ -10667,7 +10674,7 @@ function renderPhoneGate() {
       <div class="order-warning" id="gate-phone-error" style="display:none;"></div>
       <button class="primary-button" id="gate-phone-send" disabled>Продолжить</button>
       <p style="font-size:12px;color:#767676;margin-top:10px;">Нажимая «Продолжить», вы соглашаетесь с <a href="/privacy-policy.html" style="color:inherit;">политикой конфиденциальности</a> и даёте согласие на <a href="/personal-data-policy.html" style="color:inherit;">обработку персональных данных</a>.</p>
-      <div class="composer-field-inline" style="margin-top:14px;">
+      ${TELEGRAM_LINK_TEMP_DISABLED ? `<div class="composer-field-inline" style="margin-top:14px;"><p class="order-meta">Привязка Telegram временно недоступна — скоро вернём.</p></div>` : `<div class="composer-field-inline" style="margin-top:14px;">
         <p class="order-meta">Telegram — для получения уведомлений о заказах</p>
         <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
         ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
@@ -10679,7 +10686,7 @@ function renderPhoneGate() {
         <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>`
             : ''
         }
-      </div>
+      </div>`}
     </div>
   `;
 }
