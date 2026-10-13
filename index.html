@@ -10675,7 +10675,7 @@ function renderPhoneGate() {
       <button class="primary-button" id="gate-phone-send" disabled>Продолжить</button>
       <p style="font-size:12px;color:#767676;margin-top:10px;">Нажимая «Продолжить», вы соглашаетесь с <a href="/privacy-policy.html" style="color:inherit;">политикой конфиденциальности</a> и даёте согласие на <a href="/personal-data-policy.html" style="color:inherit;">обработку персональных данных</a>.</p>
       ${TELEGRAM_LINK_TEMP_DISABLED ? `<div class="composer-field-inline" style="margin-top:14px;"><p class="order-meta">Привязка Telegram временно недоступна — скоро вернём.</p></div>` : `<div class="composer-field-inline" style="margin-top:14px;">
-        <p class="order-meta">Telegram — для получения уведомлений о заказах</p>
+        <p class="order-meta">Необязательно: Telegram — вход по коду из бота и уведомления о заказах</p>
         <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
         ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
         ${
@@ -10804,7 +10804,7 @@ function render() {
     app.innerHTML = `
       ${renderTopbarNoUser()}
       <div class="screen">
-        <div class="section-title">Нужен номер телефона</div>
+        <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
       ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
