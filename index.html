@@ -2937,6 +2937,41 @@ async function issueSessionToken(userId) {
  * @param {string} name
  * @param {Object} body
  */
+/**
+ * ДОБАВЛЕНО 13.10.2026 (просьба Sg: «отслеживать тип устройства и ОС»).
+ * Определяет тип устройства (phone/tablet/computer) и ОС
+ * (windows/macos/ios/android/other) по userAgent и сообщает серверу через
+ * узкую Edge Function report-device (проверка sessionToken, запись в
+ * users.device_type/device_os/device_seen_at). Не чаще раза в 6 часов,
+ * ошибки молча игнорируем — на работу сайта не влияет.
+ */
+function detectDevice() {
+  const ua = navigator.userAgent || '';
+  const touch = navigator.maxTouchPoints || 0;
+  const ipadOs = /Macintosh/.test(ua) && touch > 1;
+  let os = 'other';
+  if (/iPhone|iPad|iPod/.test(ua) || ipadOs) os = 'ios';
+  else if (/Android/.test(ua)) os = 'android';
+  else if (/Windows/.test(ua)) os = 'windows';
+  else if (/Mac OS X|Macintosh/.test(ua)) os = 'macos';
+  let deviceType = 'computer';
+  if (/iPad/.test(ua) || ipadOs || (/Android/.test(ua) && !/Mobile/.test(ua))) deviceType = 'tablet';
+  else if (/iPhone|iPod/.test(ua) || (/Android/.test(ua) && /Mobile/.test(ua))) deviceType = 'phone';
+  return { deviceType, os };
+}
+
+function reportDeviceOnce(userId, sessionToken) {
+  try {
+    const key = 'muzhik_device_reported_at';
+    const last = Number(localStorage.getItem(key) || 0);
+    if (Date.now() - last < 6 * 60 * 60 * 1000) return;
+    const { deviceType, os } = detectDevice();
+    callSecureFn('report-device', { userId, sessionToken, deviceType, os })
+      .then(() => { try { localStorage.setItem(key, String(Date.now())); } catch (e) { /* ignore */ } })
+      .catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
 async function callSecureFn(name, body) {
   const { url } = getConfig();
   const res = await fetchRetry(`${url}/functions/v1/${name}`, {
@@ -3050,6 +3085,8 @@ const CATEGORY_KEYWORDS = {
   assembly: ['полк', 'карниз', 'телевизор', 'мебел', 'собрать', 'повесить'],
   minor_repair: ['обои', 'герметик', 'скол', 'трещин', 'подклеить'],
   household_help: ['убор', 'вынести', 'перенести', 'переставить', 'мусор'],
+  cars: ['автомобил', 'легков', 'аккумулятор авто', 'шиномонтаж', 'двигател', 'прикурить', 'замена масла'],
+  computers: ['компьютер', 'ноутбук', 'планшет', 'windows', 'виндовс', 'macos', 'андроид', 'айфон', 'принтер', 'роутер', 'wi-fi', 'вайфай'],
 };
 
 const DANGEROUS_KEYWORDS = ['газ', 'проводка под напряжением 380', 'взрыв', 'горит проводка'];
@@ -4172,6 +4209,8 @@ const CATEGORIES = [
   { id: 'minor_repair', title: 'Мелкий ремонт' },
   { id: 'household_help', title: 'Уборка и бытовая помощь' },
   { id: 'moving_help', title: 'Вынос и перемещение вещей' },
+  { id: 'cars', title: 'Автомобили' },
+  { id: 'computers', title: 'Компьютеры' },
   // Категория-заглушка для случаев, когда офлайн-классификатор
   // (interpretCustomerMessage) не нашёл совпадений по ключевым словам —
   // orders.category_id в базе NOT NULL, поэтому заказ без категории иначе
@@ -4194,6 +4233,8 @@ const SKILL_GROUPS = [
   { title: 'Окна и двери', categoryIds: ['windows_doors'] },
   { title: 'Кондиционеры', categoryIds: ['air_conditioning'] },
   { title: 'Сборка мебели', categoryIds: ['assembly'] },
+  { title: 'Автомобили', categoryIds: ['cars'] },
+  { title: 'Компьютеры', categoryIds: ['computers'] },
   { title: 'Без навыков (общая помощь)', categoryIds: ['minor_repair', 'household_help', 'moving_help'] },
 ];
 // Плоский список всех выбираемых категорий навыков — порядок кнопок в
@@ -13245,6 +13286,7 @@ async function boot() {
       callSecureFn('get-my-profile', { userId: user.id, sessionToken: savedToken })
         .then((data) => {
           if (!data.user) return;
+          reportDeviceOnce(user.id, savedToken);
           const i = cache.users.findIndex((u) => u.id === user.id);
           const fresh = dbUserToUser(data.user, {});
           if (i >= 0) {

@@ -812,6 +812,8 @@ const CATEGORY_TITLES = {
   minor_repair: 'Мелкий ремонт',
   household_help: 'Уборка и бытовая помощь',
   moving_help: 'Вынос и перемещение вещей',
+  cars: 'Автомобили',
+  computers: 'Компьютеры',
   // Фолбэк, когда классификатор на сайте не определил категорию —
   // см. CATEGORIES/startQuickDraft в index.html.
   other: 'Другое',
@@ -1318,6 +1320,8 @@ function dbUserToUser(row) {
   return {
     id: row.id,
     telegramId: row.telegram_id || '',
+    deviceType: row.device_type || '',
+    deviceOs: row.device_os || '',
     displayName: row.display_name || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
@@ -3594,6 +3598,7 @@ function masterCardHtml(u) {
           <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} · ${userSeqLabel(u.id)}${city ? ` · ${escapeHtml(city)}` : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
+            ${u.deviceType || u.deviceOs ? `<span class="pill muted" title="Устройство и ОС по последнему заходу на сайт">${({ phone: '📱 телефон', tablet: '📟 планшет', computer: '💻 компьютер' })[u.deviceType] || ''} ${({ windows: 'Windows', macos: 'Mac OS', ios: 'iOS', android: 'Android', other: 'др. ОС' })[u.deviceOs] || ''}</span>` : ''}
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span>` : '<span class="pill muted">клиент</span>'}
           </div>
           <div class="card-row3">
