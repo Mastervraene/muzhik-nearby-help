@@ -2096,6 +2096,27 @@ body {
   font-weight: 700;
 }
 
+
+/* ---------- Мастер-анкета «стать мастером» ---------- */
+.mw-screen { display: flex; flex-direction: column; }
+.mw-screen > * { flex-shrink: 0; }
+.mw-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.mw-steps { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mw-prev, .mw-next { font-size: 13px; color: var(--gray-400, #a0a0a0); line-height: 1.3; min-height: 17px; }
+.mw-cur { font-size: 20px; font-weight: 700; color: var(--gray-900); line-height: 1.25; }
+.mw-count { font-size: 14px; color: var(--gray-500); white-space: nowrap; padding-top: 3px; }
+.mw-bar { height: 4px; border-radius: 4px; background: var(--gray-100); overflow: hidden; margin-bottom: 16px; }
+.mw-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .25s ease; }
+.mw-body { flex: 1; }
+.mw-actions { margin-top: 18px; }
+.mw-note { margin-top: 12px; }
+.mw-faint { opacity: .55; }
+.mw-ok { color: var(--accent-strong); font-weight: 600; }
+.mw-btn-dim { opacity: .55; }
+.mw-intro { text-align: center; padding: 28px 8px 8px; }
+.mw-intro-icon { font-size: 54px; margin-bottom: 10px; }
+.mw-intro-title { font-size: 22px; margin: 0 0 14px; }
+.mw-intro-text { font-size: 15px; line-height: 1.5; color: var(--gray-700); text-align: left; margin: 0 0 12px; }
 </style>
 </head>
 <body>
@@ -3364,6 +3385,9 @@ function dbUserToUser(row, skillsByUser) {
     avatarUrl: row.avatar_url || '',
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
+    lastName: row.last_name || '',
+    location2: (row.lat2 != null && row.lng2 != null) ? { lat: row.lat2, lng: row.lng2 } : null,
+    district2: row.district2 || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
     skills: skillsByUser[row.id] || [],
     availableAsWorker: Boolean(row.available_as_worker),
@@ -3964,15 +3988,18 @@ function saveUser(user) {
           // save-profile — available_as_worker убран из его ALLOWED_FIELDS).
           lat: user.location?.lat,
           lng: user.location?.lng,
+          // Фамилия и вторая локация шлются отдельными точечными вызовами
+          // (мастер-анкета / профиль), чтобы общий saveUser их случайно не затёр.
+          ...(user.lastName ? { lastName: user.lastName } : {}),
         },
       }).catch((err) => {
-        // Лимит смены геолокации (не более 2 раз в неделю — см. save-profile.ts)
+        // Лимит смены геолокации (не более 2 раз в месяц — см. save-profile.ts)
         // — по просьбе Sg это НЕ постоянная надпись в профиле, а временное
         // всплывающее сообщение (showToast уже само исчезает через 2.2с), и
         // район откатывается к тому, что реально осталось сохранённым в БД.
         if (err && err.code === 'geo_limit_exceeded') {
           if (previous && cache.users[idx] === user) cache.users[idx] = previous;
-          showToast('Слишком частая смена района — не более 2 раз в неделю. Попробуйте позже.');
+          showToast('Слишком частая смена района — не более 2 раз в месяц. Попробуйте позже.');
           render();
           return;
         }
@@ -4739,7 +4766,7 @@ function markOnboardingDismissed() {
 function go(screen, extra = {}) {
   state.screen = screen;
   Object.assign(state, extra);
-  if (screen === 'profile' || screen === 'masterPanel') {
+  if (screen === 'profile' || screen === 'masterPanel' || screen === 'masterWizard') {
     // Свежий заход на экран профиля/панели мастера всегда начинается со
     // свёрнутого (подтверждённого) вида адреса, если он уже есть — а не с
     // середины редактирования, оставшейся с прошлого визита.
@@ -10424,7 +10451,7 @@ function renderProfile() {
             : `
         <p class="order-meta" style="margin-bottom:10px;">Хотите выполнять заказы рядом и зарабатывать? Укажите район, специализацию, Telegram и аватарку — и подайте заявку.</p>
         ${user.masterStatus === 'rejected' ? `<div class="order-warning" style="margin-bottom:10px;">Заявка отклонена${user.masterReviewComment ? `: ${escapeHtml(user.masterReviewComment)}` : ''}. Исправьте данные и отправьте заявку ещё раз.</div>` : ''}
-        <button type="button" class="secondary-button" data-action="go-master-panel">🛠 Стать мастером</button>
+        <button type="button" class="secondary-button" data-action="go-master-wizard">🛠 Стать мастером</button>
         <button type="button" class="secondary-button" data-action="open-master-stories" style="margin-top:8px;">ℹ️ Как это работает и что вы получите</button>
         `
         }
@@ -10435,6 +10462,309 @@ function renderProfile() {
       <button type="button" class="secondary-button" data-action="open-cookie-settings" style="display:block; box-sizing:border-box; text-align:center; margin-top:8px;">🍪 Настройки cookie</button>
     </div>
   `;
+}
+
+// ---------------------------------------------------------------------
+// Пошаговая заявка «стать мастером» (просьба Sg 12.10.2026). 7 шагов,
+// шаг запоминается (localStorage, по userId) — после обрыва сессии кнопка
+// «Стать мастером» продолжает с того же места. Все сохранения переиспользуют
+// уже работающие обработчики профиля (район/карта/навыки/аватарка/Telegram/
+// телефон — те же id полей и data-action), а серверную проверку полноты
+// делает submit-master-application (location/skills/telegram/avatar).
+// ---------------------------------------------------------------------
+const MASTER_WIZARD_STEPS = [
+  { id: 'intro', title: 'О работе' },
+  { id: 'name', title: 'Имя' },
+  { id: 'phone', title: 'Телефон' },
+  { id: 'telegram', title: 'Telegram' },
+  { id: 'location', title: 'Локация' },
+  { id: 'skills', title: 'Навыки' },
+  { id: 'avatar', title: 'Фото' },
+];
+let masterWizardStep = 0;
+let masterWizardSubmitting = false;
+let masterWizardFirstName = '';
+let masterWizardLastName = '';
+let masterWizardNameTouched = false;
+
+function masterWizardStorageKey(userId) {
+  return 'mw_step:' + userId;
+}
+
+function loadMasterWizardStep(userId) {
+  try {
+    const n = Number(localStorage.getItem(masterWizardStorageKey(userId)));
+    if (Number.isInteger(n) && n >= 0 && n < MASTER_WIZARD_STEPS.length) return n;
+  } catch (e) { /* хранилище может быть недоступно — начнём с первого шага */ }
+  return 0;
+}
+
+function saveMasterWizardStep(userId, n) {
+  try { localStorage.setItem(masterWizardStorageKey(userId), String(n)); } catch (e) { /* не критично */ }
+}
+
+function clearMasterWizardStep(userId) {
+  try { localStorage.removeItem(masterWizardStorageKey(userId)); } catch (e) { /* не критично */ }
+}
+
+/** Вход в мастер: подтягивает сохранённый шаг и подготавливает поля. */
+function openMasterWizard() {
+  const user = currentUser();
+  if (!user) return go('profile');
+  masterWizardStep = loadMasterWizardStep(user.id);
+  masterWizardNameTouched = false;
+  profileDistrictValue = user.district || '';
+  go('masterWizard');
+}
+
+function setMasterWizardStep(n) {
+  const user = currentUser();
+  masterWizardStep = Math.max(0, Math.min(MASTER_WIZARD_STEPS.length - 1, n));
+  if (user) saveMasterWizardStep(user.id, masterWizardStep);
+  profileAddressEditing = false;
+  state.openSkillPicker = null;
+  render();
+  const el = document.querySelector('.screen');
+  if (el) el.scrollTop = 0;
+}
+
+function masterWizardUserName(user) {
+  const n = (user.displayName || '').trim();
+  return n && n.toLowerCase() !== 'гость' ? n : '';
+}
+
+/** Можно ли идти дальше с текущего шага (и почему нет). */
+function masterWizardCanContinue(stepId, user) {
+  if (stepId === 'phone') return Boolean(user.phone && user.phoneVerified);
+  if (stepId === 'telegram') return Boolean(user.telegramId);
+  if (stepId === 'location') return hasValidLocation(user.location) && !profileAddressEditing;
+  if (stepId === 'skills') return user.skills.some((s) => parseSkillNote(s.note || '').level);
+  if (stepId === 'avatar') return Boolean(user.avatarUrl);
+  return true;
+}
+
+function masterWizardNext() {
+  const user = currentUser();
+  if (!user) return;
+  const step = MASTER_WIZARD_STEPS[masterWizardStep];
+  if (step.id === 'name') {
+    const first = (masterWizardNameTouched ? masterWizardFirstName : masterWizardUserName(user)).trim();
+    const last = (masterWizardNameTouched ? masterWizardLastName : (user.lastName || '')).trim();
+    if (!first) return showToast('Укажите имя');
+    if (!last) return showToast('Укажите фамилию');
+    if (first !== user.displayName || last !== (user.lastName || '')) {
+      saveUser({ ...user, displayName: first, lastName: last });
+    }
+    masterWizardNameTouched = false;
+  } else if (!masterWizardCanContinue(step.id, user)) {
+    const hints = {
+      phone: 'Сначала подтвердите номер звонком',
+      telegram: 'Сначала подключите Telegram',
+      location: 'Сначала подтвердите или укажите локацию',
+      skills: 'Отметьте хотя бы один навык',
+      avatar: 'Загрузите свою фотографию',
+    };
+    return showToast(hints[step.id] || 'Заполните шаг');
+  }
+  setMasterWizardStep(masterWizardStep + 1);
+}
+
+function masterWizardBack() {
+  if (masterWizardStep <= 0) return go('profile');
+  setMasterWizardStep(masterWizardStep - 1);
+}
+
+async function submitMasterWizard() {
+  if (masterWizardSubmitting) return;
+  const user = currentUser();
+  if (!user) return;
+  if (!masterWizardCanContinue('avatar', user)) return showToast('Загрузите свою фотографию');
+  masterWizardSubmitting = true;
+  render();
+  // Сохранения профиля (saveUser) уходят на сервер в фоне — даём им дойти,
+  // чтобы серверная проверка полноты не увидела устаревшие данные.
+  await new Promise((r) => setTimeout(r, 1200));
+  try {
+    await submitMasterApplication();
+    clearMasterWizardStep(user.id);
+    masterWizardStep = 0;
+  } catch (err) {
+    const stepOf = { telegram: 3, location: 4, skills: 5, avatar: 6 };
+    if (err && err.code === 'incomplete' && Array.isArray(err.missing) && err.missing.length) {
+      const items = err.missing.map((m) => MASTER_APPLICATION_MISSING_LABELS[m] || m).join(', ');
+      showToast(`Сначала заполните: ${items}`);
+      const first = err.missing.map((m) => stepOf[m]).filter((x) => x !== undefined).sort()[0];
+      if (first !== undefined) { masterWizardSubmitting = false; return setMasterWizardStep(first); }
+    } else if (isStaleSessionError(err)) {
+      forceReloginDueToStaleSession();
+    } else {
+      showToast('Не получилось отправить заявку — попробуйте ещё раз через минуту.');
+    }
+  }
+  masterWizardSubmitting = false;
+  render();
+}
+
+document.addEventListener('input', (e) => {
+  const id = e.target && e.target.id;
+  if (id === 'mw-first') { masterWizardFirstName = e.target.value; masterWizardNameTouched = true; }
+  else if (id === 'mw-last') { masterWizardLastName = e.target.value; masterWizardNameTouched = true; }
+});
+
+function renderMasterWizardSkills(user) {
+  return `<div class="skill-buttons">
+    ${ALL_SKILL_CATEGORY_IDS.map((catId) => {
+      const skill = user.skills.find((s) => s.categoryId === catId);
+      const { level } = parseSkillNote(skill?.note || '');
+      const isOpen = state.openSkillPicker === catId;
+      const label = escapeHtml(CATEGORY_TITLES[catId] || catId);
+      const stars = level ? `<span class="skill-btn-stars">${renderStars(level)}</span>` : '';
+      return `
+        <div class="skill-btn-wrap">
+          <button type="button" class="skill-btn ${level ? 'skill-btn-active' : ''} ${isOpen ? 'open' : ''}" data-action="toggle-skill-picker" data-value="${catId}">
+            <span>${label}</span>${stars}
+          </button>
+          ${isOpen ? `<div class="star-picker" role="radiogroup" aria-label="Уровень — ${label}">
+            ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star-btn ${n <= level ? 'filled' : ''}" data-action="set-skill-level" data-value="${catId}:${n}" aria-label="${n} из 5">★</button>`).join('')}
+          </div>` : ''}
+        </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderMasterWizardStepBody(step, user) {
+  if (step.id === 'intro') {
+    return `
+      <div class="mw-intro">
+        <div class="mw-intro-icon">🛠</div>
+        <h2 class="mw-intro-title">Работайте мастером рядом с домом</h2>
+        <p class="mw-intro-text">«Мужик» — это бытовые заказы по соседству: починить, собрать, подключить, настроить. Вам приходят заказы только в вашем районе, вы сами решаете, какие брать, а деньги за выполненный заказ приходят через сервис.</p>
+        <p class="mw-intro-text">Чтобы заказчики могли вам доверять, мы просим пройти несколько коротких шагов: имя, телефон, Telegram, локацию, навыки и настоящее фото. Это займёт пару минут. После этого заявку проверит модератор, а решение придёт вам в Telegram.</p>
+        ${user.masterStatus === 'rejected' ? `<div class="order-warning" style="margin-top:12px;">Прошлая заявка отклонена${user.masterReviewComment ? `: ${escapeHtml(user.masterReviewComment)}` : ''}. Проверьте данные и подайте заявку ещё раз.</div>` : ''}
+      </div>`;
+  }
+  if (step.id === 'name') {
+    const first = masterWizardNameTouched ? masterWizardFirstName : masterWizardUserName(user);
+    const last = masterWizardNameTouched ? masterWizardLastName : (user.lastName || '');
+    return `
+      <div class="field-card">
+        <label for="mw-first">Имя</label>
+        <input type="text" id="mw-first" value="${escapeHtml(first)}" placeholder="Например: Иван" autocomplete="given-name" maxlength="40" />
+        <label for="mw-last" style="margin-top:10px;display:block;">Фамилия</label>
+        <input type="text" id="mw-last" value="${escapeHtml(last)}" placeholder="Например: Петров" autocomplete="family-name" maxlength="40" />
+        <p class="order-meta mw-note">Отображаться будет только имя. Фамилия нужна для безопасности и чтобы мы могли убедиться, что вы — реальный человек.</p>
+      </div>`;
+  }
+  if (step.id === 'phone') {
+    return `
+      <div class="field-card">
+        ${user.phone ? `<p style="margin:0 0 6px;"><b>${escapeHtml(displayPhone(user.phone))}</b> ${user.phoneVerified ? '<span class="mw-ok">✓ подтверждён</span>' : '<span class="order-meta">— не подтверждён</span>'}</p>` : '<p class="order-meta">Номер пока не указан.</p>'}
+        <button type="button" class="${user.phoneVerified ? 'secondary-button' : 'primary-button'}" data-action="open-phone-overlay" style="box-sizing:border-box;">${user.phoneVerified ? 'Проверить или изменить номер' : 'Подтвердить номер звонком'}</button>
+        <p class="order-meta mw-note">Это нужно для безопасности: звонок на проверенный номер — самый надёжный способ подтвердить, что вы реальный человек, и защитить заказчиков и сервис от спама.</p>
+      </div>`;
+  }
+  if (step.id === 'telegram') {
+    return `
+      <div class="field-card">
+        <p style="margin:0 0 10px;">${user.telegramId ? '<span class="mw-ok">✓ Telegram подключён</span>' : 'Telegram пока не подключён.'}</p>
+        <button type="button" class="${user.telegramId ? 'secondary-button' : 'primary-button'}" data-action="open-telegram-overlay" style="box-sizing:border-box;">${user.telegramId ? 'Настройки Telegram' : 'Подключить Telegram'}</button>
+        <p class="order-meta mw-note">Туда будут приходить уведомления о новых заказах и об изменении статусов.</p>
+        <p class="order-meta mw-note mw-faint">Позже появятся push-уведомления.</p>
+      </div>`;
+  }
+  if (step.id === 'location') {
+    const confirmed = hasValidLocation(user.location) && !profileAddressEditing;
+    return `
+      <div class="field-card">
+        <label>Домашний адрес или район</label>
+        ${confirmed ? `
+          <p class="profile-address-confirmed"><span class="profile-address-check">✓</span><span>${escapeHtml(user.district || profileDistrictValue)}</span></p>
+          <p class="order-meta" style="margin-top:6px;">Всё верно? Если нет — укажите новую локацию.</p>
+          <button type="button" class="secondary-button" data-action="edit-profile-address" style="margin-top:8px;box-sizing:border-box;">Указать другую</button>
+        ` : `
+          <input type="text" id="field-profile-district" placeholder="Например: г. Москва, ул. Тверская, 1" value="${escapeHtml(profileDistrictValue)}" autocomplete="off" />
+          <div id="profile-district-suggestions" class="address-suggest-list"></div>
+          <button type="button" class="map-pick-link" data-action="open-map-picker" data-value="profile">📍 Указать на карте</button>
+          <div class="composer-field-inline" style="margin-top:8px;">
+            <button class="secondary-button" id="profile-district-save-btn" data-action="save-profile-district" style="margin-top:0;">Сохранить</button>
+            <button type="button" class="secondary-button composer-geo-button" id="profile-geo-btn" data-action="use-geo-profile" style="margin-top:0;">${ICON_PIN}<span>Определить автоматически</span></button>
+            ${hasValidLocation(user.location) ? `<button type="button" class="secondary-button" data-action="cancel-edit-profile-address" style="margin-top:0;">Отмена</button>` : ''}
+          </div>
+        `}
+        <p class="order-meta mw-note"><b>Локация — самое важное.</b> Заказы приходят только в вашем районе, в пешей доступности от этой точки.</p>
+        <p class="order-meta mw-note">Изменить локацию позже можно в профиле, но не чаще 2 раз в месяц. Дополнительную локацию (например, рядом с работой) можно будет указать там же, позже.</p>
+      </div>`;
+  }
+  if (step.id === 'skills') {
+    return `
+      <div class="field-card">
+        <p class="order-meta" style="margin-bottom:10px;">Нажмите на направление и поставьте оценку своим навыкам от 1 до 5 звёзд. Вам будут показываться только заказы, которые соответствуют вашим навыкам. Отметьте хотя бы одно.</p>
+        ${renderMasterWizardSkills(user)}
+      </div>`;
+  }
+  // avatar
+  return `
+    <div class="field-card">
+      <p class="order-meta" style="margin-bottom:12px;">Загрузите свою настоящую фотографию — лицо должно быть хорошо видно. Заказчики охотнее доверяют мастерам с живым фото.</p>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="profile-avatar" style="width:84px;height:84px;border-radius:50%;overflow:visible;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;cursor:pointer;" data-action="open-avatar-menu" role="button" aria-label="Фото профиля">
+          <div style="width:100%;height:100%;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+            ${user.avatarUrl ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:34px;">👤</span>`}
+          </div>
+          <span class="profile-avatar-edit-badge" aria-hidden="true">${ICON_PENCIL}</span>
+        </div>
+        <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
+        <span class="order-meta">${user.avatarUrl ? 'Нажмите на фото, чтобы открыть или заменить' : 'Нажмите, чтобы загрузить фото'}</span>
+      </div>
+    </div>`;
+}
+
+function renderMasterWizard() {
+  const user = currentUser();
+  if (!user) return '';
+  if (user.masterStatus === 'approved' || user.masterStatus === 'paused') {
+    setTimeout(() => go('masterPanel'), 0);
+    return '<div class="screen"></div>';
+  }
+  if (user.masterStatus === 'pending') {
+    return `
+    <div class="screen mw-screen">
+      <div class="mw-intro">
+        <div class="mw-intro-icon">✅</div>
+        <h2 class="mw-intro-title">Заявка отправлена на модерацию</h2>
+        <p class="mw-intro-text">Мы проверим данные и сообщим о решении в Telegram. Обычно это быстро.</p>
+      </div>
+      <div class="mw-actions"><button type="button" class="primary-button" data-action="go-profile" style="box-sizing:border-box;">В профиль</button></div>
+    </div>`;
+  }
+  const total = MASTER_WIZARD_STEPS.length;
+  const i = masterWizardStep;
+  const step = MASTER_WIZARD_STEPS[i];
+  const prev = i > 0 ? MASTER_WIZARD_STEPS[i - 1].title : '';
+  const next = i < total - 1 ? MASTER_WIZARD_STEPS[i + 1].title : '';
+  const isIntro = step.id === 'intro';
+  const isLast = i === total - 1;
+  const canGo = masterWizardCanContinue(step.id, user);
+  const nextLabel = isIntro ? 'Стать мастером' : 'Далее';
+  return `
+    <div class="screen mw-screen">
+      <div class="mw-head">
+        <div class="mw-steps">
+          <span class="mw-prev">${escapeHtml(prev)}</span>
+          <span class="mw-cur">${i + 1}. ${escapeHtml(step.title)}</span>
+          <span class="mw-next">${escapeHtml(next)}</span>
+        </div>
+        <div class="mw-count">${i + 1} из ${total}</div>
+      </div>
+      <div class="mw-bar"><div class="mw-bar-fill" style="width:${Math.round(((i + 1) / total) * 100)}%"></div></div>
+      <div class="mw-body">${renderMasterWizardStepBody(step, user)}</div>
+      <div class="mw-actions">
+        ${isLast
+          ? `<button type="button" class="primary-button" data-action="mw-submit" ${canGo && !masterWizardSubmitting ? '' : 'disabled'} style="box-sizing:border-box;">${masterWizardSubmitting ? 'Отправляем…' : 'Подать заявку'}</button>`
+          : `<button type="button" class="primary-button ${!isIntro && !canGo ? 'mw-btn-dim' : ''}" data-action="mw-next" style="box-sizing:border-box;">${nextLabel}</button>`}
+        <button type="button" class="secondary-button" data-action="mw-back" style="box-sizing:border-box;margin-top:10px;">Назад</button>
+      </div>
+    </div>`;
 }
 
 // Вынесено из обычного профиля (см. историю изменений) — всё, что нужно
@@ -10840,7 +11170,7 @@ function render() {
     return;
   }
 
-  const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'workerBalance', 'notifications', 'orderDetail'];
+  const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'masterWizard', 'workerBalance', 'notifications', 'orderDetail'];
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
     app.innerHTML = `
       ${renderTopbarNoUser()}
@@ -10873,10 +11203,11 @@ function render() {
   else if (state.screen === 'notifications') content = renderNotifications();
   else if (state.screen === 'profile') content = renderProfile();
   else if (state.screen === 'masterPanel') content = renderMasterPanel();
+  else if (state.screen === 'masterWizard') content = renderMasterWizard();
   else if (state.screen === 'workerBalance') content = renderWorkerBalance();
 
   app.innerHTML = `
-    ${renderTopbar()}
+    ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
     ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
@@ -12829,6 +13160,10 @@ async function handleAction(action, value) {
     case 'go-notifications': return go('notifications');
     case 'go-profile': return go('profile');
     case 'go-master-panel': return go('masterPanel');
+    case 'go-master-wizard': return openMasterWizard();
+    case 'mw-next': return masterWizardNext();
+    case 'mw-back': return masterWizardBack();
+    case 'mw-submit': return submitMasterWizard();
     case 'go-worker-balance': return go('workerBalance');
     case 'open-cookie-settings':
       if (typeof window.openCookieConsentBanner === 'function') window.openCookieConsentBanner();
