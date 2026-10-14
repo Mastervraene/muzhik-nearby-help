@@ -4085,6 +4085,7 @@ function masterFormHtml(u) {
 
       <div class="row-actions" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--gray-100);">
         <button class="btn-sm ${u.availableAsWorker ? 'danger' : 'ghost'}" id="toggle-worker-master-${u.id}" title="Быстро снять/вернуть статус мастера — отдельно от общей блокировки аккаунта, без похода в раздел «Профиль». Для старых мастеров без телеграма/телефона/аватарки, которых не получится предупредить уведомлением.">${u.availableAsWorker ? 'Мастер ❌' : 'Мастер ✅ (включить)'}</button>
+        <button class="btn-sm danger" id="reset-master-${u.id}" title="Полностью отменить статус мастера: заявка сбрасывается, человек снова проходит путь «Стать мастером» с нуля.">Мастер ХХХ</button>
         <span class="save-hint" id="toggle-worker-master-hint-${u.id}" style="color:var(--gray-500);"></span>
       </div>
 
@@ -4677,6 +4678,30 @@ function wireMasterForm(u) {
       await loadData({ keepOpen: true });
     } catch (err) {
       alert('Не удалось сохранить: ' + err.message);
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById(`reset-master-${u.id}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const label = userNameLabel(u) || u.phone || u.id;
+    const ok = confirm(`ПОЛНОСТЬЮ отменить статус мастера у «${label}»?\n\nСтатус вернётся к «не мастер», заявка и задание сбросятся, заказы приходить перестанут. Чтобы снова стать мастером, человеку придётся пройти заявку заново.\n\nПродолжить?`);
+    if (!ok) return;
+    const btn = document.getElementById(`reset-master-${u.id}`);
+    btn.disabled = true;
+    try {
+      await updateRow('users', u.id, {
+        master_status: 'none',
+        available_as_worker: false,
+        master_applied_at: null,
+        master_review_comment: null,
+        master_task_comment: null,
+        master_task_due_at: null,
+        master_task_submitted_at: null,
+      });
+      await loadData({ keepOpen: true });
+    } catch (err) {
+      alert('Не удалось сбросить: ' + err.message);
       btn.disabled = false;
     }
   });

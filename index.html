@@ -4003,13 +4003,13 @@ function saveUser(user) {
           ...(user.lastName ? { lastName: user.lastName } : {}),
         },
       }).catch((err) => {
-        // Лимит смены геолокации (не более 2 раз в месяц — см. save-profile.ts)
+        // Лимит смены геолокации (не более 5 раз в месяц — см. save-profile.ts)
         // — по просьбе Sg это НЕ постоянная надпись в профиле, а временное
         // всплывающее сообщение (showToast уже само исчезает через 2.2с), и
         // район откатывается к тому, что реально осталось сохранённым в БД.
         if (err && err.code === 'geo_limit_exceeded') {
           if (previous && cache.users[idx] === user) cache.users[idx] = previous;
-          showToast('Слишком частая смена района — не более 2 раз в месяц. Попробуйте позже.');
+          showToast('Слишком частая смена района — не более 5 раз в месяц. Попробуйте позже.');
           render();
           return;
         }
@@ -7971,6 +7971,10 @@ function openMapPicker(target) {
     const user = currentUser();
     if (hasValidLocation(user?.location)) initial = user.location;
     addressText = profileDistrictValue || user?.district || '';
+  } else if (target === 'profile2') {
+    const user = currentUser();
+    if (user && hasValidLocation(user.location2)) initial = user.location2;
+    addressText = loc2Value || user?.district2 || '';
   } else if (target === 'composer') {
     if (hasValidLocation(composerExactLocation)) initial = composerExactLocation;
     addressText = composerAddressValue || '';
@@ -8015,6 +8019,11 @@ function saveMapPicker() {
     // Сохраняем сразу тем же путём, что и кнопка «Сохранить» в профиле —
     // человек уже подтвердил точку в попапе, лишний клик не нужен.
     saveProfileDistrict();
+  } else if (target === 'profile2') {
+    loc2Value = addressText || loc2Value;
+    loc2Selected = location;
+    render();
+    saveSecondLocation(false);
   } else if (target === 'composer') {
     composerAddressValue = addressText || composerAddressValue;
     composerExactLocation = location;
@@ -10927,7 +10936,7 @@ function renderMasterWizardStepBody(step, user) {
           </div>
         `}
         <p class="order-meta mw-note"><b>Локация — самое важное.</b> Заказы приходят только в вашем районе, в пешей доступности от этой точки.</p>
-        <p class="order-meta mw-note">Изменить локацию позже можно в профиле, но не чаще 2 раз в месяц. Дополнительную локацию (например, рядом с работой) можно будет указать там же, позже.</p>
+        <p class="order-meta mw-note">Изменить локацию позже можно в профиле, но не чаще 5 раз в месяц. Дополнительную локацию (например, рядом с работой) можно будет указать там же, позже.</p>
       </div>`;
   }
   if (step.id === 'skills') {
@@ -11070,6 +11079,7 @@ function renderSecondLocationBlock(user) {
     <label>Дополнительная локация</label>
     <input type="text" id="field-profile-district2" placeholder="Например: г. Москва, ул. Красная Пресня, 44" value="${escapeHtml(loc2Value)}" autocomplete="off" />
     <div id="profile-district2-suggestions" class="address-suggest-list"></div>
+    <button type="button" class="map-pick-link" data-action="open-map-picker" data-value="profile2">📍 Указать на карте</button>
     <div class="composer-field-inline" style="margin-top:8px;">
       <button type="button" class="secondary-button" data-action="loc2-save" style="margin-top:0;">Сохранить</button>
       <button type="button" class="secondary-button" data-action="loc2-cancel" style="margin-top:0;">Отмена</button>
