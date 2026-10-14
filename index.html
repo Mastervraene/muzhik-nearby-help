@@ -3393,6 +3393,7 @@ function dbUserToUser(row, skillsByUser) {
     location: { lat: row.lat ?? 0, lng: row.lng ?? 0 },
     district: row.district || '',
     lastName: row.last_name || '',
+    payoutSettings: row.payout_settings || null,
     location2: (row.lat2 != null && row.lng2 != null) ? { lat: row.lat2, lng: row.lng2 } : null,
     district2: row.district2 || '',
     searchRadiusKm: Number(row.search_radius_km ?? 3),
@@ -6750,7 +6751,7 @@ async function refreshWorkerPayouts(isRetry) {
     cache.workerPayoutsError = true;
   }
   cache.workerPayoutsLoading = false;
-  if (state.screen === 'workerBalance') render();
+  if (state.screen === 'workerBalance' || avatarMenuOpen) render();
 }
 
 function advanceWorkerStatus(orderId, nextStatus) {
@@ -8891,7 +8892,11 @@ function getNavPages(user) {
 
 function renderAvatarMenu(user, unreadCount) {
   const items = getNavPages(user).map((p) =>
-    p.screen === 'notifications' ? { ...p, badge: unreadCount } : p
+    p.screen === 'notifications'
+      ? { ...p, badge: unreadCount }
+      : p.screen === 'workerBalance' && Array.isArray(cache.workerPayouts)
+      ? { ...p, sub: `${cache.workerPayouts.filter((x) => x.status === 'pending').reduce((s, x) => s + (x.amount || 0), 0)} ₽` }
+      : p
   );
   // «Поддержка» — всплывающее окно поверх текущего экрана, а не отдельная
   // страница, поэтому в getNavPages (и в свайп между экранами) она не
@@ -8910,6 +8915,7 @@ function renderAvatarMenu(user, unreadCount) {
         <button type="button" class="avatar-menu-item" data-action="${it.action}">
           <span class="avatar-menu-item-icon">${it.icon}</span>
           <span class="avatar-menu-item-label">${it.label}</span>
+          ${it.sub ? `<span style="margin-left:auto;font-weight:700;font-size:14px;">${it.sub}</span>` : ''}
           ${it.badge ? `<span class="avatar-menu-item-badge">${it.badge > 9 ? '9+' : it.badge}</span>` : ''}
         </button>`
         )
@@ -11245,6 +11251,91 @@ function renderMasterPanel() {
 }
 
 /** Экран «Баланс» (пункт меню под аватаркой мастера) — начисления за выполненные заказы, см. cache.workerPayouts / refreshWorkerPayouts(). */
+// --- Настройка выплат мастера (просьба Sg 14.10.2026) ---
+let payoutSetupOpen = false;
+let payoutSetupSaving = false;
+let payoutDraft = { mode: 'own', bank: '', sbpName: '', phone: '', text: '' };
+
+document.addEventListener('input', (e) => {
+  const id = e.target && e.target.id;
+  if (!id || id.indexOf('ps-') !== 0) return;
+  const key = { 'ps-bank': 'bank', 'ps-name': 'sbpName', 'ps-phone': 'phone', 'ps-text': 'text' }[id];
+  if (key) payoutDraft[key] = e.target.value;
+});
+
+function openPayoutSetup() {
+  const u = currentUser();
+  const s = (u && u.payoutSettings) || {};
+  payoutDraft = { mode: s.mode || 'own', bank: s.bank || '', sbpName: s.sbpName || '', phone: s.phone || '', text: s.text || '' };
+  payoutSetupOpen = !payoutSetupOpen;
+  render();
+}
+
+function payoutSettingsSummary(s, ownPhone) {
+  if (!s) return `По умолчанию: СБП на ваш номер ${ownPhone || ''}`.trim();
+  if (s.mode === 'other') return `Другой способ: ${s.text || '—'}`;
+  const phone = s.mode === 'other_phone' ? s.phone : ownPhone;
+  return [`СБП на ${s.mode === 'other_phone' ? 'другой номер' : 'ваш номер'} ${phone || ''}`, s.bank ? `банк: ${s.bank}` : '', s.sbpName ? `получатель: ${s.sbpName}` : ''].filter(Boolean).join(', ');
+}
+
+async function savePayoutSetup() {
+  const user = currentUser();
+  const sessionToken = loadSessionToken();
+  if (!user || !sessionToken || payoutSetupSaving) return;
+  const d = payoutDraft;
+  if (d.mode === 'other_phone' && !String(d.phone || '').replace(/\D/g, '').length) return showToast('Укажите номер телефона');
+  if (d.mode === 'other' && !String(d.text || '').trim()) return showToast('Напишите удобный способ получения оплаты');
+  const settings = { mode: d.mode, bank: d.mode === 'other' ? '' : d.bank, sbpName: d.mode === 'other' ? '' : d.sbpName, phone: d.mode === 'other_phone' ? d.phone : '', text: d.mode === 'other' ? d.text : '' };
+  payoutSetupSaving = true;
+  try {
+    await callSecureFn('save-profile', { userId: user.id, sessionToken, patch: { payoutSettings: settings } });
+    const i = cache.users.findIndex((x) => x.id === user.id);
+    if (i >= 0) cache.users[i] = { ...user, payoutSettings: settings };
+    payoutSetupOpen = false;
+    showToast('Способ выплат сохранён');
+  } catch (err) {
+    if (isStaleSessionError(err)) forceReloginDueToStaleSession();
+    else showToast('Не получилось сохранить — попробуйте ещё раз');
+  }
+  payoutSetupSaving = false;
+  render();
+}
+
+function renderPayoutSetupBlock() {
+  const user = currentUser() || {};
+  const d = payoutDraft;
+  const summary = escapeHtml(payoutSettingsSummary(user.payoutSettings, user.phone));
+  const bankFields = `
+        <label>Желаемый банк</label>
+        <input type="text" id="ps-bank" value="${escapeHtml(d.bank)}" placeholder="Например: Сбербанк" />
+        <label>Имя получателя в СБП (по желанию)</label>
+        <input type="text" id="ps-name" value="${escapeHtml(d.sbpName)}" placeholder="Иван Иванович И." />
+        <p class="order-meta">Мы сверим имя получателя при переводе, чтобы деньги точно дошли до вас.</p>`;
+  let body = '';
+  if (payoutSetupOpen) {
+    if (d.mode === 'other') {
+      body = `<label>Другой способ</label>
+        <textarea id="ps-text" class="composer-textarea" rows="3" placeholder="Напишите удобный для Вас способ получения оплаты, мы направим его модератору">${escapeHtml(d.text)}</textarea>`;
+    } else if (d.mode === 'other_phone') {
+      body = `<label>Номер телефона для перевода</label>
+        <input type="text" id="ps-phone" inputmode="tel" value="${escapeHtml(d.phone)}" placeholder="+7 900 000 00 00" />` + bankFields;
+    } else {
+      body = `<p class="order-meta">Оплата придёт по номеру телефона вашего аккаунта через СБП: <b>${escapeHtml(user.phone || '')}</b></p>` + bankFields;
+    }
+    body = `<div style="margin-top:10px;">${body}
+      <button type="button" class="primary-button" data-action="payout-save">Сохранить</button>
+      <button type="button" class="secondary-button" style="box-sizing:border-box;" data-action="payout-mode" data-value="${d.mode === 'other_phone' ? 'own' : 'other_phone'}">${d.mode === 'other_phone' ? 'Переводить на мой номер' : 'Переводить на другой номер'}</button>
+      <button type="button" class="secondary-button" style="box-sizing:border-box;" data-action="payout-mode" data-value="${d.mode === 'other' ? 'own' : 'other'}">${d.mode === 'other' ? 'Вернуться к СБП' : 'Другой способ'}</button>
+    </div>`;
+  }
+  return `
+      <div class="field-card">
+        <p class="order-meta" style="margin:0 0 8px;">${summary}</p>
+        <button type="button" class="secondary-button" style="box-sizing:border-box;" data-action="payout-setup-toggle">${payoutSetupOpen ? 'Свернуть' : 'Настроить выплаты'}</button>
+        ${body}
+      </div>`;
+}
+
 function renderWorkerBalance() {
   const payouts = cache.workerPayouts || [];
   const pending = payouts.filter((p) => p.status === 'pending');
@@ -11270,6 +11361,8 @@ function renderWorkerBalance() {
           </div>
         </div>
       </div>
+
+      ${renderPayoutSetupBlock()}
 
       <div class="section-title">История</div>
       ${
@@ -13420,6 +13513,7 @@ async function handleAction(action, value) {
   switch (action) {
     case 'toggle-avatar-menu':
       avatarMenuOpen = !avatarMenuOpen;
+      if (avatarMenuOpen) { const u = currentUser(); if (u && (u.masterStatus === 'approved' || u.masterStatus === 'paused')) refreshWorkerPayouts(true); }
       return render();
     case 'toggle-order-tip-dont-show':
       orderTipDontShowChecked = !orderTipDontShowChecked;
@@ -13494,6 +13588,9 @@ async function handleAction(action, value) {
     case 'loc2-edit': loc2Editing = true; loc2Value = (currentUser() && currentUser().district2) || ''; loc2Selected = null; render(); document.getElementById('field-profile-district2')?.focus(); return;
     case 'loc2-cancel': loc2Editing = false; loc2Selected = null; return render();
     case 'loc2-save': return saveSecondLocation(false);
+    case 'payout-setup-toggle': return openPayoutSetup();
+    case 'payout-mode': payoutDraft.mode = value; return render();
+    case 'payout-save': return savePayoutSetup();
     case 'loc2-clear': return saveSecondLocation(true);
     case 'edit-order-schedule': return openOrderScheduleEdit(value);
     case 'cancel-order-schedule': scheduleEditOpenFor = null; return render();

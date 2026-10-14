@@ -522,7 +522,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="tasks">Задачи<span id="admin-tasks-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
-    <button class="tab-btn" data-tab="payouts">Выплаты</button>
+    <button class="tab-btn" data-tab="payouts">Выплаты<span id="payouts-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -721,7 +721,6 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   </div>
 
   <div class="tab-panel" id="panel-payouts">
-    <div class="stats-note">Начисления мастерам за подтверждённые заказы (70% от стоимости, 30% — комиссия площадки). Запись создаётся автоматически, когда заказчик подтверждает заказ. Площадка принимает полную сумму на счёт ИП и переводит мастеру отдельно, вручную, в течение 3–5 дней — здесь отмечается, что реально выплачено.</div>
     <div class="toolbar">
       <select id="payouts-status-filter">
         <option value="">Все статусы</option>
@@ -1329,6 +1328,7 @@ function dbUserToUser(row) {
     deviceOs: row.device_os || '',
     displayName: row.display_name || '',
     lastName: row.last_name || '',
+    payoutSettings: row.payout_settings || null,
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
     avatarUrl: row.avatar_url || '',
@@ -1533,7 +1533,7 @@ async function loadPayouts() {
   renderPayouts();
   try {
     const data = await callAdminPayouts('list');
-    allPayouts = data.payouts || [];
+    allPayouts = (data.payouts || []).map(normalizePayout);
     payoutsLoaded = true;
   } catch (err) {
     document.getElementById('payouts-list').innerHTML = `<div class="empty-state">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
@@ -1623,8 +1623,56 @@ function adminTaskCardHtml(t) {
   `;
 }
 
+function normalizePayout(r) {
+  return {
+    id: r.id,
+    orderId: r.order_id,
+    workerId: r.worker_id,
+    orderNumber: r.order_number,
+    orderTitle: r.order_title,
+    amount: Number(r.amount || 0),
+    dueAt: r.due_at,
+    status: r.status,
+    paidAmount: r.paid_amount,
+    paidAt: r.paid_at,
+    paidMethod: r.paid_method,
+    paidDestination: r.paid_destination,
+    adminNote: r.admin_note,
+    createdAt: r.created_at,
+    paymentGroupId: r.payment_group_id,
+    paymentTotal: r.payment_total,
+  };
+}
+
+function payoutOrderLabel(p) {
+  const o = allOrders.find((x) => x.id === p.orderId);
+  const num = p.orderNumber || (o && o.orderNumber);
+  const title = p.orderTitle || (o && o.title) || '';
+  return `${num ? '№' + num : 'Заказ'}${title ? ' · ' + title : ''}`;
+}
+
+function desiredPayoutInfo(userId) {
+  const u = allUsers.find((x) => x.id === userId);
+  const s = u && u.payoutSettings;
+  const ownPhone = (u && u.phone) || '';
+  if (!s) return { text: `не указан (по умолчанию — СБП на номер мастера ${ownPhone || '—'})`, method: 'СБП', destination: ownPhone, marker: '' };
+  const parts = (phone) => [`СБП ${phone || '—'}`, s.bank ? `банк: ${s.bank}` : '', s.sbpName ? `имя в СБП: ${s.sbpName}` : ''].filter(Boolean).join(', ');
+  if (s.mode === 'other') return { text: s.text || '—', method: 'Другой способ', destination: s.text || '', marker: 'другой способ' };
+  if (s.mode === 'other_phone') return { text: parts(s.phone), method: 'СБП', destination: parts(s.phone), marker: 'другой номер' };
+  return { text: parts(ownPhone), method: 'СБП', destination: parts(ownPhone), marker: '' };
+}
+
+function updatePayoutsBadge() {
+  const badge = document.getElementById('payouts-badge');
+  if (!badge) return;
+  const n = allPayouts.filter((p) => p.status === 'pending').length;
+  badge.textContent = String(n);
+  badge.style.display = n > 0 ? '' : 'none';
+}
+
 function renderPayouts() {
   const container = document.getElementById('payouts-list');
+  updatePayoutsBadge();
   if (payoutsLoading && !allPayouts.length) {
     container.innerHTML = '<div class="empty-state">Загрузка…</div>';
     document.getElementById('payouts-count').textContent = '';
@@ -1632,141 +1680,161 @@ function renderPayouts() {
   }
   let list = allPayouts;
   if (payoutsStatusFilter) list = list.filter((p) => p.status === payoutsStatusFilter);
-  document.getElementById('payouts-count').textContent = list.length
-    ? `${list.length} записей, ожидает ${allPayouts.filter((p) => p.status === 'pending').reduce((s, p) => s + Number(p.amount || 0), 0)} ₽`
+  const groups = new Map();
+  list.forEach((p) => {
+    if (!groups.has(p.workerId)) groups.set(p.workerId, []);
+    groups.get(p.workerId).push(p);
+  });
+  const totalPending = allPayouts.filter((p) => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
+  document.getElementById('payouts-count').textContent = groups.size
+    ? `${groups.size} мастеров, к выплате ${totalPending} ₽`
     : '';
-  if (!list.length) {
+  if (!groups.size) {
     container.innerHTML = '<div class="empty-state">Записей нет</div>';
     return;
   }
-  const sorted = [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  container.innerHTML = sorted.map((p) => payoutCardHtml(p)).join('');
-  sorted.forEach((p) => {
-    document.getElementById(`payout-head-${p.id}`).addEventListener('click', () => {
-      openPayoutId = openPayoutId === p.id ? null : p.id;
+  const arr = [...groups.entries()].map(([workerId, items]) => {
+    const pending = items.filter((p) => p.status === 'pending');
+    return { workerId, items, pending, sum: pending.reduce((s, p) => s + p.amount, 0) };
+  });
+  arr.sort((a, b) => b.pending.length - a.pending.length || userName(a.workerId).localeCompare(userName(b.workerId)));
+  container.innerHTML = arr.map((g) => payoutWorkerCardHtml(g)).join('');
+  arr.forEach((g) => {
+    document.getElementById(`payout-head-${g.workerId}`).addEventListener('click', () => {
+      openPayoutWorkerId = openPayoutWorkerId === g.workerId ? null : g.workerId;
+      payoutFormOpen = false;
+      payoutSelected = new Set(g.pending.map((p) => p.id));
       renderPayouts();
     });
-    if (openPayoutId === p.id) wirePayoutForm(p);
+    if (openPayoutWorkerId === g.workerId) wirePayoutWorker(g);
   });
 }
 
-function payoutCardHtml(p) {
-  const open = openPayoutId === p.id;
-  const isPaid = p.status === 'paid';
-  const title = p.orderTitle || (p.orderNumber ? `Заказ №${p.orderNumber}` : p.orderId);
+function payoutWorkerCardHtml(g) {
+  const open = openPayoutWorkerId === g.workerId;
+  const paidCount = g.items.length - g.pending.length;
   return `
     <div class="card">
-      <div class="card-head" id="payout-head-${p.id}">
+      <div class="card-head" id="payout-head-${g.workerId}">
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(title)} ${isPaid ? '<span class="pill ok">оплачено</span>' : '<span class="pill warn">ожидает</span>'}</p>
+          <p class="card-title">${escapeHtml(userName(g.workerId))} ${g.pending.length ? `<span class="pill warn">${g.pending.length} ${g.pending.length === 1 ? 'заказ' : 'заказов'}</span>` : '<span class="pill ok">всё выплачено</span>'}</p>
           <div class="card-meta">
-            <span>${p.amount} ₽</span>
-            <span>мастер: ${escapeHtml(userName(p.workerId))}</span>
-            ${isPaid ? `<span>выплачено ${fmtDate(p.paidAt)}</span>` : `<span>срок до ${fmtDate(p.dueAt)}</span>`}
+            ${g.pending.length ? `<span><b>к выплате ${g.sum} ₽</b></span>` : ''}
+            ${paidCount ? `<span>выплачено заказов: ${paidCount}</span>` : ''}
           </div>
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
-      ${open ? payoutFormHtml(p) : ''}
+      ${open ? payoutWorkerBodyHtml(g) : ''}
     </div>
   `;
 }
 
-function payoutFormHtml(p) {
-  const isPaid = p.status === 'paid';
-  return `
-    <div class="card-body open" id="payout-body-${p.id}">
-      <p class="form-section-label">Заказ</p>
+function payoutWorkerBodyHtml(g) {
+  const desired = desiredPayoutInfo(g.workerId);
+  const rows = [...g.items].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const groupSizes = {};
+  allPayouts.forEach((p) => { if (p.paymentGroupId) groupSizes[p.paymentGroupId] = (groupSizes[p.paymentGroupId] || 0) + 1; });
+  const rowHtml = rows.map((p) => {
+    const isPaid = p.status === 'paid';
+    const check = !isPaid && payoutFormOpen
+      ? `<input type="checkbox" class="payout-check" data-id="${p.id}" ${payoutSelected.has(p.id) ? 'checked' : ''} style="margin-right:8px;" />`
+      : '';
+    const paidInfo = isPaid
+      ? `<span class="pill ok">выплачено ${escapeHtml(fmtDate(p.paidAt))}</span>${p.paymentGroupId && groupSizes[p.paymentGroupId] > 1 ? ` <span class="pill muted" title="Платёж ${escapeHtml(p.paymentGroupId)}">одним платежом с ещё ${groupSizes[p.paymentGroupId] - 1} зак. · всего ${p.paymentTotal ?? '—'} ₽</span>` : ''}${p.paidMethod ? `<div style="font-size:12px;color:var(--gray-600);">${escapeHtml(p.paidMethod)}${p.paidDestination ? ' → ' + escapeHtml(p.paidDestination) : ''}${p.adminNote ? ' · ' + escapeHtml(p.adminNote) : ''}</div>` : ''}`
+      : `<span class="pill warn">ожидает</span> <span style="font-size:12px;color:var(--gray-600);">срок до ${escapeHtml(fmtDate(p.dueAt))}</span>`;
+    return `<div style="padding:8px 0;border-top:1px solid var(--gray-100);">
+      <div>${check}<a href="#" class="link-btn" onclick="goToOrderCard('${p.orderId}');return false;">${escapeHtml(payoutOrderLabel(p))}</a> — <b>${p.amount} ₽</b></div>
+      <div style="margin-left:${check ? 24 : 0}px;margin-top:3px;">${paidInfo}</div>
+    </div>`;
+  }).join('');
+  const formHtml = g.pending.length
+    ? (payoutFormOpen
+      ? `<p class="form-section-label">Выплата одним платежом</p>
+      <p style="font-size:13px;color:var(--gray-600);margin:0 0 8px;">Отметьте заказы галочками. Данные ниже запишутся на каждый выбранный заказ.</p>
       <div class="grid-2-tight">
-        <div class="field-sm dense">
-          <label>ID заказа</label>
-          <input type="text" disabled value="${escapeHtml(p.orderId)}" />
-        </div>
-        <div class="field-sm dense">
-          <label>Начислено</label>
-          <input type="text" disabled value="${p.amount} ₽ (создано ${fmtDate(p.createdAt)})" />
-        </div>
-      </div>
-      ${
-        isPaid
-          ? `
-      <p class="form-section-label">Выплата</p>
-      <div class="grid-2-tight">
-        <div class="field-sm dense">
-          <label>Сумма</label>
-          <input type="text" disabled value="${p.paidAmount ?? p.amount} ₽" />
-        </div>
-        <div class="field-sm dense">
-          <label>Когда</label>
-          <input type="text" disabled value="${escapeHtml(fmtDate(p.paidAt))}" />
-        </div>
-        <div class="field-sm dense">
-          <label>Способ</label>
-          <input type="text" disabled value="${escapeHtml(p.paidMethod || '—')}" />
-        </div>
-        <div class="field-sm dense">
-          <label>Куда</label>
-          <input type="text" disabled value="${escapeHtml(p.paidDestination || '—')}" />
-        </div>
-      </div>
-      ${p.adminNote ? `<p class="form-section-label">Заметка</p><p>${escapeHtml(p.adminNote)}</p>` : ''}
-      `
-          : `
-      <p class="form-section-label">Отметить оплаченным</p>
-      <div class="grid-2-tight">
-        <div class="field-sm dense">
-          <label>Сумма (₽)</label>
-          <input type="number" id="payout-amount-${p.id}" value="${p.amount}" />
-        </div>
-        <div class="field-sm dense">
-          <label>Способ</label>
-          <input type="text" id="payout-method-${p.id}" placeholder="Например: перевод на карту" />
-        </div>
-        <div class="field-sm dense">
-          <label>Куда (реквизиты/телефон)</label>
-          <input type="text" id="payout-destination-${p.id}" placeholder="+7…" />
-        </div>
-        <div class="field-sm dense">
-          <label>Заметка (необязательно)</label>
-          <input type="text" id="payout-note-${p.id}" />
-        </div>
+        <div class="field-sm dense"><label>Сумма платежа (₽)</label><input type="number" id="payout-total" /></div>
+        <div class="field-sm dense"><label>Способ</label><input type="text" id="payout-method" value="${escapeHtml(desired.method)}" /></div>
+        <div class="field-sm dense"><label>Куда (реквизиты/телефон)</label><input type="text" id="payout-destination" value="${escapeHtml(desired.destination)}" /></div>
+        <div class="field-sm dense"><label>Заметка (необязательно)</label><input type="text" id="payout-note" /></div>
       </div>
       <div class="row-actions" style="margin-top:14px;">
-        <button class="btn-sm primary" id="mark-paid-${p.id}">Отметить оплаченным</button>
-        <span class="save-hint" id="mark-paid-hint-${p.id}">Сохранено ✓</span>
+        <button class="btn-sm primary" id="payout-confirm">Выплатить</button>
+        <button class="btn-sm ghost" id="payout-cancel">Отмена</button>
+        <span class="save-hint" id="payout-selected-hint"></span>
+      </div>`
+      : `<div class="row-actions" style="margin-top:14px;"><button class="btn-sm primary" id="payout-open-form">Выплатить</button></div>`)
+    : '';
+  return `
+    <div class="card-body open" id="payout-body-${g.workerId}">
+      <p class="form-section-label">Мастер</p>
+      <p style="margin:0 0 8px;"><a href="#" class="link-btn" onclick="goToMasterCard('${g.workerId}');return false;">Открыть карточку мастера · ${escapeHtml(userName(g.workerId))}</a></p>
+      <div class="field-sm dense" style="margin-bottom:8px;">
+        <label>Желаемый способ получения оплаты ${desired.marker ? `<span class="pill orange">${escapeHtml(desired.marker)}</span>` : ''}</label>
+        <input type="text" disabled value="${escapeHtml(desired.text)}" />
       </div>
-      `
-      }
+      <p class="form-section-label">Выполненные заказы</p>
+      ${rowHtml}
+      ${formHtml}
     </div>
   `;
 }
 
-function wirePayoutForm(p) {
-  const btn = document.getElementById(`mark-paid-${p.id}`);
-  if (!btn) return;
-  btn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const amountRaw = document.getElementById(`payout-amount-${p.id}`).value;
-    const paidAmount = Number(amountRaw);
-    if (!paidAmount || paidAmount <= 0) { alert('Укажите сумму выплаты'); return; }
-    const paidMethod = document.getElementById(`payout-method-${p.id}`).value.trim();
-    const paidDestination = document.getElementById(`payout-destination-${p.id}`).value.trim();
-    const adminNote = document.getElementById(`payout-note-${p.id}`).value.trim();
-    const ok = confirm(`Отметить ${paidAmount} ₽ как выплаченные мастеру ${userName(p.workerId)}?`);
-    if (!ok) return;
-    btn.disabled = true;
-    btn.textContent = 'Сохраняю…';
-    try {
-      await callAdminPayouts('mark_paid', { payoutId: p.id, paidAmount, paidMethod, paidDestination, adminNote });
-      await loadPayouts();
-      openPayoutId = p.id;
+function wirePayoutWorker(g) {
+  const openBtn = document.getElementById('payout-open-form');
+  if (openBtn) {
+    openBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      payoutFormOpen = true;
+      payoutSelected = new Set(g.pending.map((p) => p.id));
       renderPayouts();
-    } catch (err) {
-      alert('Не удалось сохранить: ' + err.message);
-      const freshBtn = document.getElementById(`mark-paid-${p.id}`);
-      if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Отметить оплаченным'; }
-    }
+      recalcPayoutTotal(g);
+    });
+  }
+  const body = document.getElementById(`payout-body-${g.workerId}`);
+  if (!body) return;
+  body.querySelectorAll('.payout-check').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) payoutSelected.add(cb.dataset.id); else payoutSelected.delete(cb.dataset.id);
+      recalcPayoutTotal(g);
+    });
   });
+  const cancel = document.getElementById('payout-cancel');
+  if (cancel) cancel.addEventListener('click', (e) => { e.stopPropagation(); payoutFormOpen = false; renderPayouts(); });
+  const confirmBtn = document.getElementById('payout-confirm');
+  if (confirmBtn) {
+    recalcPayoutTotal(g);
+    confirmBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ids = g.pending.filter((p) => payoutSelected.has(p.id)).map((p) => p.id);
+      if (!ids.length) { alert('Отметьте хотя бы один заказ'); return; }
+      const paymentTotal = Number(document.getElementById('payout-total').value);
+      if (!paymentTotal || paymentTotal <= 0) { alert('Укажите сумму платежа'); return; }
+      const paidMethod = document.getElementById('payout-method').value.trim();
+      const paidDestination = document.getElementById('payout-destination').value.trim();
+      const adminNote = document.getElementById('payout-note').value.trim();
+      if (!confirm(`Отметить выплату ${paymentTotal} ₽ мастеру ${userName(g.workerId)} за ${ids.length} зак.?`)) return;
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Сохраняю…';
+      try {
+        await callAdminPayouts('mark_paid_batch', { payoutIds: ids, paymentTotal, paidMethod, paidDestination, adminNote });
+        payoutFormOpen = false;
+        await loadPayouts();
+      } catch (err) {
+        alert('Не удалось сохранить: ' + err.message);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Выплатить';
+      }
+    });
+  }
+}
+
+function recalcPayoutTotal(g) {
+  const sum = g.pending.filter((p) => payoutSelected.has(p.id)).reduce((s, p) => s + p.amount, 0);
+  const inp = document.getElementById('payout-total');
+  if (inp) inp.value = sum || '';
+  const hint = document.getElementById('payout-selected-hint');
+  if (hint) hint.textContent = `выбрано заказов: ${payoutSelected.size}`;
 }
 
 // -----------------------------------------------------------------------
@@ -1809,7 +1877,9 @@ let allPayouts = [];
 let payoutsLoaded = false; // грузим лениво, только при первом открытии вкладки «Выплаты»
 let payoutsLoading = false;
 let payoutsStatusFilter = '';
-let openPayoutId = null;
+let openPayoutWorkerId = null;
+let payoutFormOpen = false;
+let payoutSelected = new Set();
 // Мультивыбор статусов (пусто — показывать все статусы, как и «ничего не
 // выбрано — любой» в «Сортировке на карте») + отдельный флаг показа
 // завершённых/отменённых заказов — по умолчанию скрыты (просьба Sg
@@ -5889,7 +5959,7 @@ function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
-  if (tab === 'payouts' && !payoutsLoaded) loadPayouts();
+  if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
 }
 
 // Переход по клику на точку карты — из балуна метки мастера/заказа сразу
@@ -5934,6 +6004,7 @@ window.goToMasterCard = function (userId) {
 // Вход / выход
 // -----------------------------------------------------------------------
 function showApp() {
+  setTimeout(() => { if (!payoutsLoaded && !payoutsLoading) loadPayouts(); }, 2500);
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('admin-app').style.display = 'block';
   document.getElementById('orders-sort-toggle').addEventListener('click', openOrdersSortModal);
