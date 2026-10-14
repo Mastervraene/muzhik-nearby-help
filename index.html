@@ -2117,6 +2117,9 @@ body {
 .mw-intro-icon { font-size: 54px; margin-bottom: 10px; }
 .mw-intro-title { font-size: 22px; margin: 0 0 14px; }
 .mw-intro-text { font-size: 15px; line-height: 1.5; color: var(--gray-700); text-align: left; margin: 0 0 12px; }
+
+.order-view-map { height: 160px; border-radius: 12px; overflow: hidden; margin: 8px 0; background: var(--gray-100); }
+.order-card-desc { margin: 6px 0 0; font-size: 14px; color: var(--gray-700); line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -2589,6 +2592,10 @@ const TEMPLATES = {
   work_started: () => 'Мастер начал работу.',
   work_completed: () => `Заказ выполнен. Пожалуйста, оцените качество работы: ${SITE_URL}`,
   issue_reported: () => 'По заказу зарегистрирована проблема, мы уже разбираемся.',
+  // Заказчик выбрал/изменил дату и время ПОСЛЕ оплаты (шаг «выбрать дату и время») — уведомление мастеру.
+  // Мастер в анкете нажал «не работает» (проверка телефона/привязка Telegram) — уведомление админу.
+  service_broken: (ctx) => `⚠ Не работает ${ctx.what}. Сообщил: ${ctx.who}.`,
+  schedule_set: (ctx) => `Заказчик указал дату и время: ${ctx.when}.`,
   // Та же проблема, но текст для админа/модератора (ADMIN_USER_ID) — не для
   // заказчика. Просьба Sg 10.10.2026: раньше «Есть проблема» уведомляла
   // только заказчика (мол, «мы разбираемся»), а по факту никто не узнавал,
@@ -3599,6 +3606,9 @@ function dbOrderToOrder(row) {
     partsAlreadyHave: row.parts_already_have || '',
     partsMaybeNeeded: row.parts_maybe_needed || '',
     partsNeeded: row.parts_needed || '',
+    // Время ремонта (минуты) и комментарий мастеру — выставляет админ при подтверждении цены.
+    estimatedMinutes: row.estimated_minutes ?? null,
+    workerNote: row.worker_note || '',
     // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «добавить имя мастера, который
     // выполнил заказ, если их двое и более — все в строчку») — список
     // ВСЕХ мастеров, когда-либо назначенных на этот заказ (не только
@@ -6561,6 +6571,9 @@ async function refreshAvailableOrders(isRetry) {
     }
     cache.availableOrders = (data.orders || []).map((o) => ({
       id: o.id,
+      orderNumber: o.orderNumber ?? null,
+      deviceModel: o.deviceModel || '',
+      diagnosisLog: o.diagnosisLog || [],
       title: o.title,
       categoryId: o.categoryId,
       description: o.description || '',
@@ -6579,6 +6592,13 @@ async function refreshAvailableOrders(isRetry) {
       isPrecedent: Boolean(o.isPrecedent),
       createdAt: o.createdAt,
       distanceKm: o.distanceKm,
+      estimatedMinutes: o.estimatedMinutes ?? null,
+      workerNote: o.workerNote || '',
+      partsAlreadyHave: o.partsAlreadyHave || '',
+      partsMaybeNeeded: o.partsMaybeNeeded || '',
+      partsNeeded: o.partsNeeded || '',
+      formattedBrief: o.formattedBrief || null,
+      mapPoint: (typeof o.lat === 'number' && typeof o.lng === 'number') ? { lat: o.lat, lng: o.lng } : null,
     }));
     cache.availableOrdersError = false;
   } catch (err) {
@@ -9003,7 +9023,7 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото, укажите адрес и удобное время." rows="1">${escapeHtml(composerDescriptionValue)}</textarea>
+        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото и укажите адрес." rows="1">${escapeHtml(composerDescriptionValue)}</textarea>
         <div id="composer-sanitize-hint" class="composer-sanitize-hint"></div>
         <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
@@ -9019,27 +9039,6 @@ function renderHome() {
         `
             : ''
         }
-        ${
-          composerExpandedField === 'date'
-            ? `
-        <div class="composer-field-inline">
-          <input type="date" id="composer-date" min="${dateBounds.min}" max="${dateBounds.max}" value="${escapeHtml(composerDesiredDate)}" />
-          <div class="composer-field-row">
-            <div style="flex:1;min-width:0;">
-              <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">С</label>
-              <input type="time" id="composer-time-from" value="${escapeHtml(composerTimeFrom)}" style="${composerTimeError ? 'border-color:var(--danger,#dc2626);' : ''}" />
-            </div>
-            <div style="flex:1;min-width:0;">
-              <label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">До</label>
-              <input type="time" id="composer-time-to" value="${escapeHtml(composerTimeTo)}" style="${composerTimeError ? 'border-color:var(--danger,#dc2626);' : ''}" />
-            </div>
-          </div>
-          ${composerTimeError ? `<div class="order-warning" id="composer-time-error">${escapeHtml(composerTimeError)}</div>` : ''}
-          <button type="button" class="composer-field-done" data-action="collapse-composer-field">Готово</button>
-        </div>
-        `
-            : ''
-        }
         <div id="composer-attachments" class="attachment-preview">${pendingAttachments.map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}</div>
         <div class="composer-actions">
           <div class="composer-tools">
@@ -9050,7 +9049,6 @@ function renderHome() {
           </div>
           <div class="composer-chip-row">
             <button type="button" class="composer-chip ${composerAddressValue.trim() ? 'filled' : ''}" data-action="toggle-composer-field" data-value="address">${escapeHtml(addressLabel)}</button>
-            <button type="button" class="composer-chip ${composerDesiredDate ? 'filled' : ''}" data-action="toggle-composer-field" data-value="date">${escapeHtml(dateLabel)}</button>
           </div>
           <div class="composer-tools">
             <button class="tool-button" data-action="voice-toggle" title="Голосовое сообщение">${ICON_MIC}</button>
@@ -9248,6 +9246,217 @@ function orderWorkerNamesLabel(order) {
     .join(', ');
 }
 
+// ---------------------------------------------------------------------
+// Время ремонта, дата/время визита, комментарии мастеру, шаг «выбрать дату и
+// время» после оплаты, мягкий запрос имени «Гость» (просьбы Sg 14.10.2026).
+// ---------------------------------------------------------------------
+
+/** Минуты → «25 мин», «1 час», «1,5 часа», «2 часа», «1 ч 20 мин». */
+function formatEstimatedTime(min) {
+  const n = Number(min);
+  if (!n || n <= 0) return '';
+  if (n < 60) return `${n} мин`;
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  const word = (x) => (x % 10 === 1 && x % 100 !== 11 ? 'час' : [2, 3, 4].includes(x % 10) && ![12, 13, 14].includes(x % 100) ? 'часа' : 'часов');
+  if (m === 0) return `${h} ${word(h)}`;
+  if (m === 30) return `${h},5 часа`;
+  return `${h} ч ${m} мин`;
+}
+
+/** Убирает из адреса квартиру/офис — до принятия заказа мастер видит только город/улицу/дом. */
+function stripApartment(text) {
+  return String(text || '')
+    .replace(/[,;]?\s*(?:кв\.?|квартира|кв-ра|оф\.?|офис|комн\.?|комната)\s*№?\s*\d+[а-яa-z]?/gi, '')
+    .replace(/[,;]?\s*(?:подъезд|под\.?|этаж|эт\.?|домофон)\s*№?\s*\d+[а-яa-z]?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[,;\s]+$/g, '')
+    .trim();
+}
+
+function parseTimeWindow(tw) {
+  const m = /^(\d{1,2}:\d{2})\D+(\d{1,2}:\d{2})$/.exec(String(tw || '').trim());
+  return m ? { from: m[1].padStart(5, '0'), to: m[2].padStart(5, '0') } : { from: '', to: '' };
+}
+
+/** Шаг «выбрать дату и время» доступен заказчику только после оплаты и пока заказ активен. */
+function canEditOrderSchedule(order) {
+  return Boolean(
+    order.payment && order.payment.status === 'prepayment_paid' &&
+    ['searching', 'assigned', 'en_route'].includes(order.status)
+  );
+}
+
+let scheduleEditOpenFor = null;
+let scheduleDraft = { date: '', from: '', to: '' };
+
+function scheduleWhenLabel(order) {
+  const d = order.desiredDate ? formatOrderDateLabel(order.desiredDate) : '';
+  return [d, order.timeWindow].filter(Boolean).join(', ');
+}
+
+/** Строки «время ремонта» / «дата и время» — общие для карточки заказа у заказчика и у мастера. */
+function orderTimingHtml(order, isCustomer) {
+  const out = [];
+  const est = formatEstimatedTime(order.estimatedMinutes);
+  if (est) out.push(`<p class="order-meta"><span>⏱ Займёт примерно ${escapeHtml(est)}</span></p>`);
+  const when = scheduleWhenLabel(order);
+  if (isCustomer) {
+    if (canEditOrderSchedule(order)) out.push(renderScheduleBlock(order));
+    else if (when) out.push(`<p class="order-meta"><span>📅 ${escapeHtml(when)}</span></p>`);
+  } else if (when) {
+    out.push(`<p class="order-meta"><span>📅 ${escapeHtml(when)}</span></p>`);
+  } else {
+    out.push(`<p class="order-meta"><span>📅 Время не выбрано</span></p><div class="order-warning">Уточните дату и время у заказчика</div>`);
+  }
+  return out.join('');
+}
+
+function renderScheduleBlock(order) {
+  const when = scheduleWhenLabel(order);
+  const editing = scheduleEditOpenFor === order.id;
+  if (when && !editing) {
+    return `<div class="field-card" style="margin:8px 0;">
+      <p class="order-meta"><span>📅 ${escapeHtml(when)}</span></p>
+      <button type="button" class="secondary-button" data-action="edit-order-schedule" data-value="${order.id}" style="box-sizing:border-box;">Изменить дату и время</button>
+    </div>`;
+  }
+  const b = composerDateBounds();
+  return `<div class="field-card" style="margin:8px 0;">
+    <p class="order-meta"><b>Выберите удобные дату и время</b></p>
+    ${when ? '' : '<p class="order-meta">Время не выбрано — мастер уточнит его у вас сам, но так будет быстрее.</p>'}
+    <input type="date" id="sched-date" min="${b.min}" max="${b.max}" value="${escapeHtml(scheduleDraft.date)}" />
+    <div class="composer-field-row" style="margin-top:8px;">
+      <div style="flex:1;min-width:0;"><label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">С</label><input type="time" id="sched-from" value="${escapeHtml(scheduleDraft.from)}" /></div>
+      <div style="flex:1;min-width:0;"><label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:4px;">До</label><input type="time" id="sched-to" value="${escapeHtml(scheduleDraft.to)}" /></div>
+    </div>
+    <button type="button" class="primary-button" data-action="save-order-schedule" data-value="${order.id}" style="margin-top:10px;box-sizing:border-box;">Сохранить</button>
+    ${editing ? `<button type="button" class="secondary-button" data-action="cancel-order-schedule" style="margin-top:8px;box-sizing:border-box;">Отмена</button>` : ''}
+  </div>`;
+}
+
+function openOrderScheduleEdit(orderId) {
+  const order = getOrders().find((o) => o.id === orderId);
+  if (!order) return;
+  const tw = parseTimeWindow(order.timeWindow);
+  scheduleDraft = { date: order.desiredDate || '', from: tw.from, to: tw.to };
+  scheduleEditOpenFor = orderId;
+  render();
+}
+
+function saveOrderSchedule(orderId) {
+  const order = getOrders().find((o) => o.id === orderId);
+  if (!order) return;
+  const { date, from, to } = scheduleDraft;
+  if (!date) return showToast('Выберите дату');
+  const b = composerDateBounds();
+  if (date < b.min || date > b.max) return showToast('Дата должна быть от сегодня и не позднее чем через месяц');
+  if ((from && !to) || (!from && to)) return showToast('Укажите время «с» и «до» — или оставьте оба поля пустыми');
+  if (timeWindowError(from, to)) return showToast('Время «до» должно быть позже времени «с»');
+  const timeWindow = from && to ? `${from}–${to}` : '';
+  const updated = { ...order, desiredDate: date, timeWindow };
+  saveOrder(updated);
+  if (order.assignedWorkerId) {
+    pushNotification(createNotification(order.assignedWorkerId, 'worker', order.id, 'schedule_set', { when: scheduleWhenLabel(updated) }));
+  }
+  scheduleEditOpenFor = null;
+  showToast('Дата и время сохранены');
+  render();
+}
+
+document.addEventListener('input', (e) => {
+  const id = e.target && e.target.id;
+  if (id === 'sched-date') scheduleDraft.date = e.target.value;
+  else if (id === 'sched-from') scheduleDraft.from = e.target.value;
+  else if (id === 'sched-to') scheduleDraft.to = e.target.value;
+});
+document.addEventListener('change', (e) => {
+  const id = e.target && e.target.id;
+  if (id === 'sched-date') scheduleDraft.date = e.target.value;
+  else if (id === 'sched-from') scheduleDraft.from = e.target.value;
+  else if (id === 'sched-to') scheduleDraft.to = e.target.value;
+});
+
+// Мягкий запрос имени у заказчика, который так и остался «Гостем» (виден после оплаты).
+let guestNameDismissed = false;
+function isGuestName(user) {
+  const n = (user && user.displayName || '').trim().toLowerCase();
+  return !n || n === 'гость';
+}
+function renderGuestNameBlock(order) {
+  const user = currentUser();
+  if (!user || !isGuestName(user) || guestNameDismissed) return '';
+  if (!(order.payment && order.payment.status === 'prepayment_paid')) return '';
+  return `<div class="field-card" style="margin:8px 0;">
+    <p class="order-meta"><b>Как мастеру к вам обращаться?</b></p>
+    <input type="text" id="guest-name-input" placeholder="Ваше имя" maxlength="40" autocomplete="given-name" />
+    <button type="button" class="primary-button" data-action="save-guest-name" style="margin-top:8px;box-sizing:border-box;">Сохранить</button>
+    <button type="button" class="secondary-button" data-action="skip-guest-name" style="margin-top:8px;box-sizing:border-box;">Позже</button>
+  </div>`;
+}
+function saveGuestName() {
+  const user = currentUser();
+  const el = document.getElementById('guest-name-input');
+  const name = (el ? el.value : '').trim();
+  if (!user) return;
+  if (!name || name.toLowerCase() === 'гость') return showToast('Введите ваше имя');
+  saveUser({ ...user, displayName: name });
+  showToast('Спасибо, имя сохранено');
+  render();
+}
+
+/** Короткие сведения для мастера в карточке списка: комментарии, дата/время, суть задачи. */
+function workerCardFactsHtml(order) {
+  const out = [];
+  const est = formatEstimatedTime(order.estimatedMinutes);
+  if (est) out.push(`<div class="order-meta"><span>⏱ Займёт примерно ${escapeHtml(est)}</span></div>`);
+  const comments = [
+    ['Уже есть', order.partsAlreadyHave],
+    ['Может понадобиться', order.partsMaybeNeeded],
+    ['Понадобится', order.partsNeeded],
+    ['Комментарий', order.workerNote],
+  ].filter(([, v]) => v && String(v).trim());
+  comments.forEach(([label, v]) => out.push(`<div class="order-meta"><span>🧰 ${escapeHtml(label)}: ${escapeHtml(String(v))}</span></div>`));
+  const when = scheduleWhenLabel(order);
+  out.push(when
+    ? `<div class="order-meta"><span>📅 ${escapeHtml(when)}</span></div>`
+    : `<div class="order-meta"><span>📅 Время не выбрано — уточните у заказчика</span></div>`);
+  const short = String(order.description || '').trim();
+  if (short) out.push(`<p class="order-card-desc">${escapeHtml(short.length > 140 ? short.slice(0, 137) + '…' : short)}</p>`);
+  return out.join('');
+}
+
+/** Комментарий админа мастеру (worker_note) — отдельная плашка рядом с partsInfoHtml. */
+function workerNoteHtml(order) {
+  if (!order.workerNote || !String(order.workerNote).trim()) return '';
+  return `<div class="order-card" style="background:#f6f8fa;margin:8px 0;"><p><b>Комментарий:</b> ${escapeHtml(order.workerNote)}</p></div>`;
+}
+
+// Узкая карта точки заказа для мастера (только когда карточка открыта).
+let orderViewMapInstance = null;
+let orderViewMapToken = 0;
+async function initOrderViewMap() {
+  const container = document.getElementById('order-view-map');
+  if (orderViewMapInstance) { try { orderViewMapInstance.destroy(); } catch (e) { /* контейнер уже исчез */ } orderViewMapInstance = null; }
+  if (!container) return;
+  const myToken = ++orderViewMapToken;
+  container.innerHTML = '';
+  const lat = Number(container.dataset.lat);
+  const lng = Number(container.dataset.lng);
+  if (!isMapsJsConfigured() || !Number.isFinite(lat) || !Number.isFinite(lng)) { container.style.display = 'none'; return; }
+  try { await loadYmapsScriptForCompose(); } catch (err) { container.style.display = 'none'; return; }
+  if (myToken !== orderViewMapToken) return;
+  window.ymaps.ready(() => {
+    if (myToken !== orderViewMapToken) return;
+    const c = document.getElementById('order-view-map');
+    if (!c) return;
+    c.innerHTML = '';
+    const map = new window.ymaps.Map('order-view-map', { center: [lat, lng], zoom: 16, controls: ['zoomControl'] });
+    map.geoObjects.add(new window.ymaps.Placemark([lat, lng], {}, { iconLayout: 'default#image', iconImageHref: 'red-dot.png', iconImageSize: [22, 22], iconImageOffset: [-11, -11] }));
+    orderViewMapInstance = map;
+  });
+}
+
 function orderCardHtml(order, { viewer }) {
   const catTitle = CATEGORY_TITLES[order.categoryId] || order.categoryId;
   // Для карточек-кандидатов из available-orders точных координат заказа нет
@@ -9269,7 +9478,7 @@ function orderCardHtml(order, { viewer }) {
           <p class="order-title">${escapeHtml(order.title)}</p>
           <div class="order-meta">
             <span>${escapeHtml(catTitle)}</span>
-            <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
+            <span>${escapeHtml(viewer === 'worker' && order.assignedWorkerId !== state.currentUserId ? stripApartment(order.district) : order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
             ${viewer === 'worker' && dist ? `<span>~${dist} км</span>` : ''}
           </div>
         </div>
@@ -9297,6 +9506,7 @@ function orderCardHtml(order, { viewer }) {
           ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
           : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
       }
+      ${viewer === 'worker' ? workerCardFactsHtml(order) : (formatEstimatedTime(order.estimatedMinutes) ? `<div class="order-meta"><span>⏱ Займёт примерно ${escapeHtml(formatEstimatedTime(order.estimatedMinutes))}</span></div>` : '')}
       ${
         // Имя мастера(ов) — просьба Sg 10.10.2026, см. orderWorkerNamesLabel.
         // Только заказчику и только в карточке списка (свёрнутый вид) —
@@ -9332,7 +9542,7 @@ function orderCardHtml(order, { viewer }) {
               })()
           : ''
       }
-      ${!hasValidLocation(order.exactLocation) ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
+      ${!hasValidLocation(order.exactLocation) && !order.mapPoint ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
       ${
         // «Точная цена не найдена в каталоге — предложите свою цену» — тот
         // же технический текст про прецедент, что и выше, только приходит
@@ -9722,15 +9932,6 @@ function renderCompose() {
           <span>${escapeHtml(CATEGORY_TITLES[d.categoryId] || 'Категория уточняется')}</span>
           ${d.district ? `<span>${escapeHtml(d.district)}</span>` : ''}
         </p>
-        <p class="order-meta">
-          <span>📅 ${d.desiredDate ? escapeHtml(formatOrderDateLabel(d.desiredDate)) : 'Дата не указана'}</span>
-          ${d.timeWindow ? `<span>🕐 ${escapeHtml(d.timeWindow)}</span>` : ''}
-        </p>
-        ${
-          !d.desiredDate
-            ? `<div class="order-warning">Дата не указана — так сложнее подобрать мастера на конкретный день. Заявку можно отправить и без неё.</div>`
-            : ''
-        }
         ${
           // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «такой формулировки у нас не
           // может быть вообще, никаких личных согласований с мастером
@@ -10051,6 +10252,7 @@ function renderOrderDetail() {
       actions = `
         <p class="order-meta">${isSupabaseConfigured() ? 'Оплата картой, СБП и другими способами — на защищённой форме банка.' : 'Оплата — демо-режим: реального списания нет.'}</p>
         <button class="primary-button" id="pay-order-${order.id}" data-action="pay-order" data-value="${order.id}">Оплатить ${amount} ₽</button>
+        <p class="order-meta" style="margin:6px 0 10px;">После оплаты укажите удобные для вас дату и время.</p>
         <button class="secondary-button" data-action="decline-order" data-value="${order.id}">Отказаться</button>
       `;
     } else if (order.status === 'completed') {
@@ -10182,7 +10384,7 @@ function renderOrderDetail() {
         </div>
         <p class="order-meta">
           <span>${escapeHtml(CATEGORY_TITLES[order.categoryId] || '')}</span>
-          <span>${escapeHtml(order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
+          <span>${escapeHtml(!isCustomer && !isAssignedWorker ? stripApartment(order.district) : order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
         </p>
         ${
           // Имя мастера(ов) — просьба Sg 10.10.2026. Только заказчику (без
@@ -10196,6 +10398,13 @@ function renderOrderDetail() {
         <p>${escapeHtml(order.description)}</p>
         ${!isCustomer ? formattedBriefHtml(order.formattedBrief) : ''}
         ${!isCustomer ? partsInfoHtml(order) : ''}
+        ${!isCustomer ? workerNoteHtml(order) : ''}
+        ${
+          // Узкая карта с точкой — мастеру, когда карточка открыта (кандидату — приблизительно до дома, назначенному — точно).
+          !isCustomer && !isOrderClosed(order) && (hasValidLocation(order.exactLocation) || order.mapPoint)
+            ? (() => { const pt = hasValidLocation(order.exactLocation) && (showExact) ? order.exactLocation : (order.mapPoint || order.exactLocation); return `<div class="order-view-map" id="order-view-map" data-lat="${pt.lat}" data-lng="${pt.lng}"></div>`; })()
+            : ''
+        }
         ${
           showExact && hasValidLocation(order.exactLocation)
             ? `<p class="order-meta"><span>Точный адрес: ${order.fullAddress ? escapeHtml(order.fullAddress) + ' · ' : ''}${order.exactLocation.lat.toFixed(4)}, ${order.exactLocation.lng.toFixed(4)}</span></p>`
@@ -10234,11 +10443,8 @@ function renderOrderDetail() {
                 })()
             : ''
         }
-        ${
-          order.desiredDate || order.timeWindow
-            ? `<p class="order-meta"><span>${escapeHtml(formatOrderDateLabel(order.desiredDate))} ${escapeHtml(order.timeWindow)}</span></p>`
-            : ''
-        }
+        ${orderTimingHtml(order, isCustomer)}
+        ${isCustomer ? renderGuestNameBlock(order) : ''}
         ${
           // Время прибытия, которое мастер назвал в форме «Буду через» (см.
           // renderEtaPicker/advanceToEnRoute) — видно и заказчику, и самому
@@ -10569,6 +10775,31 @@ function masterWizardNext() {
   setMasterWizardStep(masterWizardStep + 1);
 }
 
+let masterWizardBroken = {};
+
+function reportWizardBroken(kind) {
+  const user = currentUser();
+  if (!user || masterWizardBroken[kind]) return;
+  const what = kind === 'phone' ? 'zvonok.com (проверка телефона)' : 'привязка Telegram';
+  const who = `${[user.displayName, user.lastName].filter(Boolean).join(' ') || 'без имени'}${user.phone ? ', ' + displayPhone(user.phone) : ''}`;
+  try {
+    pushNotification(createNotification(ADMIN_USER_ID, 'moderator', null, 'service_broken', { what, who }));
+  } catch (err) { console.warn('[wizard] не удалось уведомить админа', err); }
+  masterWizardBroken[kind] = true;
+  render();
+}
+
+function wizardBrokenBlockHtml(kind) {
+  if (masterWizardBroken[kind]) {
+    return `<div class="order-warning" style="margin-top:12px;">Мы уже вызвали мужика, который всё починит. Зайдите позже и обновите страницу.</div>
+      <button type="button" class="secondary-button" data-action="show-support" style="margin-top:8px;box-sizing:border-box;">Написать в поддержку</button>`;
+  }
+  return `<div class="composer-field-inline" style="margin-top:12px;">
+      <button type="button" class="secondary-button" data-action="mw-broken" data-value="${kind}" style="margin-top:0;">Не работает</button>
+      <button type="button" class="secondary-button" data-action="show-support" style="margin-top:0;">Написать в поддержку</button>
+    </div>`;
+}
+
 function masterWizardBack() {
   if (masterWizardStep <= 0) return go('profile');
   setMasterWizardStep(masterWizardStep - 1);
@@ -10659,8 +10890,11 @@ function renderMasterWizardStepBody(step, user) {
     return `
       <div class="field-card">
         ${user.phone ? `<p style="margin:0 0 6px;"><b>${escapeHtml(displayPhone(user.phone))}</b> ${user.phoneVerified ? '<span class="mw-ok">✓ подтверждён</span>' : '<span class="order-meta">— не подтверждён</span>'}</p>` : '<p class="order-meta">Номер пока не указан.</p>'}
-        <button type="button" class="${user.phoneVerified ? 'secondary-button' : 'primary-button'}" data-action="open-phone-overlay" style="box-sizing:border-box;">${user.phoneVerified ? 'Проверить или изменить номер' : 'Подтвердить номер звонком'}</button>
+        <button type="button" class="${user.phoneVerified ? 'secondary-button' : 'primary-button'}" data-action="open-phone-overlay" style="box-sizing:border-box;">${user.phoneVerified ? 'Проверить номер ещё раз' : 'Подтвердить номер звонком'}</button>
+        <button type="button" class="secondary-button" data-action="mw-change-phone" style="box-sizing:border-box;margin-top:8px;">Изменить номер</button>
+        <p class="order-meta mw-note">Вход в аккаунт теперь будет по этому номеру телефона — укажите тот, к которому у вас всегда есть доступ.</p>
         <p class="order-meta mw-note">Это нужно для безопасности: звонок на проверенный номер — самый надёжный способ подтвердить, что вы реальный человек, и защитить заказчиков и сервис от спама.</p>
+        ${user.phoneVerified ? '' : wizardBrokenBlockHtml('phone')}
       </div>`;
   }
   if (step.id === 'telegram') {
@@ -10670,6 +10904,7 @@ function renderMasterWizardStepBody(step, user) {
         <button type="button" class="${user.telegramId ? 'secondary-button' : 'primary-button'}" data-action="open-telegram-overlay" style="box-sizing:border-box;">${user.telegramId ? 'Настройки Telegram' : 'Подключить Telegram'}</button>
         <p class="order-meta mw-note">Туда будут приходить уведомления о новых заказах и об изменении статусов.</p>
         <p class="order-meta mw-note mw-faint">Позже появятся push-уведомления.</p>
+        ${user.telegramId ? '' : wizardBrokenBlockHtml('telegram')}
       </div>`;
   }
   if (step.id === 'location') {
@@ -10750,9 +10985,7 @@ function renderMasterWizard() {
     <div class="screen mw-screen">
       <div class="mw-head">
         <div class="mw-steps">
-          <span class="mw-prev">${escapeHtml(prev)}</span>
           <span class="mw-cur">${i + 1}. ${escapeHtml(step.title)}</span>
-          <span class="mw-next">${escapeHtml(next)}</span>
         </div>
         <div class="mw-count">${i + 1} из ${total}</div>
       </div>
@@ -10765,6 +10998,83 @@ function renderMasterWizard() {
         <button type="button" class="secondary-button" data-action="mw-back" style="box-sizing:border-box;margin-top:10px;">Назад</button>
       </div>
     </div>`;
+}
+
+// ---------------------------------------------------------------------
+// Вторая локация мастера (дом + работа/частое место) — users.lat2/lng2/
+// district2, пишется через save-profile. Подбор заказов учитывает обе точки
+// (см. available-orders / notify-nearby-workers).
+// ---------------------------------------------------------------------
+let loc2Editing = false;
+let loc2Value = '';
+let loc2Selected = null;
+let loc2Saving = false;
+
+async function saveSecondLocation(clear) {
+  const user = currentUser();
+  const sessionToken = loadSessionToken();
+  if (!user || !sessionToken || loc2Saving) return;
+  let patch;
+  let next;
+  if (clear) {
+    patch = { lat2: null, lng2: null, district2: '' };
+    next = { ...user, location2: null, district2: '' };
+  } else {
+    const input = document.getElementById('field-profile-district2');
+    const text = (input ? input.value : loc2Value).trim();
+    if (!text) return showToast('Введите адрес второй локации');
+    let loc = loc2Selected;
+    if (!loc && isGeocoderConfigured()) {
+      try { loc = await geocodeAddressYandex(text, { allowCoarse: true }); } catch (err) { loc = null; }
+    }
+    if (!loc || !hasValidLocation(loc)) return showToast('Не удалось найти адрес на карте — выберите вариант из подсказок или уточните адрес');
+    patch = { lat2: loc.lat, lng2: loc.lng, district2: text };
+    next = { ...user, location2: { lat: loc.lat, lng: loc.lng }, district2: text };
+  }
+  loc2Saving = true;
+  try {
+    await callSecureFn('save-profile', { userId: user.id, sessionToken, patch });
+    const i = cache.users.findIndex((u) => u.id === user.id);
+    if (i >= 0) cache.users[i] = next;
+    loc2Editing = false; loc2Value = ''; loc2Selected = null;
+    showToast(clear ? 'Вторая локация убрана' : 'Вторая локация сохранена');
+  } catch (err) {
+    if (isStaleSessionError(err)) { forceReloginDueToStaleSession(); }
+    else showToast('Не получилось сохранить — попробуйте ещё раз');
+  }
+  loc2Saving = false;
+  render();
+}
+
+function renderSecondLocationBlock(user) {
+  const has2 = user.location2 && hasValidLocation(user.location2);
+  if (has2 && !loc2Editing) {
+    return `<div class="field-card">
+      <label>Дополнительная локация</label>
+      <p class="profile-address-confirmed"><span class="profile-address-check">✓</span><span>${escapeHtml(user.district2 || 'Указана на карте')}</span></p>
+      <p class="order-meta" style="margin-top:6px;">Заказы приходят и рядом с этой точкой — например, рядом с работой.</p>
+      <div class="composer-field-inline" style="margin-top:8px;">
+        <button type="button" class="secondary-button" data-action="loc2-edit" style="margin-top:0;">Изменить</button>
+        <button type="button" class="secondary-button" data-action="loc2-clear" style="margin-top:0;">Убрать</button>
+      </div>
+    </div>`;
+  }
+  if (!loc2Editing) {
+    return `<div class="field-card">
+      <label>Дополнительная локация</label>
+      <p class="order-meta" style="margin-bottom:8px;">Если вы часто бываете ещё в одном месте (работа, дача, родные) — добавьте его, и заказы будут приходить и там тоже.</p>
+      <button type="button" class="secondary-button" data-action="loc2-edit" style="margin-top:0;box-sizing:border-box;">＋ Добавить вторую локацию</button>
+    </div>`;
+  }
+  return `<div class="field-card">
+    <label>Дополнительная локация</label>
+    <input type="text" id="field-profile-district2" placeholder="Например: г. Москва, ул. Красная Пресня, 44" value="${escapeHtml(loc2Value)}" autocomplete="off" />
+    <div id="profile-district2-suggestions" class="address-suggest-list"></div>
+    <div class="composer-field-inline" style="margin-top:8px;">
+      <button type="button" class="secondary-button" data-action="loc2-save" style="margin-top:0;">Сохранить</button>
+      <button type="button" class="secondary-button" data-action="loc2-cancel" style="margin-top:0;">Отмена</button>
+    </div>
+  </div>`;
 }
 
 // Вынесено из обычного профиля (см. историю изменений) — всё, что нужно
@@ -10851,6 +11161,8 @@ function renderMasterPanel() {
         `
         }
       </div>
+
+      ${renderSecondLocationBlock(user)}
 
       <div class="section-title">Telegram</div>
       <div class="field-card">
@@ -12096,6 +12408,14 @@ function wireEvents() {
       updateComposerSendState();
     });
   }
+  const profileDistrict2Input = document.getElementById('field-profile-district2');
+  if (profileDistrict2Input) {
+    profileDistrict2Input.addEventListener('input', () => { loc2Value = profileDistrict2Input.value; loc2Selected = null; });
+    wireAddressSuggestions(profileDistrict2Input, document.getElementById('profile-district2-suggestions'), (item) => {
+      loc2Value = item.text;
+      loc2Selected = { lat: item.lat, lng: item.lng };
+    });
+  }
   const profileDistrictInput = document.getElementById('field-profile-district');
   if (profileDistrictInput) {
     profileDistrictInput.addEventListener('input', () => {
@@ -12199,9 +12519,6 @@ function wireEvents() {
       // Дата — необязательна (в отличие от адреса): без неё заявку всё
       // равно можно отправить, просто предупреждаем, что так сложнее
       // подобрать мастера на конкретный день.
-      if (!composerDesiredDate) {
-        showToast('Дата не указана — так сложнее подобрать мастера, но заявку можно отправить');
-      }
 
       // composerExactLocation заполняется кнопкой «геолокация»
       // (captureComposerAddressGeo) или выбором подсказки адреса
@@ -12455,6 +12772,7 @@ function wireEvents() {
   // делается точечно (см. applyPoint внутри initQuickReviewMap), без
   // полного render() — иначе каждый клик пересоздавал бы саму карту.
   initQuickReviewMap();
+  initOrderViewMap();
 
   // Всплывающий выбор точки на карте (см. renderMapPickerOverlay) — та же
   // логика: initMapPickerMap сама проверяет наличие #map-picker-map и
@@ -13161,6 +13479,17 @@ async function handleAction(action, value) {
     case 'go-profile': return go('profile');
     case 'go-master-panel': return go('masterPanel');
     case 'go-master-wizard': return openMasterWizard();
+    case 'mw-change-phone': profilePhoneEditOpen = true; state.infoOverlay = 'phone'; return render();
+    case 'mw-broken': return reportWizardBroken(value);
+    case 'loc2-edit': loc2Editing = true; loc2Value = (currentUser() && currentUser().district2) || ''; loc2Selected = null; render(); document.getElementById('field-profile-district2')?.focus(); return;
+    case 'loc2-cancel': loc2Editing = false; loc2Selected = null; return render();
+    case 'loc2-save': return saveSecondLocation(false);
+    case 'loc2-clear': return saveSecondLocation(true);
+    case 'edit-order-schedule': return openOrderScheduleEdit(value);
+    case 'cancel-order-schedule': scheduleEditOpenFor = null; return render();
+    case 'save-order-schedule': return saveOrderSchedule(value);
+    case 'save-guest-name': return saveGuestName();
+    case 'skip-guest-name': guestNameDismissed = true; return render();
     case 'mw-next': return masterWizardNext();
     case 'mw-back': return masterWizardBack();
     case 'mw-submit': return submitMasterWizard();

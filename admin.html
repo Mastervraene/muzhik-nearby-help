@@ -1328,6 +1328,7 @@ function dbUserToUser(row) {
     deviceType: row.device_type || '',
     deviceOs: row.device_os || '',
     displayName: row.display_name || '',
+    lastName: row.last_name || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
     avatarUrl: row.avatar_url || '',
@@ -1914,7 +1915,7 @@ let lightboxIndex = 0;
 
 function userName(id) {
   const u = allUsers.find((x) => x.id === id);
-  return u ? u.displayName || u.phone || id : '—';
+  return u ? userNameLabel(u) || u.phone || id : '—';
 }
 
 // -----------------------------------------------------------------------
@@ -2040,9 +2041,14 @@ function orderSearchHaystack(o) {
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
+/** Имя + фамилия для списков (в админке фамилия видна после имени). */
+function userNameLabel(u) {
+  return [u && u.displayName, u && u.lastName].filter(Boolean).join(' ').trim();
+}
+
 function userSearchHaystack(u) {
   return [
-    u.displayName, u.phone, u.district, u.id, userSeqLabel(u.id),
+    u.displayName, u.lastName, u.phone, u.district, u.id, userSeqLabel(u.id),
     u.availableAsWorker ? 'мастер исполнитель' : 'клиент',
     u.blocked ? 'заблокирован' : '',
   ].filter(Boolean).join(' ').toLowerCase();
@@ -3235,7 +3241,7 @@ function orderFormHtml(o) {
     .concat(
       allUsers
         .filter((u) => u.availableAsWorker)
-        .map((u) => `<option value="${u.id}" ${u.id === o.assignedWorkerId ? 'selected' : ''}>${escapeHtml(u.displayName || u.phone)}</option>`)
+        .map((u) => `<option value="${u.id}" ${u.id === o.assignedWorkerId ? 'selected' : ''}>${escapeHtml(userNameLabel(u) || u.phone)}</option>`)
     )
     .join('');
 
@@ -3465,7 +3471,7 @@ function wireOrderForm(o) {
     let newWorker = null;
     if (workerChanged && newWorkerId) {
       newWorker = allUsers.find((u) => u.id === newWorkerId);
-      const label = newWorker ? (newWorker.displayName || newWorker.phone || newWorker.id) : newWorkerId;
+      const label = newWorker ? (userNameLabel(newWorker) || newWorker.phone || newWorker.id) : newWorkerId;
       const ok = confirm(`Принудительно назначить этот заказ мастеру «${label}»?\n\nЕму придёт уведомление о назначении (в приложении, и в Telegram, если привязан).`);
       if (!ok) return;
     } else if (workerChanged && !newWorkerId) {
@@ -3627,7 +3633,7 @@ function renderMasters() {
       if (avatarEl) {
         avatarEl.addEventListener('click', (e) => {
           e.stopPropagation();
-          openLightbox([{ url: u.avatarUrl, name: u.displayName || '' }], 0);
+          openLightbox([{ url: u.avatarUrl, name: userNameLabel(u) || '' }], 0);
         });
       }
     }
@@ -3770,7 +3776,7 @@ function masterCardHtml(u) {
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
         <div class="card-head-main">
-          <p class="card-title">${escapeHtml(u.displayName || 'Без имени')} · ${userSeqLabel(u.id)}${city ? ` · ${escapeHtml(city)}` : ''}</p>
+          <p class="card-title">${escapeHtml(userNameLabel(u) || 'Без имени')} · ${userSeqLabel(u.id)}${city ? ` · ${escapeHtml(city)}` : ''}</p>
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${u.deviceType || u.deviceOs ? `<span class="pill muted" title="Устройство и ОС по последнему заходу на сайт">${({ phone: '📱 телефон', tablet: '📟 планшет', computer: '💻 компьютер' })[u.deviceType] || ''} ${({ windows: 'Windows', macos: 'Mac OS', ios: 'iOS', android: 'Android', other: 'др. ОС' })[u.deviceOs] || ''}</span>` : ''}
@@ -3951,6 +3957,10 @@ function masterFormHtml(u) {
           <input type="text" id="mf-name-${u.id}" value="${escapeHtml(u.displayName || '')}" />
         </div>
         <div class="field-sm dense">
+          <label>Фамилия</label>
+          <input type="text" id="mf-lastname-${u.id}" value="${escapeHtml(u.lastName || '')}" />
+        </div>
+        <div class="field-sm dense">
           <label>Телефон</label>
           <input type="text" id="mf-phone-${u.id}" value="${escapeHtml(u.phone || '')}" />
         </div>
@@ -4110,6 +4120,7 @@ function wireMasterForm(u) {
     const telegramRaw = document.getElementById(`mf-telegram-${u.id}`).value.trim();
     const patch = {
       display_name: document.getElementById(`mf-name-${u.id}`).value.trim(),
+      last_name: document.getElementById(`mf-lastname-${u.id}`).value.trim(),
       phone: document.getElementById(`mf-phone-${u.id}`).value.trim(),
       telegram_id: telegramRaw || null, // пустая строка нарушает users_telegram_id_key (уникальность)
       phone_verified: document.getElementById(`mf-phoneverified-${u.id}`).value === '1',
@@ -4249,7 +4260,7 @@ function wireMasterForm(u) {
   if (clearTaskMasterBtn) {
     clearTaskMasterBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(`Снять задание с «${label}» без уведомления о его выполнении?`);
       if (!ok) return;
       clearTaskMasterBtn.disabled = true;
@@ -4271,7 +4282,7 @@ function wireMasterForm(u) {
   if (confirmTaskMasterBtn) {
     confirmTaskMasterBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(`Подтвердить выполнение задания у «${label}»? Задание будет снято.`);
       if (!ok) return;
       confirmTaskMasterBtn.disabled = true;
@@ -4338,7 +4349,7 @@ function wireMasterForm(u) {
   if (unpauseMasterBtn) {
     unpauseMasterBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(`Снять паузу с «${label}» и сразу вернуть в работающие мастера, без отправки заявки самим мастером?`);
       if (!ok) return;
       unpauseMasterBtn.disabled = true;
@@ -4374,7 +4385,7 @@ function wireMasterForm(u) {
   if (unpauseAccountBtn) {
     unpauseAccountBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(`Снять паузу (частая смена номера) с «${label}»?`);
       if (!ok) return;
       unpauseAccountBtn.disabled = true;
@@ -4561,7 +4572,7 @@ function wireMasterForm(u) {
   if (resetPasswordBtn) {
     resetPasswordBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       // Просьба Sg 28.09.2026, уточнение той же даты: перед нажатием админ
       // сам убеждается, кто пишет/звонит (вне системы). Кнопка выдаёт
       // одноразовый код (10 символов, 30 минут), который нужно
@@ -4608,7 +4619,7 @@ function wireMasterForm(u) {
         alert('У этого пользователя нет заказов.');
         return;
       }
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(
         `Перевести ВСЕ заказы пользователя «${label}» (${userOrders.length} шт.) в статус «${STATUS_LABELS[newStatus]}»?\n\nСтатус меняется напрямую, в обход обычных проверок перехода — используйте осторожно (например, для тестовых заказов).`
       );
@@ -4649,7 +4660,7 @@ function wireMasterForm(u) {
 
   document.getElementById(`toggle-worker-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
-    const label = u.displayName || u.phone || u.id;
+    const label = userNameLabel(u) || u.phone || u.id;
     const willEnable = !u.availableAsWorker;
     // Быстрое выключение статуса мастера (просьба Sg 08.10.2026) — для
     // мастеров, подключившихся ещё до требований по аватарке/телеграму/
@@ -4672,7 +4683,7 @@ function wireMasterForm(u) {
 
   document.getElementById(`toggle-block-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
-    const label = u.displayName || u.phone || u.id;
+    const label = userNameLabel(u) || u.phone || u.id;
     const willBlock = !u.blocked;
     // Подтверждение — специально та же защита, что и у удаления: кнопку
     // унесли из шапки карточки именно затем, чтобы не давить на неё
@@ -4698,7 +4709,7 @@ function wireMasterForm(u) {
       const textEl = document.getElementById(`mf-notify-text-${u.id}`);
       const text = textEl.value.trim();
       if (!text) { alert('Введите текст сообщения'); return; }
-      const label = u.displayName || u.phone || u.id;
+      const label = userNameLabel(u) || u.phone || u.id;
       const ok = confirm(`Отправить это сообщение в Telegram пользователю «${label}»?`);
       if (!ok) return;
       notifySendBtn.disabled = true;
@@ -4751,7 +4762,7 @@ function wireMasterForm(u) {
 
   document.getElementById(`delete-master-${u.id}`).addEventListener('click', async (e) => {
     e.stopPropagation();
-    const label = u.displayName || u.phone || u.id;
+    const label = userNameLabel(u) || u.phone || u.id;
     const ok = confirm(
       `Удалить пользователя «${label}»?\n\nЕсли по нему есть заказы, полное удаление невозможно — тогда профиль будет очищен (обезличен) и заблокирован, а история заказов сохранится.`
     );
@@ -5419,7 +5430,7 @@ function populateMapZoneSelect() {
   const workerOpts = workers
     .map(
       (u) =>
-        `<option value="master:${u.id}">Мастер: ${escapeHtml(u.displayName || u.phone || u.id)}${
+        `<option value="master:${u.id}">Мастер: ${escapeHtml(userNameLabel(u) || u.phone || u.id)}${
           u.district ? ' — ' + escapeHtml(u.district) : ''
         } (радиус ${u.searchRadiusKm} км)</option>`
     )
@@ -5456,7 +5467,7 @@ async function quickAssignWorkerToOrder(orderId, workerId) {
     alert('Этот мастер уже назначен на заказ.');
     return;
   }
-  const label = worker.displayName || worker.phone || worker.id;
+  const label = userNameLabel(worker) || worker.phone || worker.id;
   const ok = confirm(`Принудительно назначить заказ «${order.title || 'без названия'}» мастеру «${label}»?\n\nЕму придёт уведомление о назначении (в приложении, и в Telegram, если привязан).`);
   if (!ok) return;
   try {
@@ -5537,7 +5548,7 @@ function renderMapZoneList(rows, mode) {
       return `
         <div class="zone-row ${r.eligible ? 'in' : 'out'}">
           <div class="zone-row-main">
-            <div class="zone-row-title">${r.eligible ? '✅' : '❌'} ${escapeHtml(u.displayName || u.phone || 'Мастер')}</div>
+            <div class="zone-row-title">${r.eligible ? '✅' : '❌'} ${escapeHtml(userNameLabel(u) || u.phone || 'Мастер')}</div>
             <div class="zone-row-meta">${escapeHtml(u.district || '')} · ${r.distance.toFixed(2)} км от заказа · радиус заказа ${r.effRadius} км · ${marginLabel}</div>
           </div>
           <div class="zone-row-actions">
@@ -5625,7 +5636,7 @@ function fillMapPoints() {
       const pm = new window.ymaps.Placemark(
         coords,
         {
-          balloonContentHeader: escapeHtml(u.displayName || 'Мастер'),
+          balloonContentHeader: escapeHtml(userNameLabel(u) || 'Мастер'),
           balloonContentBody: `${escapeHtml(u.phone || '')}<br/>★ ${u.rating.toFixed(1)} · радиус ${u.searchRadiusKm} км<br/><a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Открыть карточку мастера →</a>`,
         },
         {
