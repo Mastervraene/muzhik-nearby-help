@@ -225,13 +225,14 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   max-height: 260px; overflow-y: auto; background: var(--gray-50); border-radius: var(--radius-sm);
   padding: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px;
 }
-.chat-bubble { max-width: 80%; padding: 7px 11px; border-radius: 14px; font-size: 13px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+.chat-bubble { max-width: 80%; padding: 5px 10px 4px; border-radius: 14px; font-size: 13px; line-height: 1.25; white-space: pre-wrap; word-break: break-word; }
 .chat-bubble.in { align-self: flex-start; background: var(--gray-0); box-shadow: var(--shadow-sm); border-bottom-left-radius: 4px; }
 .chat-bubble.out { align-self: flex-end; background: var(--accent-soft); color: var(--accent-strong); border-bottom-right-radius: 4px; }
-.chat-bubble-time { display: block; font-size: 10.5px; color: var(--gray-400); margin-top: 3px; }
+.chat-bubble-time { display: block; font-size: 9.5px; line-height: 1.1; color: var(--gray-400); margin-top: 1px; }
 .chat-bubble.out .chat-bubble-time { color: var(--accent); opacity: 0.7; }
 .chat-empty { color: var(--gray-500); font-size: 12.5px; text-align: center; padding: 10px 0; }
 .pill.chat-count { background: #fff7ed; color: #c2410c; }
+.pill.chat-count.unread { background: #0ea5e9; color: #fff; font-weight: 700; }
 
 /* ---------- Карточка пользователя — третья строка со значками ----------
    Короткие цветные/бесцветные значки «есть ли фото/телефон/телеграм/
@@ -1236,6 +1237,10 @@ function dbOrderToOrder(row) {
     customerBudget: row.customer_budget,
     estimate: row.estimate || { min: 0, max: 0, factors: [] },
     finalPrice: row.final_price ?? null,
+    // Время на ремонт в минутах и комментарий для мастера (14.10.2026) —
+    // вводит админ/модератор при подтверждении цены (см. askApproveDetails).
+    estimatedMinutes: row.estimated_minutes ?? null,
+    workerNote: row.worker_note || '',
     status: row.status,
     timeline: row.timeline || [],
     warnings: row.warnings || [],
@@ -1368,6 +1373,7 @@ function dbMessageToMessage(row) {
     direction: row.direction, // 'in' | 'out'
     text: row.text || '',
     createdAt: row.created_at,
+    readAt: row.read_at || null,
   };
 }
 
@@ -1474,10 +1480,37 @@ function fmtStatDateLabel(iso) {
   } catch { return iso; }
 }
 
+// Сводка по устройствам и ОС пользователей (14.10.2026) — снимок «по
+// последнему заходу на сайт» (users.device_type/device_os, см. report-device).
+function deviceSummaryHtml() {
+  const total = allUsers.filter((u) => u.deviceType || u.deviceOs).length;
+  if (!total) {
+    return '<div class="empty-state" style="margin-top:16px;">Устройства: данных пока нет — они появятся, когда пользователи зайдут на сайт после обновления.</div>';
+  }
+  const typeLabels = { phone: '📱 Телефон', tablet: '📟 Планшет', computer: '💻 Компьютер' };
+  const osLabels = { windows: 'Windows', macos: 'Mac OS', ios: 'iOS', android: 'Android', other: 'Другая ОС' };
+  const count = (field, key) => allUsers.filter((u) => u[field] === key).length;
+  const rows = (labels, field) => Object.keys(labels)
+    .map((k) => {
+      const n = count(field, k);
+      const pct = Math.round((n / total) * 100);
+      return `<tr><td>${labels[k]}</td><td>${n}</td><td>${pct}%</td></tr>`;
+    })
+    .join('');
+  return `
+    <div style="margin-top:20px;">
+      <h3 style="margin:0 0 8px;font-size:15px;">Устройства пользователей <span style="font-weight:400;color:var(--gray-500);font-size:12px;">(по последнему заходу, всего ${total})</span></h3>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;">
+        <table class="stats-table"><thead><tr><th>Тип</th><th>Польз.</th><th>Доля</th></tr></thead><tbody>${rows(typeLabels, 'deviceType')}</tbody></table>
+        <table class="stats-table"><thead><tr><th>ОС</th><th>Польз.</th><th>Доля</th></tr></thead><tbody>${rows(osLabels, 'deviceOs')}</tbody></table>
+      </div>
+    </div>`;
+}
+
 function renderStats() {
   const wrap = document.getElementById('stats-table-wrap');
   if (!allStats.length) {
-    wrap.innerHTML = '<div class="empty-state">Пока нет данных — статистика появится после первого ночного расчёта.</div>';
+    wrap.innerHTML = '<div class="empty-state">Пока нет данных — статистика появится после первого ночного расчёта.</div>' + deviceSummaryHtml();
     return;
   }
   const sorted = [...allStats].sort((a, b) => (a.statDate < b.statDate ? 1 : -1));
@@ -1488,7 +1521,7 @@ function renderStats() {
     }
     return `<tr><td>${escapeHtml(r.label)}</td>${sorted.map((s) => `<td>${fmtStatValue(s, r)}</td>`).join('')}</tr>`;
   }).join('');
-  wrap.innerHTML = `<table class="stats-table"><thead>${header}</thead><tbody>${body}</tbody></table>`;
+  wrap.innerHTML = `<table class="stats-table"><thead>${header}</thead><tbody>${body}</tbody></table>` + deviceSummaryHtml();
 }
 
 // -----------------------------------------------------------------------
@@ -1800,8 +1833,9 @@ let mastersRoleFilter = 'workers'; // 'workers' | 'clients' | null (null = вс�
 let mastersStatusFilters = new Set(); // applicants/task_review/paused/account_paused/phone_flag/blocked
 let mastersDateSort = 'off'; // 'off' | 'desc' | 'asc' (по created_at)
 let mastersSearchQuery = '';
-const MASTERS_FLAG_KEYS = ['applicants', 'task_review', 'paused', 'account_paused', 'phone_flag', 'blocked'];
+const MASTERS_FLAG_KEYS = ['unread_messages', 'applicants', 'task_review', 'paused', 'account_paused', 'phone_flag', 'blocked'];
 const MASTERS_FLAG_LABELS = {
+  unread_messages: 'Непрочитанные сообщения',
   applicants: 'Заявки в мастера',
   task_review: 'Ждут подтверждения задания',
   paused: 'На паузе (задание)',
@@ -1811,6 +1845,7 @@ const MASTERS_FLAG_LABELS = {
 };
 function userMatchesMastersFlag(u, key) {
   switch (key) {
+    case 'unread_messages': return unreadIncomingForTelegramId(u.telegramId).length > 0;
     case 'applicants': return u.masterStatus === 'pending';
     case 'task_review': return u.masterStatus === 'approved' && Boolean(u.masterTaskSubmittedAt);
     case 'paused': return u.masterStatus === 'paused';
@@ -1926,6 +1961,44 @@ function messagesForTelegramId(telegramId) {
   return allMessages
     .filter((m) => m.telegramId === telegramId)
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+}
+
+// Непрочитанные входящие (14.10.2026): входящее сообщение без read_at.
+// Считается прочитанным, когда админ раскрыл карточку этого пользователя.
+function unreadIncomingForTelegramId(telegramId) {
+  if (!telegramId) return [];
+  return allMessages.filter((m) => m.telegramId === telegramId && m.direction === 'in' && !m.readAt);
+}
+
+function updateUnreadMessagesBadge() {
+  const tabBtn = document.querySelector('.tab-btn[data-tab="masters"]');
+  if (!tabBtn) return;
+  let badge = document.getElementById('masters-unread-msg-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.id = 'masters-unread-msg-badge';
+    badge.title = 'Непрочитанные сообщения в Telegram';
+    badge.style.cssText = 'display:none; margin-left:6px; background:#0ea5e9; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;';
+    tabBtn.appendChild(badge);
+  }
+  const count = allMessages.filter((m) => m.direction === 'in' && !m.readAt).length;
+  badge.textContent = '💬 ' + (count > 9 ? '9+' : String(count));
+  badge.style.display = count ? 'inline-block' : 'none';
+}
+
+async function markMessagesRead(telegramId) {
+  const unread = unreadIncomingForTelegramId(telegramId);
+  if (!unread.length) return;
+  const nowIso = new Date().toISOString();
+  unread.forEach((m) => { m.readAt = nowIso; });
+  updateUnreadMessagesBadge();
+  for (const m of unread) {
+    try {
+      await updateRow('telegram_messages', m.id, { read_at: nowIso });
+    } catch (err) {
+      console.warn('[markMessagesRead] не удалось отметить прочитанным', err);
+    }
+  }
 }
 
 // «История запросов модератора» для карточки мастера (см. masterFormHtml,
@@ -2198,15 +2271,94 @@ const pendingApprovePriceDrafts = {};
 // подтвердит платёж (см. supabase/functions/payment-notification). Так мы
 // не тратим уведомление о поиске мастера на заказ, который клиент в итоге
 // не оплатит/отклонит.
+/**
+ * Окно подтверждения цены (14.10.2026, вместо prompt()): цена, время на
+ * ремонт (быстрые варианты 5/10/15/30/45 мин, 1/1,5/2 ч + ручной ввод
+ * часов и минут) и необязательный комментарий для мастера. Возвращает
+ * Promise<{price, minutes|null, note}|null> (null — отмена).
+ */
+function askApproveDetails(o, suggestedPrice) {
+  return new Promise((resolve) => {
+    const presets = [[5, '5 мин'], [10, '10 мин'], [15, '15 мин'], [30, '30 мин'], [45, '45 мин'], [60, '1 час'], [90, '1,5 часа'], [120, '2 часа']];
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;color:#111;border-radius:12px;max-width:440px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3);max-height:92vh;overflow:auto;font-family:inherit;';
+    box.innerHTML = `
+      <h3 style="margin:0 0 12px;font-size:17px;">Подтверждение заказа</h3>
+      <label style="display:block;font-size:13px;margin-bottom:4px;">Финальная цена для клиента (₽)</label>
+      <input type="number" min="0" id="apd-price" style="width:100%;box-sizing:border-box;padding:8px;margin-bottom:12px;" />
+      <label style="display:block;font-size:13px;margin-bottom:6px;">Сколько займёт ремонт</label>
+      <div id="apd-presets" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+        <input type="number" min="0" id="apd-h" placeholder="часов" style="width:90px;padding:8px;" />
+        <input type="number" min="0" max="59" id="apd-m" placeholder="минут" style="width:90px;padding:8px;" />
+        <span id="apd-label" style="font-size:13px;color:#666;"></span>
+      </div>
+      <label style="display:block;font-size:13px;margin-bottom:4px;">Комментарий для мастера (необязательно)</label>
+      <input type="text" id="apd-note" placeholder="например: может понадобиться сифон" style="width:100%;box-sizing:border-box;padding:8px;margin-bottom:14px;" />
+      <div id="apd-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-bottom:6px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" id="apd-cancel" style="padding:8px 14px;">Отмена</button>
+        <button type="button" id="apd-ok" style="padding:8px 14px;background:#1f9d55;color:#fff;border:0;border-radius:6px;">✓ Одобрить</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const $ = (id) => box.querySelector('#' + id);
+    $('apd-price').value = suggestedPrice === '' || suggestedPrice == null ? '' : String(suggestedPrice);
+    $('apd-note').value = o.workerNote || '';
+    const setMinutes = (total) => {
+      $('apd-h').value = total ? String(Math.floor(total / 60) || '') : '';
+      $('apd-m').value = total ? String(total % 60 || '') : '';
+      refresh();
+    };
+    const readMinutes = () => {
+      const h = Number($('apd-h').value || 0);
+      const m = Number($('apd-m').value || 0);
+      const total = Math.round(h * 60 + m);
+      return Number.isFinite(total) && total > 0 ? total : null;
+    };
+    function refresh() {
+      const t = readMinutes();
+      $('apd-label').textContent = t ? 'займёт примерно ' + (t < 60 ? t + ' мин' : (t % 60 ? Math.floor(t / 60) + ' ч ' + (t % 60) + ' мин' : Math.floor(t / 60) + ' ч')) : 'время не указано';
+      box.querySelectorAll('[data-min]').forEach((b) => {
+        b.style.background = Number(b.dataset.min) === t ? '#1f9d55' : '#f1f1f1';
+        b.style.color = Number(b.dataset.min) === t ? '#fff' : '#111';
+      });
+    }
+    presets.forEach(([min, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.min = String(min);
+      b.textContent = label;
+      b.style.cssText = 'padding:6px 10px;border:1px solid #ccc;border-radius:16px;cursor:pointer;';
+      b.addEventListener('click', () => setMinutes(min));
+      $('apd-presets').appendChild(b);
+    });
+    $('apd-h').addEventListener('input', refresh);
+    $('apd-m').addEventListener('input', refresh);
+    if (o.estimatedMinutes) setMinutes(o.estimatedMinutes); else refresh();
+    const close = (val) => { overlay.remove(); resolve(val); };
+    $('apd-cancel').addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+    $('apd-ok').addEventListener('click', () => {
+      const price = Number(String($('apd-price').value).replace(',', '.').trim());
+      if ($('apd-price').value.trim() === '' || !Number.isFinite(price) || price < 0) {
+        $('apd-err').textContent = 'Введите корректную сумму в рублях';
+        return;
+      }
+      close({ price, priceRaw: $('apd-price').value, minutes: readMinutes(), note: $('apd-note').value.trim() });
+    });
+    $('apd-price').focus();
+  });
+}
+
 async function approveOrder(o) {
   const suggested = pendingApprovePriceDrafts[o.id] ?? o.finalPrice ?? o.estimate?.min ?? '';
-  const priceRaw = prompt('Финальная цена заказа для клиента (₽):', suggested === '' ? '' : String(suggested));
-  if (priceRaw === null) return; // отменено
-  const finalPrice = Number(String(priceRaw).replace(',', '.').trim());
-  if (!Number.isFinite(finalPrice) || finalPrice < 0) {
-    alert('Введите корректную сумму в рублях');
-    return;
-  }
+  const details = await askApproveDetails(o, suggested);
+  if (!details) return; // отменено
+  const finalPrice = details.price;
+  const priceRaw = details.priceRaw;
   pendingApprovePriceDrafts[o.id] = priceRaw;
 
   const btn = document.getElementById(`approve-order-${o.id}`);
@@ -2217,7 +2369,13 @@ async function approveOrder(o) {
 
   try {
     const timeline = [...(o.timeline || []), { status: 'estimate_ready', at: new Date().toISOString() }];
-    await updateRow('orders', o.id, { status: 'estimate_ready', final_price: finalPrice, timeline });
+    await updateRow('orders', o.id, {
+      status: 'estimate_ready',
+      final_price: finalPrice,
+      estimated_minutes: details.minutes,
+      worker_note: details.note || null,
+      timeline,
+    });
 
     // Уведомление клиенту о необходимости оплатить — раньше после
     // модерации клиент узнавал об этом, только зайдя на сайт сам (по
@@ -3132,6 +3290,14 @@ function orderFormHtml(o) {
           <input type="number" id="f-final-price-${o.id}" placeholder="не выставлена" value="${o.finalPrice ?? ''}" />
         </div>
         <div class="field-sm">
+          <label>Время на ремонт (минут)</label>
+          <input type="number" min="0" id="f-est-minutes-${o.id}" placeholder="не указано" value="${o.estimatedMinutes ?? ''}" />
+        </div>
+        <div class="field-sm">
+          <label>Комментарий для мастера</label>
+          <input type="text" id="f-worker-note-${o.id}" placeholder="виден мастеру до принятия" value="${escapeHtml(o.workerNote || '')}" />
+        </div>
+        <div class="field-sm">
           <label>Радиус поиска (км)</label>
           <input type="number" id="f-radius-${o.id}" value="${o.searchRadiusKm ?? 3}" />
         </div>
@@ -3255,6 +3421,12 @@ function wireOrderForm(o) {
         factors: o.estimate?.factors || [],
       },
       final_price: finalPriceRaw === '' ? null : Number(finalPriceRaw),
+      estimated_minutes: (() => {
+        const v = document.getElementById(`f-est-minutes-${o.id}`).value.trim();
+        const n = Number(v);
+        return v === '' || !Number.isFinite(n) || n <= 0 ? null : Math.round(n);
+      })(),
+      worker_note: document.getElementById(`f-worker-note-${o.id}`).value.trim() || null,
       // Три поля про материалы для мастера (просьба Sg 09.10.2026) —
       // пустая строка, а не null: dbOrderToOrder и partsInfoHtml уже
       // трактуют '' как «не показывать», null усложнил бы сравнения зря.
@@ -3442,6 +3614,8 @@ function renderMasters() {
     const headEl = document.getElementById(`master-head-${u.id}`);
     headEl.addEventListener('click', () => {
       openMasterId = openMasterId === u.id ? null : u.id;
+      // Раскрыли карточку — входящие этого пользователя считаются прочитанными.
+      if (openMasterId === u.id && u.telegramId) markMessagesRead(u.telegramId);
       renderMasters();
     });
     // Клик по аватарке — открыть фото во весь экран (лайтбокс), не
@@ -3566,6 +3740,7 @@ function cityFromCoords(lat, lng) {
 function masterCardHtml(u) {
   const open = openMasterId === u.id;
   const chatCount = u.telegramId ? messagesForTelegramId(u.telegramId).length : 0;
+  const unreadCount = u.telegramId ? unreadIncomingForTelegramId(u.telegramId).length : 0;
   const city = cityFromCoords(u.location.lat, u.location.lng);
   const hasLocation = Boolean(u.location.lat && u.location.lng);
   // Превью заметки администратора на свёрнутой карточке — четвёртой строкой,
@@ -3606,7 +3781,7 @@ function masterCardHtml(u) {
             ${statusBadge('phone', Boolean(u.phoneVerified), u.phoneVerified ? 'Телефон подтверждён' : u.phone ? 'Телефон не подтверждён' : 'Телефон не указан')}
             ${statusBadge('telegram', Boolean(u.telegramId), u.telegramId ? 'Telegram подключён' : 'Telegram не подключён')}
             ${statusBadge('location', hasLocation, hasLocation ? 'Локация указана' : 'Локации нет')}
-            ${chatCount ? `<span class="pill chat-count">💬 ${chatCount}</span>` : ''}
+            ${chatCount ? `<span class="pill chat-count${unreadCount ? ' unread' : ''}" title="${unreadCount ? 'Есть непрочитанные сообщения' : 'Переписка в Telegram'}">💬 ${chatCount}${unreadCount ? ` · новых ${unreadCount}` : ''}</span>` : ''}
             ${statusPills}
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
@@ -3628,10 +3803,7 @@ function chatThreadHtml(telegramId) {
   return messages
     .map(
       (m) => `
-        <div class="chat-bubble ${m.direction === 'out' ? 'out' : 'in'}">
-          ${escapeHtml(m.text)}
-          <span class="chat-bubble-time">${fmtDate(m.createdAt)}</span>
-        </div>
+        <div class="chat-bubble ${m.direction === 'out' ? 'out' : 'in'}">${escapeHtml(m.text)}<span class="chat-bubble-time">${fmtDate(m.createdAt)}</span></div>
       `
     )
     .join('');
@@ -5661,6 +5833,7 @@ async function loadData(opts) {
     pendingBadge.textContent = pendingMastersCount > 9 ? '9+' : String(pendingMastersCount);
     pendingBadge.style.display = pendingMastersCount ? 'inline-block' : 'none';
   }
+  updateUnreadMessagesBadge();
   // Счётчик заданий, отмеченных мастерами как выполненные и ждущих
   // подтверждения/уточнения админом (см. masterFormHtml/wireMasterForm —
   // правка от 03.10.2026 по просьбе Sg: раньше задание снималось
