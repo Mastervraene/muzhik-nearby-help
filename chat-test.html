@@ -35,12 +35,12 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .chat-log.empty::before { display:none; }
 .home-hero { text-align:center; padding:10px 8px; }
 .chat-log:not(.empty) .home-hero { display:none; }
-.bubble { max-width:84%; padding:12px 18px; border-radius:26px; font-size:15px; line-height:1.42; white-space:pre-wrap; word-wrap:break-word;
-  margin-top:8px; animation:pop .22s ease-out both; box-shadow:0 1px 2px rgba(15,23,42,.05); }
-.bubble.me { align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:8px; }
-.bubble.ai { align-self:flex-start; background:var(--gray-100); color:var(--gray-900); border-bottom-left-radius:8px; }
+.bubble { max-width:86%; padding:8px 13px; border-radius:18px; font-size:15px; line-height:1.35; white-space:pre-wrap; word-wrap:break-word;
+  margin-top:4px; animation:pop .22s ease-out both; box-shadow:0 1px 2px rgba(15,23,42,.05); }
+.bubble.me { align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:5px; }
+.bubble.ai { align-self:flex-start; background:var(--gray-100); color:var(--gray-900); border-bottom-left-radius:5px; }
 .bubble.sys { align-self:center; background:transparent; box-shadow:none; color:var(--gray-500); font-size:12.5px; text-align:center; padding:4px 10px; max-width:92%; }
-.bubble.typing { display:inline-flex; gap:5px; align-items:center; padding:14px 18px; }
+.bubble.typing { display:inline-flex; gap:5px; align-items:center; padding:12px 14px; }
 .bubble.typing i { width:7px; height:7px; border-radius:50%; background:var(--gray-400); animation:blink 1.2s infinite both; }
 .bubble.typing i:nth-child(2){animation-delay:.2s} .bubble.typing i:nth-child(3){animation-delay:.4s}
 @keyframes pop { from { opacity:0; transform:translateY(10px) scale(.97);} to { opacity:1; transform:none; } }
@@ -148,7 +148,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   border: 1px solid var(--gray-200);
   border-radius: var(--radius);
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06), 0 16px 36px rgba(15, 23, 42, 0.1);
-  padding: 14px;
+  padding: 10px 12px;
 }
 .legal-footer {
   margin: 6px 4px 0;
@@ -204,8 +204,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   display: flex;
   align-items: center;
   gap: var(--composer-gap);
-  padding-top: 10px;
-  margin-top: 10px;
+  padding-top: 0;
+  margin-top: 6px;
 }
 .composer-tools {
   display: flex;
