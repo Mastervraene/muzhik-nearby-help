@@ -474,6 +474,27 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%);
   color: var(--gray-0); font-size: 12.5px; font-weight: 600; opacity: 0.85;
 }
+
+.ai-row { border:1px solid var(--border,#ddd); border-radius:10px; margin-bottom:8px; background:#fff; overflow:hidden; }
+.ai-row.unseen { border-left:4px solid #e04b4b; }
+.ai-row.good { border-left:4px solid #2e9e5b; }
+.ai-row.bad { border-left:4px solid #e04b4b; background:#fff7f7; }
+.ai-head { display:flex; align-items:center; gap:8px; padding:10px 12px; }
+.ai-title { flex:1; min-width:0; cursor:pointer; font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-row.seen .ai-title { font-weight:400; color:#555; }
+.ai-meta { font-size:11px; color:#888; white-space:nowrap; }
+.ai-btns { display:flex; gap:4px; flex-wrap:nowrap; }
+.ai-btns button { border:1px solid #ccc; background:#fff; border-radius:8px; font-size:18px; padding:4px 14px; cursor:pointer; filter:grayscale(1); opacity:.5; }
+.ai-btns button.on { filter:none; opacity:1; border-color:#333; background:#f2f2f2; }
+.ai-ind span { font-size:16px; filter:grayscale(1); opacity:.45; }
+.ai-ind span.on { filter:none; opacity:1; }
+.ai-det { display:none; padding:0 12px 12px; border-top:1px solid #eee; }
+.ai-row.open .ai-det { display:block; }
+.ai-msg { margin:6px 0; padding:7px 10px; border-radius:10px; font-size:13px; white-space:pre-wrap; max-width:88%; }
+.ai-msg.user { background:#eef3ff; margin-left:auto; }
+.ai-msg.assistant { background:#f3f3f3; }
+.ai-order { margin:10px 0; padding:8px 10px; border-radius:8px; background:#fffbe6; font-size:13px; }
+.ai-det textarea { width:100%; box-sizing:border-box; min-height:60px; font:inherit; font-size:13px; padding:8px; border:1px solid #ccc; border-radius:8px; }
 </style>
 </head>
 <body>
@@ -539,6 +560,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="payouts">Выплаты<span id="payouts-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="accounting">Бухгалтерия</button>
     <button class="tab-btn" data-tab="pricing">Прайс-лист</button>
+    <button class="tab-btn" data-tab="ai">ИИ<span id="ai-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -748,6 +770,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <button type="button" class="btn-sm ghost" id="acc-refresh">Обновить</button>
     </div>
     <div id="accounting-body"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-ai">
+    <div id="ai-body"><p class="count-hint">Загрузка…</p></div>
   </div>
 
   <div class="tab-panel" id="panel-pricing">
@@ -6394,11 +6420,86 @@ async function loadPricing() {
   }
 }
 
+
+// ===== Вкладка «ИИ» =====
+let aiChats = [], aiLoaded = false, aiOpen = {};
+function aiEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+async function loadAi() {
+  const el = document.getElementById('ai-body');
+  try {
+    const d = await callAdminPricing('list_chats');
+    aiChats = d.chats || [];
+    aiLoaded = true;
+    renderAi();
+  } catch (e) { el.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
+}
+function aiBadge() {
+  const n = aiChats.filter((c) => !(c.review && c.review.seen)).length;
+  const b = document.getElementById('ai-badge');
+  if (b) { b.textContent = n; b.style.display = n ? '' : 'none'; }
+}
+function renderAi() {
+  const el = document.getElementById('ai-body');
+  aiBadge();
+  if (!aiChats.length) { el.innerHTML = '<p class="count-hint">Переписок пока нет.</p>'; return; }
+  const keepComments = {};
+  el.querySelectorAll('textarea[data-key]').forEach((t) => { keepComments[t.dataset.key] = t.value; });
+  el.innerHTML = '<p class="count-hint">Сверху новые. Красная полоса — не просмотрено; ✅/❌ — оценка. Нажмите на название, чтобы раскрыть.</p>' +
+    '<button class="btn" id="ai-refresh" style="margin-bottom:10px">Обновить</button>' +
+    aiChats.map((c) => {
+      const r = c.review || {};
+      const cls = [r.seen ? 'seen' : 'unseen', r.verdict || '', aiOpen[c.key] ? 'open' : ''].join(' ').replace('unseen', 'unseen');
+      const when = c.lastAt ? new Date(c.lastAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      const o = c.order;
+      const orderHtml = o ? ('Заказ' + (o.number ? ' №' + aiEsc(o.number) : '') + ': ' + aiEsc(o.title || '') + ' · статус: ' + aiEsc(o.status || '—') + ' · стоимость: ' + (o.price != null ? aiEsc(o.price) + ' ₽' : '—')) : 'Заказ не создан';
+      const dr = c.draft ? ('<div style="font-size:12px;color:#666;margin-top:4px">Черновик: ' + aiEsc(c.draft.title || '') + (c.draft.address ? ' · ' + aiEsc(c.draft.address) : '') + '</div>') : '';
+      const msgs = (c.messages || []).map((m) => '<div class="ai-msg ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + aiEsc(m.text) + '</div>').join('');
+      const cm = keepComments[c.key] != null ? keepComments[c.key] : (r.comment || '');
+      return '<div class="ai-row ' + cls + '" data-key="' + aiEsc(c.key) + '">' +
+        '<div class="ai-head"><div class="ai-title" data-act="toggle">' + aiEsc(c.title || 'Без названия') + '</div>' +
+        '<span class="ai-meta">' + aiEsc(c.userName || '') + ' · ' + when + '</span>' +
+        '<div class="ai-btns ai-ind"><span class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</span><span class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</span></div></div>' +
+        '<div class="ai-det">' + msgs + '<div class="ai-order">' + orderHtml + dr + '</div>' +
+        '<div class="ai-btns" style="margin:8px 0"><button data-act="good" class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</button><button data-act="bad" class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</button></div>' +
+        '<textarea data-key="' + aiEsc(c.key) + '" placeholder="Комментарий для правок">' + aiEsc(cm) + '</textarea>' +
+        '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
+    }).join('');
+  document.getElementById('ai-refresh').onclick = loadAi;
+}
+async function aiSet(key, patch, row) {
+  const c = aiChats.find((x) => x.key === key); if (!c) return;
+  const old = c.review;
+  c.review = Object.assign({}, old || {}, patch);
+  try { await callAdminPricing('set_review', Object.assign({ key }, patch)); }
+  catch (e) { c.review = old; alert('Не сохранилось: ' + e.message); }
+}
+document.addEventListener('click', async (ev) => {
+  const t = ev.target.closest('#ai-body [data-act]'); if (!t) return;
+  const row = t.closest('.ai-row'); const key = row.dataset.key;
+  const c = aiChats.find((x) => x.key === key); const r = (c && c.review) || {};
+  const act = t.dataset.act;
+  if (act === 'toggle') {
+    aiOpen[key] = !aiOpen[key];
+    if (aiOpen[key] && !r.seen) await aiSet(key, { seen: true });
+    renderAi();
+  } else if (act === 'good' || act === 'bad') {
+    await aiSet(key, { verdict: r.verdict === act ? null : act, seen: true });
+    renderAi();
+  } else if (act === 'savecm') {
+    const val = row.querySelector('textarea').value;
+    await aiSet(key, { comment: val, seen: true });
+    renderAi();
+    const nrow = document.querySelector('#ai-body .ai-row[data-key="' + key.replace(/"/g, '') + '"] .ai-saved');
+    if (nrow) nrow.textContent = 'Сохранено';
+  }
+});
+
 function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
   if (tab === 'pricing' && !pricingLoaded) loadPricing();
+  if (tab === 'ai') loadAi();
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
   if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
 }

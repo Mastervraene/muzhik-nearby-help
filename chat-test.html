@@ -309,13 +309,14 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   var URG = { normal:'обычная', soon:'в ближайшие часы', now:'срочно' };
   var log = document.getElementById('log'), ta = document.getElementById('text'), send = document.getElementById('send');
   var messages = [], draft = null, busy = false, draftEl = null;
-  var photos = [], orderPhotos = [], MAX_PHOTOS = 5;
+  var photos = [], orderPhotos = [], MAX_PHOTOS = 5, convId = '';
+  function newConv() { convId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} return null; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
   function toBottom() { log.scrollTop = log.scrollHeight; }
   function add(cls, text) { log.classList.remove('empty'); var d = document.createElement('div'); d.className = 'bubble ' + cls; d.textContent = text; log.appendChild(d); toBottom(); return d; }
-  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos })); }
+  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos, convId: convId })); }
   function grade() { send.classList.toggle('grade-3', Boolean(ta.value.trim())); }
   function grow() { if (!ta.value) { ta.style.height = ''; return; } ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
 
@@ -383,14 +384,15 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 
   function restore() {
     var raw = ls(HIST_KEY);
-    if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; } catch (e) {} }
+    if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || ''; } catch (e) {} }
+    if (!convId) newConv();
     messages.forEach(function (m) { add(m.role === 'user' ? 'me' : 'ai', m.text); });
     renderDraft();
     if (!messages.length) log.classList.add('empty');
   }
 
   document.getElementById('reset').onclick = function () {
-    messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; renderPhotos(); ls(HIST_KEY, null);
+    messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; newConv(); renderPhotos(); ls(HIST_KEY, null);
     document.querySelectorAll('.chat-screen .bubble,.chat-screen .draft-card').forEach(function (n) { n.remove(); });
     log.classList.add('empty'); ta.value = ''; grow(); grade();
   };
@@ -482,7 +484,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
-        body: JSON.stringify({ userId: uid, sessionToken: tok, messages: messages, category: draft && draft.category })
+        body: JSON.stringify({ userId: uid, sessionToken: tok, messages: messages, convId: convId || (newConv(), convId), category: draft && draft.category })
       });
       var data = await res.json().catch(function () { return null; });
       wait.remove();
