@@ -391,6 +391,22 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       }).catch(function () {});
   })();
 
+  // Ошибка + маленькая кнопка «повторить» — повторно отправляет то же сообщение без перепечатывания.
+  function fail(text, t, mine, canRetry) {
+    var d = add('sys', text + ' ');
+    if (!canRetry) return;
+    var b = document.createElement('button');
+    b.type = 'button'; b.title = 'Повторить отправку'; b.setAttribute('aria-label', 'Повторить отправку');
+    b.style.cssText = 'border:0;background:var(--gray-100);color:var(--gray-700);border-radius:999px;padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer;vertical-align:middle;';
+    b.innerHTML = '↻ Повторить';
+    b.onclick = function () {
+      if (busy) return;
+      d.remove(); if (mine) mine.remove();
+      ta.value = t; submit();
+    };
+    d.appendChild(b); toBottom();
+  }
+
   async function submit(e) {
     if (e) e.preventDefault();
     var t = ta.value.trim();
@@ -398,7 +414,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     var uid = ls('muzhik_session_v1'), tok = ls('muzhik_session_token_v1');
     if (!uid || !tok) { add('sys', 'Сначала войдите на сайте (мастерврайоне.рф), потом вернитесь на эту страницу.'); return; }
     ta.value = ''; grow(); grade(); busy = true;
-    messages.push({ role: 'user', text: t }); add('me', t);
+    messages.push({ role: 'user', text: t }); var mine = add('me', t);
     var wait = add('ai typing', ''); wait.innerHTML = '<i></i><i></i><i></i>';
     try {
       var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
@@ -410,7 +426,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       wait.remove();
       if (!res.ok || !data || !data.ok) {
         var err = data && data.error;
-        add('sys', err === 'rate_limited' ? 'Лимит сообщений на сегодня исчерпан.' : err === 'unauthorized' ? 'Сессия устарела — войдите на сайте заново.' : 'Не получилось ответить, попробуйте ещё раз.');
+        var retry = !(err === 'rate_limited' || err === 'unauthorized');
+        fail(err === 'rate_limited' ? 'Лимит сообщений на сегодня исчерпан.' : err === 'unauthorized' ? 'Сессия устарела — войдите на сайте заново.' : 'Не получилось ответить.', t, mine, retry);
         messages.pop();
       } else {
         messages.push({ role: 'assistant', text: data.reply });
@@ -418,7 +435,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
         if (data.draft) { draft = data.draft; renderDraft(); }
         if (data.needsHuman) add('sys', 'Передаю разговор администратору (в тесте — только отметка).');
       }
-    } catch (x) { wait.remove(); add('sys', 'Нет связи, попробуйте ещё раз.'); messages.pop(); }
+    } catch (x) { wait.remove(); fail('Нет связи.', t, mine, true); messages.pop(); }
     busy = false; save(); toBottom();
   }
   send.addEventListener('click', submit);
