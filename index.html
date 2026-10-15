@@ -2607,7 +2607,8 @@ const TEMPLATES = {
     `⚠️ Жалоба по заказу «${ctx.orderTitle || ctx.orderId}»: ${ctx.reporterLabel} сообщил о проблеме. ${ADMIN_URL}`,
   new_matching_order: (ctx) => `Рядом появился подходящий заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}». ${SITE_URL}`,
-  order_cancelled: () => 'Заказ отменён или изменён заказчиком.',
+  order_cancelled: (ctx) => `Заказчик отменил заказ${ctx && ctx.orderTitle ? ' «' + ctx.orderTitle + '»' : ''}. ${SITE_URL}`,
+  order_cancelled_admin: (ctx) => `Заказчик отменил заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}». ${ADMIN_URL}`,
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
   // Мастер приехал, но деталь не подошла — только диагностика, работы не
   // выполнены (см. reportDiagnosisOnly). ctx.text — комментарий мастера.
@@ -6989,6 +6990,9 @@ function declineOrder(orderId) {
   if (!order || order.status !== 'estimate_ready') return;
   order = transition(order, 'cancelled');
   saveOrder(order);
+  const cancelCtx = { orderId: order.id, orderTitle: order.title };
+  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'order_cancelled_admin', cancelCtx));
+  if (order.assignedWorkerId) pushNotification(createNotification(order.assignedWorkerId, 'worker', order.id, 'order_cancelled', cancelCtx));
   showToast('Заказ отменён');
   render();
 }
@@ -7646,7 +7650,7 @@ function isGeocoderConfigured() {
  * в window.__ENV__) — поэтому доступность подсказок определяется тем же
  * ASSISTANT_FUNCTION_URL, что и у голоса/категорий, а не отдельным ключом. */
 function isGeosuggestConfigured() {
-  return isAssistantConfigured();
+  return isAssistantConfigured() || isGeocoderConfigured();
 }
 
 /** @returns {Promise<string|null>} человекочитаемый адрес либо null, если ключ не подключён */
@@ -7736,7 +7740,46 @@ async function geocodeAddressYandex(addressText, opts = {}) {
  */
 async function searchAddressSuggestionsYandex(query) {
   const env = (typeof window !== 'undefined' && window.__ENV__) || {};
-  if (!isAssistantConfigured()) return [];
+  // Прокси /suggest в Supabase так и не был развёрнут (функции нет в
+  // списке, ключ Геосаджеста недоступен) — подсказки раньше молча не
+  // работали. Теперь честный запасной путь: HTTP-Геокодер (CORS есть) с
+  // results=5, координаты уже в ответе и кодируются прямо в uri как geo:lng,lat.
+  if (!suggestProxyBroken && isAssistantConfigured()) {
+    try {
+      return await searchAddressSuggestionsViaProxy(query, env);
+    } catch (err) {
+      suggestProxyBroken = true;
+    }
+  }
+  return searchAddressSuggestionsViaGeocoder(query, env);
+}
+
+let suggestProxyBroken = false;
+
+async function searchAddressSuggestionsViaGeocoder(query, env) {
+  const apiKey = env.YANDEX_GEOCODER_API_KEY;
+  if (!apiKey || !query) return [];
+  const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${encodeURIComponent(apiKey)}&geocode=${encodeURIComponent(query)}&format=json&results=6&lang=ru_RU`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Yandex geocoder ${res.status}`);
+  const data = await res.json();
+  const members = data?.response?.GeoObjectCollection?.featureMember || [];
+  const out = [];
+  const seen = new Set();
+  for (const m of members) {
+    const g = m.GeoObject;
+    const meta = g?.metaDataProperty?.GeocoderMetaData;
+    const pos = g?.Point?.pos;
+    const text = meta?.text;
+    if (!text || !pos || seen.has(text)) continue;
+    if (!['house', 'street', 'locality', 'district', 'metro', 'area'].includes(meta.kind)) continue;
+    seen.add(text);
+    out.push({ text, uri: 'geo:' + pos.replace(' ', ',') });
+  }
+  return out;
+}
+
+async function searchAddressSuggestionsViaProxy(query, env) {
   const res = await fetch(`${env.ASSISTANT_FUNCTION_URL}/suggest`, {
     method: 'POST',
     headers: {
@@ -7774,6 +7817,10 @@ async function searchAddressSuggestionsYandex(query) {
 async function resolveGeosuggestUri(uri) {
   const env = (typeof window !== 'undefined' && window.__ENV__) || {};
   const apiKey = env.YANDEX_GEOCODER_API_KEY;
+  if (uri && uri.indexOf('geo:') === 0) {
+    const [gLng, gLat] = uri.slice(4).split(',').map(Number);
+    return Number.isFinite(gLat) && Number.isFinite(gLng) ? { lat: gLat, lng: gLng } : null;
+  }
   if (!apiKey || !uri) return null;
   const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${encodeURIComponent(apiKey)}&geocode=${encodeURIComponent(uri)}&format=json&results=1`;
   const res = await fetch(url);

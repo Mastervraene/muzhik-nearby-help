@@ -341,7 +341,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .role-btn.active:hover { background: var(--accent-strong); }
 
 /* ---------- Карта ---------- */
-#map-container { height: 65vh; min-height: 420px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
+#map-container { height: 50vh; height: 50dvh; max-height: 50vh; min-height: 240px; border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-sm); }
 .map-legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; color: var(--gray-600); flex-wrap: wrap; }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
@@ -1329,6 +1329,8 @@ function dbUserToUser(row) {
     displayName: row.display_name || '',
     lastName: row.last_name || '',
     payoutSettings: row.payout_settings || null,
+    location2: (row.lat2 != null && row.lng2 != null) ? { lat: Number(row.lat2), lng: Number(row.lng2) } : null,
+    district2: row.district2 || '',
     phone: row.phone || '',
     phoneVerified: Boolean(row.phone_verified),
     avatarUrl: row.avatar_url || '',
@@ -1655,11 +1657,46 @@ function desiredPayoutInfo(userId) {
   const u = allUsers.find((x) => x.id === userId);
   const s = u && u.payoutSettings;
   const ownPhone = (u && u.phone) || '';
-  if (!s) return { text: `не указан (по умолчанию — СБП на номер мастера ${ownPhone || '—'})`, method: 'СБП', destination: ownPhone, marker: '' };
+  if (!s) return { text: `не указан (по умолчанию — СБП на номер мастера ${ownPhone || '—'})`, method: 'СБП', destination: ownPhone, marker: '', phone: ownPhone, bank: '', sbpName: '', isDefault: true };
   const parts = (phone) => [`СБП ${phone || '—'}`, s.bank ? `банк: ${s.bank}` : '', s.sbpName ? `имя в СБП: ${s.sbpName}` : ''].filter(Boolean).join(', ');
-  if (s.mode === 'other') return { text: s.text || '—', method: 'Другой способ', destination: s.text || '', marker: 'другой способ' };
-  if (s.mode === 'other_phone') return { text: parts(s.phone), method: 'СБП', destination: parts(s.phone), marker: 'другой номер' };
-  return { text: parts(ownPhone), method: 'СБП', destination: parts(ownPhone), marker: '' };
+  if (s.mode === 'other') return { text: s.text || '—', method: 'Другой способ', destination: s.text || '', marker: 'другой способ', freeText: s.text || '' };
+  if (s.mode === 'other_phone') return { text: parts(s.phone), method: 'СБП', destination: parts(s.phone), marker: 'другой номер', phone: s.phone || '', bank: s.bank || '', sbpName: s.sbpName || '' };
+  return { text: parts(ownPhone), method: 'СБП', destination: parts(ownPhone), marker: '', phone: ownPhone, bank: s.bank || '', sbpName: s.sbpName || '' };
+}
+
+const COPY_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+window.copyPayoutText = function (btn, text) {
+  const done = () => { btn.innerHTML = CHECK_ICON; setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1200); };
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    ta.remove(); done();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+};
+
+function copyBtnHtml(text) {
+  return `<button type="button" title="Скопировать" aria-label="Скопировать" onclick="copyPayoutText(this, ${escapeHtml(JSON.stringify(String(text)))});return false;" style="border:0;background:#fff;border-radius:8px;padding:6px 8px;cursor:pointer;color:var(--gray-700);display:inline-flex;align-items:center;box-shadow:0 0 0 1px rgba(0,0,0,.12);">${COPY_ICON}</button>`;
+}
+
+function desiredPayoutBoxHtml(d) {
+  let inner;
+  if (d.freeText !== undefined) {
+    inner = `<div style="font-size:16px;font-weight:600;margin-top:6px;white-space:pre-wrap;">${escapeHtml(d.freeText || '—')} ${d.freeText ? copyBtnHtml(d.freeText) : ''}</div>`;
+  } else {
+    const line2 = [d.bank ? `Банк: <b>${escapeHtml(d.bank)}</b>` : '', d.sbpName ? `Имя в СБП: <b>${escapeHtml(d.sbpName)}</b>` : ''].filter(Boolean).join(' · ');
+    inner = `<div style="display:flex;align-items:center;gap:10px;margin-top:6px;"><span style="font-size:20px;font-weight:700;letter-spacing:.3px;">${escapeHtml(d.phone || '—')}</span>${d.phone ? copyBtnHtml(d.phone) : ''}</div>
+      ${line2 ? `<div style="margin-top:4px;font-size:14px;">${line2}</div>` : ''}
+      ${d.isDefault ? '<div style="margin-top:4px;font-size:12px;color:var(--gray-600);">Мастер ещё не настраивал выплаты — по умолчанию СБП на номер аккаунта</div>' : ''}`;
+  }
+  return `<div style="margin:0 0 12px;padding:12px 14px;border:2px solid var(--accent, #f5a623);background:var(--accent-soft, #fff7e6);border-radius:12px;">
+    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Желаемый способ получения оплаты ${d.marker ? `<span class="pill orange">${escapeHtml(d.marker)}</span>` : ''}</div>
+    ${inner}
+  </div>`;
 }
 
 function updatePayoutsBadge() {
@@ -1769,10 +1806,7 @@ function payoutWorkerBodyHtml(g) {
     <div class="card-body open" id="payout-body-${g.workerId}">
       <p class="form-section-label">Мастер</p>
       <p style="margin:0 0 8px;"><a href="#" class="link-btn" onclick="goToMasterCard('${g.workerId}');return false;">Открыть карточку мастера · ${escapeHtml(userName(g.workerId))}</a></p>
-      <div class="field-sm dense" style="margin-bottom:8px;">
-        <label>Желаемый способ получения оплаты ${desired.marker ? `<span class="pill orange">${escapeHtml(desired.marker)}</span>` : ''}</label>
-        <input type="text" disabled value="${escapeHtml(desired.text)}" />
-      </div>
+      ${desiredPayoutBoxHtml(desired)}
       <p class="form-section-label">Выполненные заказы</p>
       ${rowHtml}
       ${formHtml}
@@ -4073,9 +4107,23 @@ function masterFormHtml(u) {
           <input type="number" step="0.000001" id="mf-lng-${u.id}" value="${u.location.lng ?? ''}" />
         </div>
       </div>
+      <div class="grid-geo" style="margin-top:6px;">
+        <div class="field-sm dense">
+          <label title="Вторая локация мастера">2-я</label>
+          <input type="text" disabled value="${escapeHtml(u.district2 || '—')}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Широта 2</label>
+          <input type="number" step="0.000001" id="mf-lat2-${u.id}" value="${u.location2 ? u.location2.lat : ''}" />
+        </div>
+        <div class="field-sm dense">
+          <label>Долгота 2</label>
+          <input type="number" step="0.000001" id="mf-lng2-${u.id}" value="${u.location2 ? u.location2.lng : ''}" />
+        </div>
+      </div>
       <details class="map-toggle-wrap" id="mf-map-details-${u.id}">
         <summary>Карта</summary>
-        ${Boolean(u.location.lat && u.location.lng)
+        ${Boolean((u.location.lat && u.location.lng) || u.location2)
           ? `<div class="user-mini-map" id="mf-map-${u.id}"></div>`
           : `<div class="map-note">Локация не указана — нечего показать на карте.</div>`}
       </details>
@@ -4199,6 +4247,8 @@ function wireMasterForm(u) {
       search_radius_km: Number(document.getElementById(`mf-radius-${u.id}`).value || 3),
       lat: Number(document.getElementById(`mf-lat-${u.id}`).value || 0),
       lng: Number(document.getElementById(`mf-lng-${u.id}`).value || 0),
+      lat2: document.getElementById(`mf-lat2-${u.id}`).value === '' || document.getElementById(`mf-lng2-${u.id}`).value === '' ? null : Number(document.getElementById(`mf-lat2-${u.id}`).value),
+      lng2: document.getElementById(`mf-lat2-${u.id}`).value === '' || document.getElementById(`mf-lng2-${u.id}`).value === '' ? null : Number(document.getElementById(`mf-lng2-${u.id}`).value),
       available_as_worker: document.getElementById(`mf-worker-${u.id}`).value === '1',
     };
     const btn = document.getElementById(`save-master-${u.id}`);
@@ -4562,12 +4612,16 @@ function wireMasterForm(u) {
       try {
         await loadYmapsScript();
         window.ymaps.ready(() => {
+          const pts = [];
+          if (u.location.lat && u.location.lng) pts.push({ c: [u.location.lat, u.location.lng], preset: 'islands#redDotIcon', hint: '1-я локация' });
+          if (u.location2) pts.push({ c: [u.location2.lat, u.location2.lng], preset: 'islands#blueDotIcon', hint: '2-я локация' });
           const map = new window.ymaps.Map(mapEl, {
-            center: [u.location.lat, u.location.lng],
+            center: pts[0].c,
             zoom: 14,
             controls: ['zoomControl'],
           });
-          map.geoObjects.add(new window.ymaps.Placemark([u.location.lat, u.location.lng], {}, { preset: 'islands#redDotIcon' }));
+          pts.forEach((pt) => map.geoObjects.add(new window.ymaps.Placemark(pt.c, { hintContent: pt.hint }, { preset: pt.preset })));
+          if (pts.length > 1) map.setBounds(map.geoObjects.getBounds(), { checkZoomRange: true, zoomMargin: 40 });
         });
       } catch (err) {
         mapEl.innerHTML = `<div class="map-note">${escapeHtml(err.message)}</div>`;
@@ -5490,7 +5544,16 @@ function loadYmapsScript() {
   });
 }
 
+function fitMapHeight() {
+  const el = document.getElementById('map-container');
+  if (!el) return;
+  el.style.height = Math.max(240, Math.round(window.innerHeight * 0.5)) + 'px';
+  if (window.__adminMap) { try { window.__adminMap.container.fitToViewport(); } catch (e) {} }
+}
+window.addEventListener('resize', fitMapHeight);
+
 async function renderMap() {
+  fitMapHeight();
   if (!renderMapNote()) return;
   if (mapLoaded) { fillMapPoints(); return; }
   try {
@@ -5785,6 +5848,25 @@ function fillMapPoints() {
         }
       );
       map.geoObjects.add(pm);
+      if (u.location2) {
+        pointCount++;
+        const pm2 = new window.ymaps.Placemark(
+          [u.location2.lat, u.location2.lng],
+          {
+            hintContent: '2-я локация',
+            balloonContentHeader: escapeHtml(userNameLabel(u) || 'Мастер') + ' — 2-я локация',
+            balloonContentBody: `${escapeHtml(u.district2 || '')}<br/>${escapeHtml(u.phone || '')}<br/><a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Открыть карточку мастера →</a>`,
+          },
+          {
+            iconLayout: 'default#image',
+            iconImageHref: 'logo.png',
+            iconImageSize: isCenter ? [40, 40] : [32, 32],
+            iconImageOffset: isCenter ? [-20, -20] : [-16, -16],
+            iconOpacity: opacity,
+          }
+        );
+        map.geoObjects.add(pm2);
+      }
     });
 
   // Кружок радиуса поиска — вокруг мастера (его радиус по умолчанию) или
@@ -5799,6 +5881,11 @@ function fillMapPoints() {
     );
     map.geoObjects.add(circle);
     mapRadiusCircles.push(circle);
+    if (zoneMaster.location2) {
+      const c2 = new window.ymaps.Circle([[zoneMaster.location2.lat, zoneMaster.location2.lng], zoneMaster.searchRadiusKm * 1000], {}, circleStyle);
+      map.geoObjects.add(c2);
+      mapRadiusCircles.push(c2);
+    }
   } else if (zoneOrder) {
     const circle = new window.ymaps.Circle(
       [[zoneOrder.exactLocation.lat, zoneOrder.exactLocation.lng], (zoneOrder.searchRadiusKm || 3) * 1000],
@@ -5821,6 +5908,11 @@ function fillMapPoints() {
       );
       map.geoObjects.add(circle);
       mapRadiusCircles.push(circle);
+      if (u.location2) {
+        const c2 = new window.ymaps.Circle([[u.location2.lat, u.location2.lng], u.searchRadiusKm * 1000], {}, circleStyle);
+        map.geoObjects.add(c2);
+        mapRadiusCircles.push(c2);
+      }
     });
   }
   if (mapShowAllOrderRadii) {
