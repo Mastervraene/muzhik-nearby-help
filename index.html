@@ -4002,7 +4002,7 @@ function saveUser(user) {
           lng: user.location?.lng,
           // Фамилия и вторая локация шлются отдельными точечными вызовами
           // (мастер-анкета / профиль), чтобы общий saveUser их случайно не затёр.
-          ...(user.lastName ? { lastName: user.lastName } : {}),
+          ...(user.lastName !== undefined ? { lastName: user.lastName || '' } : {}),
         },
       }).catch((err) => {
         // Лимит смены геолокации (не более 5 раз в месяц — см. save-profile.ts)
@@ -5541,7 +5541,7 @@ let editNameState = null;
 function openEditName() {
   const user = currentUser();
   if (!user) return;
-  editNameState = { value: user.displayName || '', error: '' };
+  editNameState = { value: user.displayName || '', lastName: user.lastName || '', error: '' };
   render();
 }
 
@@ -5550,7 +5550,7 @@ function cancelEditName() {
   render();
 }
 
-function submitEditName(value) {
+function submitEditName(value, lastNameValue) {
   if (!editNameState) return;
   const trimmed = (value || '').trim();
   if (!trimmed) {
@@ -5560,8 +5560,9 @@ function submitEditName(value) {
     return;
   }
   const user = currentUser();
-  if (user && user.displayName !== trimmed) {
-    saveUser({ ...user, displayName: trimmed });
+  const lastTrimmed = (lastNameValue || '').trim();
+  if (user && (user.displayName !== trimmed || (user.lastName || '') !== lastTrimmed)) {
+    saveUser({ ...user, displayName: trimmed, lastName: lastTrimmed });
   }
   editNameState = null;
   render();
@@ -8270,10 +8271,13 @@ function renderEditNameOverlay(st) {
   return `
     <div class="map-picker-overlay" data-action="edit-name-cancel">
       <div class="field-card" style="max-width:360px;width:100%;margin:0;" onclick="event.stopPropagation()">
-        <p><b>Изменить имя</b></p>
+        <p><b>Изменить имя и фамилию</b></p>
         ${st.error ? `<div class="order-warning">${escapeHtml(st.error)}</div>` : ''}
         <label>Имя</label>
-        <input type="text" id="edit-name-input" autocomplete="name" value="${escapeHtml(st.value)}" />
+        <input type="text" id="edit-name-input" autocomplete="given-name" value="${escapeHtml(st.value)}" />
+        <label style="margin-top:10px;">Фамилия</label>
+        <input type="text" id="edit-lastname-input" autocomplete="family-name" value="${escapeHtml(st.lastName || '')}" />
+        <p class="order-meta" style="margin-top:6px;">Другим пользователям показывается только имя.</p>
         <button class="primary-button" id="edit-name-submit" style="margin-top:14px;">Сохранить</button>
         <button class="secondary-button" type="button" style="margin-top:10px;box-sizing:border-box;" data-action="edit-name-cancel">Отмена</button>
       </div>
@@ -10670,7 +10674,7 @@ function renderProfile() {
             <span class="profile-avatar-edit-badge" aria-hidden="true">${ICON_PENCIL}</span>
           </div>
           <input type="file" id="profile-avatar-file" accept="image/*" style="display:none;" />
-          <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml(user.displayName)}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя" title="Изменить имя">${ICON_PENCIL}</button></p>
+          <p style="margin:0;display:flex;align-items:center;gap:6px;"><b>${escapeHtml([user.displayName, user.lastName].filter(Boolean).join(' '))}</b><button type="button" class="icon-edit-btn" data-action="edit-name" aria-label="Изменить имя и фамилию" title="Изменить имя и фамилию">${ICON_PENCIL}</button></p>
         </div>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button></p>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён' : 'Telegram не подключён'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
@@ -12789,9 +12793,12 @@ function wireEvents() {
   const editNameInput = document.getElementById('edit-name-input');
   if (editNameInput) {
     const editNameSubmit = document.getElementById('edit-name-submit');
-    const submit = () => submitEditName(editNameInput.value);
+    const submit = () => submitEditName(editNameInput.value, document.getElementById('edit-lastname-input')?.value);
     if (editNameSubmit) editNameSubmit.addEventListener('click', submit);
     editNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    document.getElementById('edit-lastname-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
     });
     editNameInput.focus();

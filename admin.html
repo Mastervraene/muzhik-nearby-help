@@ -4049,6 +4049,14 @@ function masterFormHtml(u) {
           <summary>История номеров телефона</summary>
           <div class="chat-thread" id="phone-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
         </details>
+        <details class="requests-history" id="name-history-details-${u.id}" style="margin-top:8px;">
+          <summary>История имени и фамилии</summary>
+          <div class="chat-thread" id="name-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
+        </details>
+        <details class="requests-history" id="location-history-details-${u.id}" style="margin-top:8px;">
+          <summary>История локаций</summary>
+          <div class="chat-thread" id="location-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
+        </details>
         <details class="requests-history" id="login-history-details-${u.id}" style="margin-top:8px;">
           <summary>История входов (IP)</summary>
           <div class="chat-thread" id="login-history-list-${u.id}"><div class="chat-empty">Открой, чтобы загрузить…</div></div>
@@ -4574,6 +4582,29 @@ function wireMasterForm(u) {
       }
     });
   }
+
+  const wireProfileHistory = (detailsId, listId, fields, emptyText, render) => {
+    const det = document.getElementById(detailsId);
+    if (!det) return;
+    det.addEventListener('toggle', async () => {
+      if (!det.open || det.dataset.loaded) return;
+      det.dataset.loaded = '1';
+      const listEl = document.getElementById(listId);
+      try {
+        const rows = await getRows('user_contact_history', 'order=changed_at.desc&limit=100', ['user_id', u.id]);
+        const list = (rows || []).filter((r) => fields.includes(r.field));
+        listEl.innerHTML = list.length ? list.map(render).join('') : `<div class="chat-empty">${emptyText}</div>`;
+      } catch (err) {
+        listEl.innerHTML = `<div class="chat-empty">Не удалось загрузить: ${escapeHtml(err.message)}</div>`;
+        det.dataset.loaded = '';
+      }
+    });
+  };
+  const arrowRow = (r, label) => `<p class="order-meta" style="margin:0 0 4px;">${label ? '<b>' + label + ':</b> ' : ''}${escapeHtml(r.old_value || '—')} → ${escapeHtml(r.new_value || '—')} — ${escapeHtml(fmtDate(r.changed_at))}</p>`;
+  wireProfileHistory(`name-history-details-${u.id}`, `name-history-list-${u.id}`, ['display_name', 'last_name'], 'Смен имени и фамилии не было',
+    (r) => arrowRow(r, r.field === 'last_name' ? 'Фамилия' : 'Имя'));
+  wireProfileHistory(`location-history-details-${u.id}`, `location-history-list-${u.id}`, ['location', 'location2'], 'Смен локации не было',
+    (r) => arrowRow(r, r.field === 'location2' ? '2-я локация' : 'Локация'));
 
   const loginHistoryDetails = document.getElementById(`login-history-details-${u.id}`);
   if (loginHistoryDetails) {
