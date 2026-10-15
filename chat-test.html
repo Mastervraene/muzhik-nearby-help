@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Чат-помощник — тест</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --me:#2f6fed; --ai:#e9ecf1; --text:#1c2230; --muted:#7a8394; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,Segoe UI,Roboto,sans-serif; display:flex; flex-direction:column; height:100dvh; }
+  header { padding:12px 16px; background:var(--card); border-bottom:1px solid #e2e5ea; display:flex; justify-content:space-between; align-items:center; }
+  header b { font-size:17px; } header small { color:var(--muted); }
+  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:82%; padding:10px 14px; border-radius:16px; white-space:pre-wrap; word-wrap:break-word; }
+  .me { align-self:flex-end; background:var(--me); color:#fff; border-bottom-right-radius:4px; }
+  .ai { align-self:flex-start; background:var(--ai); border-bottom-left-radius:4px; }
+  .sys { align-self:center; color:var(--muted); font-size:13px; text-align:center; }
+  #draft { margin:0 16px 8px; padding:12px 14px; background:var(--card); border:1px solid #dfe3ea; border-radius:14px; display:none; font-size:14px; }
+  #draft h4 { margin:0 0 6px; font-size:15px; } #draft div { margin:2px 0; color:var(--muted); } #draft div b { color:var(--text); font-weight:500; }
+  #create { margin-top:10px; width:100%; padding:12px; border:0; border-radius:12px; background:#cfd4dc; color:#fff; font-size:16px; cursor:not-allowed; }
+  #create.on { background:#1f9d55; cursor:pointer; }
+  form { display:flex; gap:8px; padding:10px 16px 16px; background:var(--card); border-top:1px solid #e2e5ea; }
+  textarea { flex:1; resize:none; border:1px solid #d3d8e0; border-radius:12px; padding:10px 12px; font:inherit; max-height:120px; }
+  #send { border:0; border-radius:12px; padding:0 18px; background:var(--me); color:#fff; font-size:16px; }
+  #send:disabled { opacity:.5; }
+  #reset { background:none; border:0; color:var(--muted); font-size:13px; cursor:pointer; }
+</style>
+</head>
+<body>
+<header><div><b>Чат-помощник</b> <small>тестовая версия</small></div><button id="reset" type="button">Начать заново</button></header>
+<div id="log"></div>
+<div id="draft"></div>
+<form id="form">
+  <textarea id="text" rows="1" placeholder="Опишите, что нужно сделать…" maxlength="1000"></textarea>
+  <button id="send" type="submit">➤</button>
+</form>
+<script>
+(function () {
+  var URL_BASE = 'https://youyvbqdxuigvjciklfk.supabase.co/functions/v1';
+  var ANON = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
+  var HIST_KEY = 'muzhik_chat_test_v1';
+  var DRAFT_KEY = 'muzhik_chat_draft_v1';
+  var CAT = { electrics:'Электрика', plumbing:'Сантехника', windows_doors:'Окна и двери', air_conditioning:'Кондиционеры', assembly:'Сборка мебели', minor_repair:'Мелкий ремонт', household_help:'Уборка и бытовая помощь', moving_help:'Вынос и перемещение', cars:'Автомобили', computers:'Компьютеры', other:'Другое' };
+  var URG = { normal:'обычная', soon:'в ближайшие часы', now:'срочно' };
+  var log = document.getElementById('log'), box = document.getElementById('draft'), ta = document.getElementById('text'), send = document.getElementById('send');
+  var messages = [], draft = null, busy = false;
+
+  function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} return null; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+  function add(cls, text) { var d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; }
+  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft })); }
+
+  function renderDraft() {
+    if (!draft) { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.innerHTML = '<h4>Черновик заказа</h4>' +
+      '<div>Что: <b>' + esc(draft.title || '—') + '</b></div>' +
+      '<div>Категория: <b>' + esc(CAT[draft.category] || 'Другое') + '</b></div>' +
+      '<div>Описание: <b>' + esc(draft.description || '—') + '</b></div>' +
+      '<div>Адрес: <b>' + esc(draft.address || '—') + '</b></div>' +
+      '<div>Срочность: <b>' + esc(URG[draft.urgency] || 'обычная') + '</b></div>' +
+      '<button id="create" type="button" class="' + (draft.ready ? 'on' : '') + '">Создать заказ</button>';
+    document.getElementById('create').onclick = function () {
+      if (!draft.ready) { add('sys', 'Пока не хватает данных — ответьте на вопросы выше.'); return; }
+      ls(DRAFT_KEY, JSON.stringify(draft));
+      add('sys', 'Это тест: черновик сохранён в браузере, заказ не создаётся. В боевой версии здесь откроется оформление и оплата.');
+    };
+  }
+
+  function restore() {
+    var raw = ls(HIST_KEY);
+    if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; } catch (e) {} }
+    if (!messages.length) add('ai', 'Здравствуйте! Расскажите, что случилось или что нужно сделать, — я помогу оформить заявку.');
+    messages.forEach(function (m) { add(m.role === 'user' ? 'me' : 'ai', m.text); });
+    renderDraft();
+  }
+
+  document.getElementById('reset').onclick = function () { messages = []; draft = null; ls(HIST_KEY, null); log.innerHTML = ''; renderDraft(); add('ai', 'Начнём заново. Что нужно сделать?'); };
+
+  async function submit(e) {
+    e.preventDefault();
+    var t = ta.value.trim();
+    if (!t || busy) return;
+    var uid = ls('muzhik_session_v1'), tok = ls('muzhik_session_token_v1');
+    if (!uid || !tok) { add('sys', 'Сначала войдите на сайте (мастерврайоне.рф), потом вернитесь на эту страницу.'); return; }
+    ta.value = ''; busy = true; send.disabled = true;
+    messages.push({ role: 'user', text: t }); add('me', t);
+    var wait = add('sys', 'печатает…');
+    try {
+      var res = await fetch(URL_BASE + '/chat-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
+        body: JSON.stringify({ userId: uid, sessionToken: tok, messages: messages })
+      });
+      var data = await res.json().catch(function () { return null; });
+      wait.remove();
+      if (!res.ok || !data || !data.ok) {
+        var err = data && data.error;
+        add('sys', err === 'rate_limited' ? 'Лимит сообщений на сегодня исчерпан.' : err === 'unauthorized' ? 'Сессия устарела — войдите на сайте заново.' : 'Не получилось ответить, попробуйте ещё раз.');
+        messages.pop();
+      } else {
+        messages.push({ role: 'assistant', text: data.reply });
+        add('ai', data.reply);
+        if (data.draft) { draft = data.draft; renderDraft(); }
+        if (data.needsHuman) add('sys', 'Передаю разговор администратору (в тесте — только отметка).');
+      }
+    } catch (x) {
+      wait.remove(); add('sys', 'Нет связи, попробуйте ещё раз.'); messages.pop();
+    }
+    busy = false; send.disabled = false; save(); ta.focus();
+  }
+  document.getElementById('form').addEventListener('submit', submit);
+  ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(e); } });
+  restore();
+})();
+</script>
+</body>
+</html>
