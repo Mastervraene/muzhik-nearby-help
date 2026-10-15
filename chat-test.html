@@ -56,6 +56,12 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .draft-more div { margin:3px 0; color:var(--gray-500); } .draft-more div b { color:var(--gray-900); font-weight:500; }
 .draft-btn { flex:none; padding:10px 16px; border:0; border-radius:999px; background:var(--gray-300); color:#fff; font-size:14px; font-weight:600; font-family:inherit; }
 .draft-btn.on { background:var(--accent); cursor:pointer; }
+.ph-row { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 0; }
+.ph-row:empty { display:none; }
+.ph { position:relative; width:44px; height:44px; border-radius:10px; background:var(--gray-100); overflow:visible; }
+.ph img { width:100%; height:100%; object-fit:cover; border-radius:10px; display:block; }
+.ph.up img { opacity:.4; }
+.ph button { position:absolute; top:-6px; right:-6px; width:18px; height:18px; border:0; border-radius:50%; background:var(--gray-700); color:#fff; font-size:11px; line-height:18px; padding:0; cursor:pointer; }
 .home-hero-hint { margin:10px 0 0; font-size:15px; line-height:24px; color:var(--gray-400); }
 .app-shell {
   width: 100%;
@@ -280,8 +286,10 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     </div>
     <div class="composer-card">
       <textarea id="text" class="composer-textarea" rows="1" maxlength="1000" aria-label="Опишите проблему или задачу"></textarea>
+      <div class="ph-row" id="photos"></div>
+      <input type="file" id="file" accept="image/*" multiple style="display:none" />
       <div class="composer-actions">
-        <div class="composer-tools"><button type="button" class="tool-button" id="plus" title="Фото в тесте недоступны"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
+        <div class="composer-tools"><button type="button" class="tool-button" id="plus" title="Приложить фото"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
         <div class="composer-tools">
           <button type="button" class="tool-button" id="mic" title="Голос в тесте недоступен"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg></button>
           <button type="button" class="send-button" id="send" aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
@@ -301,12 +309,13 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   var URG = { normal:'обычная', soon:'в ближайшие часы', now:'срочно' };
   var log = document.getElementById('log'), ta = document.getElementById('text'), send = document.getElementById('send');
   var messages = [], draft = null, busy = false, draftEl = null;
+  var photos = [], orderPhotos = [], MAX_PHOTOS = 5;
 
   function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} return null; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
   function toBottom() { log.scrollTop = log.scrollHeight; }
   function add(cls, text) { log.classList.remove('empty'); var d = document.createElement('div'); d.className = 'bubble ' + cls; d.textContent = text; log.appendChild(d); toBottom(); return d; }
-  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft })); }
+  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos })); }
   function grade() { send.classList.toggle('grade-3', Boolean(ta.value.trim())); }
   function grow() { if (!ta.value) { ta.style.height = ''; return; } ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
 
@@ -347,7 +356,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     var now = new Date().toISOString();
     var order = {
       title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: '',
-      scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: [], hasVoiceTranscript: false, voiceTranscript: '',
+      scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: orderPhotos, hasVoiceTranscript: false, voiceTranscript: '',
       exactLocation: loc || { lat: 0, lng: 0 }, district: draft.address, houseNumberPublic: '', fullAddress: draft.address,
       desiredDate: '', timeWindow: '', urgency: draft.urgency, customerBudget: null,
       estimate: { min: 500, max: 500, factors: [] }, status: 'searching', timeline: [{ status: 'searching', at: now }],
@@ -374,18 +383,56 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 
   function restore() {
     var raw = ls(HIST_KEY);
-    if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; } catch (e) {} }
+    if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; } catch (e) {} }
     messages.forEach(function (m) { add(m.role === 'user' ? 'me' : 'ai', m.text); });
     renderDraft();
     if (!messages.length) log.classList.add('empty');
   }
 
   document.getElementById('reset').onclick = function () {
-    messages = []; draft = null; draftEl = null; ls(HIST_KEY, null);
+    messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; renderPhotos(); ls(HIST_KEY, null);
     document.querySelectorAll('.chat-screen .bubble,.chat-screen .draft-card').forEach(function (n) { n.remove(); });
     log.classList.add('empty'); ta.value = ''; grow(); grade();
   };
-  document.getElementById('plus').onclick = function () { add('sys', 'Фото в тестовом чате пока недоступны.'); };
+  function renderPhotos() {
+    var box = document.getElementById('photos'); box.innerHTML = '';
+    photos.forEach(function (p, i) {
+      var d = document.createElement('div'); d.className = 'ph' + (p.up ? ' up' : '');
+      var im = document.createElement('img'); im.src = p.preview || p.url || ''; d.appendChild(im);
+      var x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.onclick = function () { photos.splice(i, 1); renderPhotos(); };
+      d.appendChild(x); box.appendChild(d);
+    });
+  }
+  function shrink(file) {
+    return new Promise(function (resolve) {
+      var img = new Image(), u = URL.createObjectURL(file);
+      img.onload = function () {
+        var k = Math.min(1, 1280 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        cv.toBlob(function (b) { URL.revokeObjectURL(u); resolve(b || file); }, 'image/jpeg', 0.82);
+      };
+      img.onerror = function () { URL.revokeObjectURL(u); resolve(file); };
+      img.src = u;
+    });
+  }
+  async function addPhotos(files) {
+    var list = Array.prototype.slice.call(files).filter(function (f) { return f.type && f.type.indexOf('image/') === 0; });
+    var room = MAX_PHOTOS - photos.length - orderPhotos.length;
+    if (room <= 0) { add('sys', 'Можно приложить не больше ' + MAX_PHOTOS + ' фото.'); return; }
+    list.slice(0, room).forEach(async function (f) {
+      var p = { up: true, preview: URL.createObjectURL(f), name: f.name }; photos.push(p); renderPhotos();
+      try {
+        var blob = await shrink(f), path = Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg';
+        var r = await fetch(URL_BASE + '/storage/v1/object/order-attachments/' + path, { method: 'POST', headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Content-Type': 'image/jpeg' }, body: blob });
+        if (!r.ok) throw new Error('upload ' + r.status);
+        p.url = URL_BASE + '/storage/v1/object/public/order-attachments/' + path; p.up = false;
+      } catch (e) { photos.splice(photos.indexOf(p), 1); add('sys', 'Не удалось загрузить фото.'); }
+      renderPhotos();
+    });
+  }
+  document.getElementById('plus').onclick = function () { document.getElementById('file').click(); };
+  document.getElementById('file').onchange = function (e) { addPhotos(e.target.files); e.target.value = ''; };
   document.getElementById('mic').onclick = function () { add('sys', 'Голос в тестовом чате пока недоступен.'); };
 
   // аватарка из публичного профиля
@@ -416,11 +463,20 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   async function submit(e) {
     if (e) e.preventDefault();
     var t = ta.value.trim();
-    if (!t || busy) return;
+    var ready = photos.filter(function (p) { return !p.up && p.url; });
+    if (photos.some(function (p) { return p.up; })) { add('sys', 'Фото ещё загружается…'); return; }
+    if ((!t && !ready.length) || busy) return;
+    if (!t) t = 'Фото приложено.';
     var uid = ls('muzhik_session_v1'), tok = ls('muzhik_session_token_v1');
     if (!uid || !tok) { add('sys', 'Сначала войдите на сайте (мастерврайоне.рф), потом вернитесь на эту страницу.'); return; }
     ta.value = ''; grow(); grade(); busy = true;
-    messages.push({ role: 'user', text: t }); var mine = add('me', t);
+    var shown = t;
+    if (ready.length) {
+      orderPhotos = orderPhotos.concat(ready.map(function (p, i) { return { id: 'att-' + Date.now() + '-' + i, type: 'photo', url: p.url, name: p.name || 'photo.jpg', sizeBytes: 0, uploadedAt: Date.now(), archiveNamed: false }; }));
+      t += ' [клиент приложил фото: ' + ready.length + ' шт.]'; shown += '\n📷 ' + ready.length;
+      photos = []; renderPhotos();
+    }
+    messages.push({ role: 'user', text: t }); var mine = add('me', shown);
     var wait = add('ai typing', ''); wait.innerHTML = '<i></i><i></i><i></i>';
     try {
       var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
