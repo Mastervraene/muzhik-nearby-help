@@ -451,7 +451,7 @@ body {
   border: none;
   background: var(--gray-100);
   color: var(--gray-600);
-  padding: clamp(6px, 2vw, 8px) clamp(6px, 2vw, 9px);
+  padding: clamp(5px, 1.6vw, 6px) clamp(6px, 2vw, 9px);
   border-radius: 999px;
   font-size: clamp(11px, 3vw, 12.5px);
   font-family: inherit;
@@ -669,6 +669,8 @@ body {
   padding: 6px 10px;
   border-radius: 999px;
 }
+
+.attachment-preview:empty { display: none; }
 
 .attachment-preview {
   display: flex;
