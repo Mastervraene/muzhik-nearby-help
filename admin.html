@@ -6469,7 +6469,7 @@ function startChatsPolling() {
   chatPoll = setInterval(() => {
     refreshChatsBadge();
     const panel = document.getElementById('panel-chats');
-    if (panel && panel.classList.contains('active')) { if (chatOpenId) openChat(chatOpenId, true); else loadChats(true); }
+    if (panel && panel.classList.contains('active') && !chatAllView) { if (chatOpenId) openChat(chatOpenId, true); else loadChats(true); }
   }, 15000);
 }
 async function loadChats(silent) {
@@ -6495,16 +6495,18 @@ function renderChatList() {
   document.getElementById('ch-all').onclick = showAllChats;
   el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = () => openChat(r.dataset.uid); });
 }
+let chatAllView = false;
 async function showAllChats() {
+  chatAllView = true;
   const el = document.getElementById('chats-body');
   el.innerHTML = '<div class="ch-bar"><button id="ca-back" type="button">← К чатам</button><b>Все переписки</b></div><p class="count-hint">Загрузка…</p>';
-  document.getElementById('ca-back').onclick = () => { loadChats(); };
+  document.getElementById('ca-back').onclick = () => { chatAllView = false; loadChats(); };
   try {
     const d = await callAdminPricing('list_chats');
     const list = (d.chats || []).slice().sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
     el.innerHTML = '<div class="ch-bar"><button id="ca-back" type="button">← К чатам</button><b>Все переписки (' + list.length + ')</b></div><p class="count-hint">Включая те, где ответил только ИИ. Нажмите на строку, чтобы раскрыть; только просмотр.</p>' +
       (list.length ? list.map((c, i) => '<div class="ch-row" data-i="' + i + '" style="flex-wrap:wrap"><div class="ch-main"><div class="ch-name">' + chEsc(c.title || 'Без названия') + '<span class="ch-chip">' + chEsc(c.userName || 'Гость') + '</span></div></div><div class="ch-meta">' + chTime(c.lastAt) + '</div><div class="ca-det" style="display:none;width:100%;margin-top:8px"></div></div>').join('') : '<p class="count-hint">Переписок нет.</p>');
-    document.getElementById('ca-back').onclick = () => { loadChats(); };
+    document.getElementById('ca-back').onclick = () => { chatAllView = false; loadChats(); };
     el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = (ev) => {
       if (ev.target.closest('.ca-det')) return;
       const det = r.querySelector('.ca-det'); const c = list[Number(r.dataset.i)];
@@ -6512,7 +6514,7 @@ async function showAllChats() {
         det.innerHTML = (c.messages || []).map((m) => '<div class="ch-msg ' + (m.role === 'user' ? 'user' : m.role === 'admin' ? 'admin' : 'assistant') + '">' + chEsc(m.text) + '</div>').join('') +
           (c.userId ? '<button type="button" class="ca-open" style="margin-top:8px">Открыть чат клиента</button>' : '');
         det.style.display = '';
-        const ob = det.querySelector('.ca-open'); if (ob) ob.onclick = () => openChat(c.userId);
+        const ob = det.querySelector('.ca-open'); if (ob) ob.onclick = () => { chatAllView = false; openChat(c.userId); };
       } else det.style.display = 'none';
     }; });
   } catch (e) { el.innerHTML += '<p class="count-hint">Ошибка: ' + chEsc(e.message) + '</p>'; }
@@ -6658,7 +6660,7 @@ function activateTab(tab) {
   if (tab === 'map') renderMap();
   if (tab === 'pricing' && !pricingLoaded) loadPricing();
   if (tab === 'ai') loadAi();
-  if (tab === 'chats') { chatOpenId = null; loadChats(); }
+  if (tab === 'chats') { chatOpenId = null; chatAllView = false; loadChats(); }
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
   if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
 }
