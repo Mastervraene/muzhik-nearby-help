@@ -6486,13 +6486,36 @@ function renderChatList() {
   list = list.slice().sort((a, b) => (chatSortAsc ? 1 : -1) * (new Date(a.lastAt) - new Date(b.lastAt)));
   const opt = (v, t) => '<option value="' + v + '"' + (chatFilter === v ? ' selected' : '') + '>' + t + '</option>';
   el.innerHTML = '<div class="ch-bar"><select id="ch-filter">' + opt('all', 'Все') + opt('await', 'Ждут ответа') + opt('unread', 'Не прочитано') + opt('read', 'Прочитано') + '</select>' +
-    '<button id="ch-sort" type="button">' + (chatSortAsc ? '↑ Старые сверху' : '↓ Новые сверху') + '</button><button id="ch-refresh" type="button">Обновить</button></div>' +
+    '<button id="ch-sort" type="button">' + (chatSortAsc ? '↑ Старые сверху' : '↓ Новые сверху') + '</button><button id="ch-refresh" type="button">Обновить</button><button id="ch-all" type="button">Все переписки</button></div>' +
     (list.length ? list.map((t) => '<div class="ch-row ' + (t.awaiting ? 'await' : t.unread ? 'unread' : '') + '" data-uid="' + chEsc(t.userId) + '"><span class="ch-dot"></span><div class="ch-main"><div class="ch-name">' + chEsc(t.userName || 'Гость') + (t.phone ? ' · ' + chEsc(t.phone) : '') +
       (t.awaiting ? '<span class="ch-chip await">ждёт ответа</span>' : '') + '<span class="ch-chip">' + (t.mode === 'human' ? 'человек' : 'ИИ') + '</span></div><div class="ch-last">' + chEsc(t.lastText) + '</div></div><div class="ch-meta">' + chTime(t.lastAt) + '</div></div>').join('') : '<p class="count-hint">Чатов нет.</p>');
   document.getElementById('ch-filter').onchange = (e) => { chatFilter = e.target.value; renderChatList(); };
   document.getElementById('ch-sort').onclick = () => { chatSortAsc = !chatSortAsc; renderChatList(); };
   document.getElementById('ch-refresh').onclick = () => loadChats();
+  document.getElementById('ch-all').onclick = showAllChats;
   el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = () => openChat(r.dataset.uid); });
+}
+async function showAllChats() {
+  const el = document.getElementById('chats-body');
+  el.innerHTML = '<div class="ch-bar"><button id="ca-back" type="button">← К чатам</button><b>Все переписки</b></div><p class="count-hint">Загрузка…</p>';
+  document.getElementById('ca-back').onclick = () => { loadChats(); };
+  try {
+    const d = await callAdminPricing('list_chats');
+    const list = (d.chats || []).slice().sort((a, b) => new Date(b.lastAt || 0) - new Date(a.lastAt || 0));
+    el.innerHTML = '<div class="ch-bar"><button id="ca-back" type="button">← К чатам</button><b>Все переписки (' + list.length + ')</b></div><p class="count-hint">Включая те, где ответил только ИИ. Нажмите на строку, чтобы раскрыть; только просмотр.</p>' +
+      (list.length ? list.map((c, i) => '<div class="ch-row" data-i="' + i + '" style="flex-wrap:wrap"><div class="ch-main"><div class="ch-name">' + chEsc(c.title || 'Без названия') + '<span class="ch-chip">' + chEsc(c.userName || 'Гость') + '</span></div></div><div class="ch-meta">' + chTime(c.lastAt) + '</div><div class="ca-det" style="display:none;width:100%;margin-top:8px"></div></div>').join('') : '<p class="count-hint">Переписок нет.</p>');
+    document.getElementById('ca-back').onclick = () => { loadChats(); };
+    el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = (ev) => {
+      if (ev.target.closest('.ca-det')) return;
+      const det = r.querySelector('.ca-det'); const c = list[Number(r.dataset.i)];
+      if (det.style.display === 'none') {
+        det.innerHTML = (c.messages || []).map((m) => '<div class="ch-msg ' + (m.role === 'user' ? 'user' : m.role === 'admin' ? 'admin' : 'assistant') + '">' + chEsc(m.text) + '</div>').join('') +
+          (c.userId ? '<button type="button" class="ca-open" style="margin-top:8px">Открыть чат клиента</button>' : '');
+        det.style.display = '';
+        const ob = det.querySelector('.ca-open'); if (ob) ob.onclick = () => openChat(c.userId);
+      } else det.style.display = 'none';
+    }; });
+  } catch (e) { el.innerHTML += '<p class="count-hint">Ошибка: ' + chEsc(e.message) + '</p>'; }
 }
 function chMsgHtml(m) {
   const sys = m.role === 'user' && String(m.text).startsWith('[Система]');
