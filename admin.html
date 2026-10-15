@@ -523,6 +523,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="map">Карта</button>
     <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="payouts">Выплаты<span id="payouts-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
+    <button class="tab-btn" data-tab="accounting">Бухгалтерия</button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -718,6 +719,19 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   <div class="tab-panel" id="panel-stats">
     <div class="stats-note">Собирается автоматически каждую ночь в 00:00 по Москве (фоновая функция compute-daily-stats). Данные за сегодня появятся только после ближайшего ночного расчёта.</div>
     <div class="stats-table-wrap" id="stats-table-wrap"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-accounting">
+    <div class="toolbar">
+      <select id="acc-period">
+        <option value="1">Сегодня</option>
+        <option value="7">7 дней</option>
+        <option value="30" selected>30 дней</option>
+        <option value="0">Всё время</option>
+      </select>
+      <button type="button" class="btn-sm ghost" id="acc-refresh">Обновить</button>
+    </div>
+    <div id="accounting-body"></div>
   </div>
 
   <div class="tab-panel" id="panel-payouts">
@@ -1236,6 +1250,7 @@ function dbOrderToOrder(row) {
     customerBudget: row.customer_budget,
     estimate: row.estimate || { min: 0, max: 0, factors: [] },
     finalPrice: row.final_price ?? null,
+    payment: row.payment || null,
     // Время на ремонт в минутах и комментарий для мастера (14.10.2026) —
     // вводит админ/модератор при подтверждении цены (см. askApproveDetails).
     estimatedMinutes: row.estimated_minutes ?? null,
@@ -1653,14 +1668,21 @@ function payoutOrderLabel(p) {
   return `${num ? '№' + num : 'Заказ'}${title ? ' · ' + title : ''}`;
 }
 
+function plusPhone(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) return '+7' + d.slice(1);
+  return '+' + d;
+}
+
 function desiredPayoutInfo(userId) {
   const u = allUsers.find((x) => x.id === userId);
   const s = u && u.payoutSettings;
-  const ownPhone = (u && u.phone) || '';
+  const ownPhone = plusPhone(u && u.phone);
   if (!s) return { text: `не указан (по умолчанию — СБП на номер мастера ${ownPhone || '—'})`, method: 'СБП', destination: ownPhone, marker: '', phone: ownPhone, bank: '', sbpName: '', isDefault: true };
-  const parts = (phone) => [`СБП ${phone || '—'}`, s.bank ? `банк: ${s.bank}` : '', s.sbpName ? `имя в СБП: ${s.sbpName}` : ''].filter(Boolean).join(', ');
+  const parts = (phone) => [`СБП ${plusPhone(phone) || '—'}`, s.bank ? `банк: ${s.bank}` : '', s.sbpName ? `имя: ${s.sbpName}` : ''].filter(Boolean).join(', ');
   if (s.mode === 'other') return { text: s.text || '—', method: 'Другой способ', destination: s.text || '', marker: 'другой способ', freeText: s.text || '' };
-  if (s.mode === 'other_phone') return { text: parts(s.phone), method: 'СБП', destination: parts(s.phone), marker: 'другой номер', phone: s.phone || '', bank: s.bank || '', sbpName: s.sbpName || '' };
+  if (s.mode === 'other_phone') return { text: parts(s.phone), method: 'СБП', destination: parts(s.phone), marker: 'другой номер', phone: plusPhone(s.phone), bank: s.bank || '', sbpName: s.sbpName || '' };
   return { text: parts(ownPhone), method: 'СБП', destination: parts(ownPhone), marker: '', phone: ownPhone, bank: s.bank || '', sbpName: s.sbpName || '' };
 }
 
@@ -1688,7 +1710,7 @@ function desiredPayoutBoxHtml(d) {
   if (d.freeText !== undefined) {
     inner = `<div style="font-size:16px;font-weight:600;margin-top:6px;white-space:pre-wrap;">${escapeHtml(d.freeText || '—')} ${d.freeText ? copyBtnHtml(d.freeText) : ''}</div>`;
   } else {
-    const line2 = [d.bank ? `Банк: <b>${escapeHtml(d.bank)}</b>` : '', d.sbpName ? `Имя в СБП: <b>${escapeHtml(d.sbpName)}</b>` : ''].filter(Boolean).join(' · ');
+    const line2 = [d.bank ? `Банк: <b>${escapeHtml(d.bank)}</b>` : '', d.sbpName ? `<b>${escapeHtml(d.sbpName)}</b>` : ''].filter(Boolean).join(' · ');
     inner = `<div style="display:flex;align-items:center;gap:10px;margin-top:6px;"><span style="font-size:20px;font-weight:700;letter-spacing:.3px;">${escapeHtml(d.phone || '—')}</span>${d.phone ? copyBtnHtml(d.phone) : ''}</div>
       ${line2 ? `<div style="margin-top:4px;font-size:14px;">${line2}</div>` : ''}
       ${d.isDefault ? '<div style="margin-top:4px;font-size:12px;color:var(--gray-600);">Мастер ещё не настраивал выплаты — по умолчанию СБП на номер аккаунта</div>' : ''}`;
@@ -1697,6 +1719,120 @@ function desiredPayoutBoxHtml(d) {
     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Желаемый способ получения оплаты ${d.marker ? `<span class="pill orange">${escapeHtml(d.marker)}</span>` : ''}</div>
     ${inner}
   </div>`;
+}
+
+// -----------------------------------------------------------------------
+// Вкладка «Бухгалтерия» (просьба Sg 15.10.2026) — оборот, налог 6%,
+// банк, выплаты мастерам, остаток площадки, замороженные средства и
+// прогноз «сколько нужно в день для цели». Все цифры считаются из заказов
+// (orders.payment) и выплат (worker_payouts) — отдельной таблицы нет.
+// Настройки (ставки, цель, прогноз) — в localStorage этого браузера.
+// -----------------------------------------------------------------------
+const ACC_KEY = 'muzhik_admin_accounting_v1';
+const ACC_WORKER_RATE = 0.7;
+function accLoad() {
+  const d = { taxPct: 6, bankPct: 5.25, targetDaily: 10000, avgCheck: '', forecastTurnover: '' };
+  try { Object.assign(d, JSON.parse(localStorage.getItem(ACC_KEY) || '{}')); } catch (e) {}
+  return d;
+}
+function accSave(cfg) { try { localStorage.setItem(ACC_KEY, JSON.stringify(cfg)); } catch (e) {} }
+const rub = (n) => `${Math.round(Number(n) || 0).toLocaleString('ru-RU')} ₽`;
+
+function computeAccounting(days, cfg) {
+  const since = days > 0 ? Date.now() - days * 24 * 3600 * 1000 : 0;
+  const payoutByOrder = new Map(allPayouts.map((p) => [p.orderId, p]));
+  let turnover = 0, count = 0, masters = 0, frozen = 0, frozenCount = 0, refunded = 0;
+  allOrders.forEach((o) => {
+    const pay = o.payment || {};
+    if (pay.status !== 'prepayment_paid') return;
+    const paidAt = pay.paidAt ? new Date(pay.paidAt).getTime() : new Date(o.createdAt).getTime();
+    if (paidAt < since) return;
+    const amount = Number(pay.amount) || 0;
+    const refund = (o.refunds || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    turnover += amount - refund;
+    refunded += refund;
+    count++;
+    const po = payoutByOrder.get(o.id);
+    masters += po ? po.amount : Math.round((amount - refund) * ACC_WORKER_RATE);
+    if (!['confirmed', 'rated', 'cancelled'].includes(o.status)) { frozen += amount; frozenCount++; }
+  });
+  const tax = turnover * cfg.taxPct / 100;
+  const bank = turnover * cfg.bankPct / 100;
+  const left = turnover - masters - tax - bank;
+  const margin = turnover > 0 ? left / turnover : 0;
+  const pendingPayouts = allPayouts.filter((p) => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
+  return { turnover, count, masters, tax, bank, left, margin, frozen, frozenCount, refunded, pendingPayouts };
+}
+
+function renderAccounting() {
+  const el = document.getElementById('accounting-body');
+  if (!el) return;
+  const cfg = accLoad();
+  const days = Number(document.getElementById('acc-period').value);
+  const a = computeAccounting(days, cfg);
+  const avgAuto = a.count ? a.turnover / a.count : 1000;
+  const avg = Number(cfg.avgCheck) > 0 ? Number(cfg.avgCheck) : avgAuto;
+  const margin = a.turnover > 0 ? a.margin : (1 - ACC_WORKER_RATE - cfg.taxPct / 100 - cfg.bankPct / 100);
+  const neededTurnover = margin > 0 ? cfg.targetDaily / margin : 0;
+  const forecast = Number(cfg.forecastTurnover) > 0 ? Number(cfg.forecastTurnover) : neededTurnover;
+  const forecastNet = forecast * margin;
+  const forecastOrders = avg > 0 ? forecast / avg : 0;
+  const row = (label, val, strong) => `<tr><td style="padding:6px 0;">${label}</td><td style="padding:6px 0;text-align:right;${strong ? 'font-weight:700;' : ''}">${val}</td></tr>`;
+  const inp = (id, val, step) => `<input type="number" step="${step || 'any'}" id="${id}" value="${val}" style="width:110px;" />`;
+  el.innerHTML = `
+    <div class="card"><div class="card-body open">
+      <p class="form-section-label">Итоги за период</p>
+      <table style="width:100%;border-collapse:collapse;">
+        ${row('Оборот (оплачено заказчиками, за вычетом возвратов)', rub(a.turnover), true)}
+        ${row('Оплаченных заказов', a.count)}
+        ${row(`Мастерам (${Math.round(ACC_WORKER_RATE * 100)}%, по факту начислений)`, '− ' + rub(a.masters))}
+        ${row(`Налог ${cfg.taxPct}% с оборота`, '− ' + rub(a.tax))}
+        ${row(`Банк (эквайринг ${cfg.bankPct}%)`, '− ' + rub(a.bank))}
+        ${row('Остаток площадки', rub(a.left), true)}
+        ${row('Маржа', (a.margin * 100).toFixed(2).replace('.', ',') + ' %')}
+      </table>
+    </div></div>
+    <div class="card"><div class="card-body open">
+      <p class="form-section-label">Деньги в движении</p>
+      <table style="width:100%;border-collapse:collapse;">
+        ${row(`Заморожено (оплачено, заказ ещё не завершён): ${a.frozenCount} зак.`, rub(a.frozen))}
+        ${row('Начислено мастерам, ждёт выплаты', rub(a.pendingPayouts))}
+        ${a.refunded ? row('Возвраты за период', rub(a.refunded)) : ''}
+      </table>
+    </div></div>
+    <div class="card"><div class="card-body open">
+      <p class="form-section-label">Настройки и прогноз</p>
+      <div class="grid-2-tight">
+        <div class="field-sm dense"><label>Налог, % с оборота</label>${inp('acc-tax', cfg.taxPct)}</div>
+        <div class="field-sm dense"><label>Банк (эквайринг), %</label>${inp('acc-bank', cfg.bankPct)}</div>
+        <div class="field-sm dense"><label>Цель: чистыми, ₽ в день</label>${inp('acc-target', cfg.targetDaily)}</div>
+        <div class="field-sm dense"><label>Средний чек, ₽ (пусто — авто: ${Math.round(avgAuto)})</label>${inp('acc-avg', cfg.avgCheck)}</div>
+      </div>
+      <div class="field-sm dense" style="margin-top:10px;">
+        <label>Прогноз оборота, ₽ в день (пусто — рассчитать под цель: ${Math.round(neededTurnover).toLocaleString('ru-RU')} ₽)</label>
+        ${inp('acc-forecast', cfg.forecastTurnover)}
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+        ${row('Оборот в день по прогнозу', rub(forecast), true)}
+        ${row('Заказов в день при среднем чеке ' + rub(avg), forecastOrders.toFixed(1).replace('.', ','))}
+        ${row('Чистыми в день при марже ' + (margin * 100).toFixed(1).replace('.', ',') + ' %', rub(forecastNet), true)}
+        ${row('Чистыми в месяц (×30)', rub(forecastNet * 30))}
+        ${row('Оборот в месяц (×30)', rub(forecast * 30))}
+      </table>
+      <p class="order-meta" style="margin-top:8px;">Ставки и прогноз сохраняются в этом браузере. Если за период нет оплат, маржа берётся из ставок: 100% − мастерам − налог − банк.</p>
+    </div></div>`;
+  const bind = (id, key, num) => {
+    const input = document.getElementById(id);
+    input.addEventListener('change', () => {
+      const c = accLoad();
+      c[key] = input.value === '' ? '' : Number(input.value);
+      if (['taxPct', 'bankPct', 'targetDaily'].includes(key) && c[key] === '') c[key] = key === 'taxPct' ? 6 : key === 'bankPct' ? 5.25 : 10000;
+      accSave(c);
+      renderAccounting();
+    });
+  };
+  bind('acc-tax', 'taxPct'); bind('acc-bank', 'bankPct'); bind('acc-target', 'targetDaily');
+  bind('acc-avg', 'avgCheck'); bind('acc-forecast', 'forecastTurnover');
 }
 
 function updatePayoutsBadge() {
@@ -1906,6 +2042,7 @@ let allNotifications = [];
 // Задачи, которые система создаёт сама (сейчас — флаг «часто меняет номер
 // телефона», см. admin_tasks/dbAdminTaskToTask, вкладка «Задачи»).
 let allAdminTasks = [];
+let allMasterBlocks = []; // блокировки «мастер не видит новые заказы заказчика»
 let adminTasksShowResolved = false;
 let allPayouts = [];
 let payoutsLoaded = false; // грузим лениво, только при первом открытии вкладки «Выплаты»
@@ -3079,7 +3216,23 @@ function ratingDecisionStatusHtml(counted) {
  * просто показываем для контекста; агрегирует её раздел «Статистика» (см.
  * buildStatsHtml ниже).
  */
+function orderBlockHtml(o) {
+  if (!o.assignedWorkerId || !o.customerId) return '';
+  const blocked = allMasterBlocks.some((b) => b.worker_id === o.assignedWorkerId && b.customer_id === o.customerId);
+  return `
+    <div class="field-sm" style="margin-top:8px;">
+      ${blocked
+        ? `<p style="margin:0 0 6px;font-size:13px;">🚫 Мастер <b>${escapeHtml(userName(o.assignedWorkerId))}</b> не видит новые заказы заказчика <b>${escapeHtml(userName(o.customerId))}</b>.</p>
+           <button type="button" class="btn-sm ghost" id="master-unblock-${o.id}">Снять блокировку</button>`
+        : `<button type="button" class="btn-sm danger" id="master-block-${o.id}" title="Если этот заказчик создаст новый заказ, этот мастер его не увидит и не сможет принять. Текущие заказы не затрагиваются.">🚫 Мастеру — не показывать новые заказы этого заказчика</button>`}
+    </div>`;
+}
+
 function orderReviewsHtml(o) {
+  return orderReviewsCoreHtml(o) + orderBlockHtml(o);
+}
+
+function orderReviewsCoreHtml(o) {
   const hasWorkerRating = typeof o.workerRating === 'number';
   const hasCustomerRating = typeof o.customerRating === 'number';
   const hasServiceRating = typeof o.serviceRating === 'number';
@@ -3684,6 +3837,30 @@ function wireOrderForm(o) {
     const btn = document.getElementById(`${idPrefix}-${o.id}`);
     if (btn) btn.addEventListener('click', () => applyRatingDecision(o, side, decision));
   });
+
+  const blockBtn = document.getElementById(`master-block-${o.id}`);
+  if (blockBtn) {
+    blockBtn.addEventListener('click', async () => {
+      if (!confirm(`Заблокировать мастеру «${userName(o.assignedWorkerId)}» новые заказы заказчика «${userName(o.customerId)}»?\n\nЕсли этот заказчик создаст новый заказ, этот мастер его не увидит. Текущие заказы не затрагиваются.`)) return;
+      blockBtn.disabled = true;
+      try {
+        await insertRow('master_customer_blocks', { worker_id: o.assignedWorkerId, customer_id: o.customerId });
+        await loadData({ keepOpen: true });
+      } catch (err) { alert('Не удалось сохранить: ' + err.message); blockBtn.disabled = false; }
+    });
+  }
+  const unblockBtn = document.getElementById(`master-unblock-${o.id}`);
+  if (unblockBtn) {
+    unblockBtn.addEventListener('click', async () => {
+      const row = allMasterBlocks.find((b) => b.worker_id === o.assignedWorkerId && b.customer_id === o.customerId);
+      if (!row) return;
+      unblockBtn.disabled = true;
+      try {
+        await deleteRow('master_customer_blocks', row.id);
+        await loadData({ keepOpen: true });
+      } catch (err) { alert('Не удалось снять: ' + err.message); unblockBtn.disabled = false; }
+    });
+  }
 
   wireAdminNote('order', o.id, renderOrders);
 }
@@ -6015,7 +6192,7 @@ function fillMapPoints() {
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows, blockRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
@@ -6038,7 +6215,9 @@ async function loadData(opts) {
     // Задачи для админа (вкладка «Задачи») — та же подстраховка, что и
     // telegram_messages/notifications выше: таблица появилась позже остальных.
     getRows('admin_tasks', 'order=created_at.desc&limit=200').catch(() => []),
+    getRows('master_customer_blocks').catch(() => []),
   ]);
+  allMasterBlocks = blockRows || [];
   allUsers = userRows.map(dbUserToUser);
   recomputeUserSeqIds();
   allOrders = orderRows.map(dbOrderToOrder);
@@ -6083,6 +6262,7 @@ function activateTab(tab) {
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
+  if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
 }
 
 // Переход по клику на точку карты — из балуна метки мастера/заказа сразу
@@ -6326,6 +6506,8 @@ function showApp() {
     renderPayouts();
   });
   document.getElementById('payouts-refresh').addEventListener('click', () => loadPayouts());
+  document.getElementById('acc-period').addEventListener('change', renderAccounting);
+  document.getElementById('acc-refresh').addEventListener('click', async () => { await loadData({ keepOpen: true }); await loadPayouts(); renderAccounting(); });
   document.getElementById('payouts-create-for-order').addEventListener('click', async () => {
     const orderId = prompt('ID заказа (UUID из таблицы orders), для которого создать запись о выплате:');
     if (!orderId || !orderId.trim()) return;

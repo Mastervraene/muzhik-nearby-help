@@ -3892,25 +3892,32 @@ const contactCache = {}; // userId -> { displayName, phone } | 'loading' | 'erro
  * @returns {{displayName: string, phone: string} | 'loading' | 'error' | null}
  */
 function ensureCustomerContact(order) {
-  const userId = order && order.customerId;
-  if (!userId || !order.id) return null;
-  const existing = contactCache[userId];
+  return ensureOrderContact(order, order && order.customerId);
+}
+
+// Контакт «второй стороны» заказа (заказчик для мастера или мастер для
+// заказчика). Ключ кэша — заказ+человек, чтобы телефон из открытого заказа
+// не «протекал» в другой/закрытый заказ того же человека.
+function ensureOrderContact(order, userId) {
+  if (!userId || !order || !order.id) return null;
+  const key = order.id + ':' + userId;
+  const existing = contactCache[key];
   if (existing) return existing;
 
   if (!isSupabaseConfigured()) {
     // Локальный режим без Supabase — контакт и так уже есть в общем кэше.
     const u = cache.users.find((x) => x.id === userId);
-    contactCache[userId] = u ? { displayName: u.displayName, phone: u.phone } : 'error';
-    return contactCache[userId];
+    contactCache[key] = u ? { displayName: u.displayName, phone: u.phone, avatarUrl: u.avatarUrl || '' } : 'error';
+    return contactCache[key];
   }
 
   const sessionToken = loadSessionToken();
   if (!sessionToken) {
-    contactCache[userId] = 'error';
-    return contactCache[userId];
+    contactCache[key] = 'error';
+    return contactCache[key];
   }
 
-  contactCache[userId] = 'loading';
+  contactCache[key] = 'loading';
   // ПРАВКА БЕЗОПАСНОСТИ 30.09.2026: раньше здесь был прямой getRows('users',
   // `id=eq.${userId}&select=display_name,phone`) анонимным ключом, БЕЗ
   // какой-либо проверки. Любой человек с анонимным ключом (он лежит открытым
@@ -3928,15 +3935,15 @@ function ensureCustomerContact(order) {
     counterpartUserId: userId,
   })
     .then((data) => {
-      contactCache[userId] = { displayName: data.displayName || '', phone: data.phone || '' };
+      contactCache[key] = { displayName: data.displayName || '', phone: data.phone || '', avatarUrl: data.avatarUrl || '', closed: Boolean(data.closed) };
       render();
     })
     .catch((err) => {
-      reportError('загрузка контакта заказчика', err);
-      contactCache[userId] = 'error';
+      reportError('загрузка контакта', err);
+      contactCache[key] = 'error';
       render();
     });
-  return contactCache[userId];
+  return contactCache[key];
 }
 
 // ---------------------------------------------------------------------
@@ -6574,6 +6581,8 @@ async function refreshAvailableOrders(isRetry) {
     }
     cache.availableOrders = (data.orders || []).map((o) => ({
       id: o.id,
+      customerName: o.customerName || '',
+      customerAvatarUrl: o.customerAvatarUrl || '',
       orderNumber: o.orderNumber ?? null,
       deviceModel: o.deviceModel || '',
       diagnosisLog: o.diagnosisLog || [],
@@ -9296,6 +9305,40 @@ function appendWorkerHistory(history, workerId) {
  * @param {Object} order
  * @returns {string} пусто, если мастера ещё не было вообще
  */
+// Маленькая «визитка» человека: круглая аватарка + имя (+ доп. текст).
+function personChipHtml(label, name, avatarUrl, extra) {
+  const av = avatarUrl
+    ? `<img src="${escapeHtml(avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />`
+    : `<span style="font-size:14px;">👤</span>`;
+  return `<p class="order-meta" style="display:flex;align-items:center;gap:8px;margin:6px 0;"><span style="width:28px;height:28px;border-radius:50%;overflow:hidden;background:var(--gray-100,#eee);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">${av}</span><span>${label ? escapeHtml(label) + ': ' : ''}<b>${escapeHtml(name || 'без имени')}</b>${extra ? ' · ' + escapeHtml(extra) : ''}</span></p>`;
+}
+
+// Мастер глазами заказчика: пока заказ открыт — имя, аватар и телефон,
+// после завершения — только имя и аватар. Возвращает '' если мастер не назначен.
+function masterChipForCustomerHtml(order) {
+  const wid = order.assignedWorkerId;
+  if (!wid) return '';
+  const pub = getUsers().find((u) => u.id === wid) || {};
+  if (isOrderClosed(order)) return personChipHtml('Мастер', pub.displayName, pub.avatarUrl);
+  const c = ensureOrderContact(order, wid);
+  if (c === 'loading' || c === null) return personChipHtml('Мастер', pub.displayName, pub.avatarUrl, 'загрузка…');
+  if (c === 'error') return personChipHtml('Мастер', pub.displayName, pub.avatarUrl);
+  return personChipHtml('Мастер', c.displayName || pub.displayName, c.avatarUrl || pub.avatarUrl, displayPhone(c.phone) || 'телефон не указан');
+}
+
+// Заказчик глазами мастера: кандидат — только имя и аватар; назначенный
+// мастер пока заказ открыт — имя, аватар, телефон; закрытый — имя и аватар.
+function customerChipForWorkerHtml(order, label) {
+  const pub = getUsers().find((u) => u.id === order.customerId) || {};
+  const name = pub.displayName || order.customerName || '';
+  const avatar = pub.avatarUrl || order.customerAvatarUrl || '';
+  if (order.assignedWorkerId !== state.currentUserId || isOrderClosed(order)) return personChipHtml(label, name, avatar);
+  const c = ensureCustomerContact(order);
+  if (c === 'loading' || c === null) return personChipHtml(label, name, avatar, 'загрузка…');
+  if (c === 'error') return personChipHtml(label, name, avatar, 'не удалось загрузить телефон');
+  return personChipHtml(label, c.displayName || name, c.avatarUrl || avatar, displayPhone(c.phone) || 'телефон не указан');
+}
+
 function orderWorkerNamesLabel(order) {
   const ids =
     order.workerHistory && order.workerHistory.length
@@ -9474,6 +9517,7 @@ function saveGuestName() {
 /** Короткие сведения для мастера в карточке списка: комментарии, дата/время, суть задачи. */
 function workerCardFactsHtml(order) {
   const out = [];
+  if (order.assignedWorkerId !== state.currentUserId && (order.customerName || order.customerAvatarUrl)) out.push(customerChipForWorkerHtml(order, 'Заказчик'));
   const est = formatEstimatedTime(order.estimatedMinutes);
   if (est) out.push(`<div class="order-meta"><span>⏱ Займёт примерно ${escapeHtml(est)}</span></div>`);
   const comments = [
@@ -9577,8 +9621,8 @@ function orderCardHtml(order, { viewer }) {
         // Имя мастера(ов) — просьба Sg 10.10.2026, см. orderWorkerNamesLabel.
         // Только заказчику и только в карточке списка (свёрнутый вид) —
         // полная версия с теми же данными повторяется ещё раз в renderOrderDetail.
-        viewer === 'customer' && orderWorkerNamesLabel(order)
-          ? `<div class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></div>`
+        viewer === 'customer'
+          ? (order.assignedWorkerId ? masterChipForCustomerHtml(order) : (orderWorkerNamesLabel(order) ? `<div class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></div>` : ''))
           : ''
       }
       ${
@@ -9589,23 +9633,7 @@ function orderCardHtml(order, { viewer }) {
         // renderOrderDetail — если контакта ещё нет в кэше, сам подгрузит
         // и вызовет render() по готовности.
         viewer === 'worker' && order.assignedWorkerId === state.currentUserId
-          ? isOrderClosed(order)
-            ? // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «когда заказ закрыт, видно
-              // только имя — без телефона и адреса») — заказ завершён,
-              // звонить больше незачем. Имя не секрет (оно и так в общем
-              // публичном кэше, см. orderWorkerNamesLabel), телефон для
-              // закрытого заказа отдельно не запрашиваем вообще.
-              `<p class="order-meta"><span>Заказчик: ${escapeHtml((getUsers().find((u) => u.id === order.customerId) || {}).displayName || 'без имени')}</span></p>`
-            : (() => {
-                const contact = ensureCustomerContact(order);
-                if (contact === 'loading' || contact === null) {
-                  return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
-                }
-                if (contact === 'error') {
-                  return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
-                }
-                return `<p class="order-meta"><span>${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
-              })()
+          ? customerChipForWorkerHtml(order, 'Заказчик')
           : ''
       }
       ${!hasValidLocation(order.exactLocation) && !order.mapPoint ? `<div class="order-warning">⚠ Точная точка на карте не определена — проверьте адрес заявки</div>` : ''}
@@ -10457,8 +10485,8 @@ function renderOrderDetail() {
           // ссылок, см. orderWorkerNamesLabel) — мастеру незачем видеть
           // это про себя самого, а ненайденным кандидатам заказ ещё не
           // назначен вообще.
-          isCustomer && orderWorkerNamesLabel(order)
-            ? `<p class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></p>`
+          isCustomer
+            ? (order.assignedWorkerId ? masterChipForCustomerHtml(order) : (orderWorkerNamesLabel(order) ? `<p class="order-meta"><span>Мастер: ${escapeHtml(orderWorkerNamesLabel(order))}</span></p>` : ''))
             : ''
         }
         <p>${escapeHtml(order.description)}</p>
@@ -10485,29 +10513,7 @@ function renderOrderDetail() {
           // (см. orderCardHtml). Пока заказ не принят, ни имени, ни телефона
           // заказчика мастер не видит. Подъезд/домофон/квартиру мастер
           // уточнит по телефону сам — это не критично для отображения.
-          isAssignedWorker
-            ? isOrderClosed(order)
-              ? // ДОБАВЛЕНО 10.10.2026 (просьба Sg: «когда заказ закрыт,
-                // видно только имя — без телефона и адреса») — имя не
-                // секрет (публичный кэш), телефон для закрытого заказа
-                // отдельно не запрашиваем.
-                `<p class="order-meta"><span>Заказчик: ${escapeHtml((getUsers().find((u) => u.id === order.customerId) || {}).displayName || 'без имени')}</span></p>`
-              : (() => {
-                  // Полного профиля заказчика (с телефоном) в общем кэше теперь
-                  // может не быть — bulk-загрузка отдаёт только users_public
-                  // (см. initDb). Запрашиваем контакт отдельно и по требованию
-                  // (см. ensureCustomerContact) — как только ответ придёт,
-                  // ensureCustomerContact сам вызовет render().
-                  const contact = ensureCustomerContact(order);
-                  if (contact === 'loading' || contact === null) {
-                    return `<p class="order-meta"><span>Контакт заказчика: загрузка…</span></p>`;
-                  }
-                  if (contact === 'error') {
-                    return `<p class="order-meta"><span>Контакт заказчика: не удалось загрузить</span></p>`;
-                  }
-                  return `<p class="order-meta"><span>Контакт заказчика: ${escapeHtml(contact.displayName || 'без имени')} · ${escapeHtml(displayPhone(contact.phone) || 'телефон не указан')}</span></p>`;
-                })()
-            : ''
+          isAssignedWorker ? customerChipForWorkerHtml(order, 'Заказчик') : ''
         }
         ${orderTimingHtml(order, isCustomer)}
         ${isCustomer ? renderGuestNameBlock(order) : ''}
