@@ -426,7 +426,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
-        body: JSON.stringify({ userId: uid, sessionToken: tok, messages: messages })
+        body: JSON.stringify({ userId: uid, sessionToken: tok, messages: messages, category: draft && draft.category })
       });
       var data = await res.json().catch(function () { return null; });
       wait.remove();

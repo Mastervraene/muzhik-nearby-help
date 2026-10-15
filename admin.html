@@ -92,6 +92,20 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 .tab-panel { display: none; padding: 16px; max-width: 900px; margin: 0 auto; }
 .tab-panel.active { display: block; }
+/* Вкладка «Прайс-лист» */
+.pr-cat { margin: 0 0 26px; }
+.pr-cat h3 { margin: 0 0 8px; font-size: 16px; }
+.pr-row { display: grid; grid-template-columns: 1fr 96px 84px; gap: 6px; margin-bottom: 6px; align-items: center; }
+.pr-row input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--gray-200, #ddd); border-radius: 10px; font-size: 14px; font-family: inherit; background: #fff; }
+.pr-row input:focus { outline: none; border-color: var(--accent); }
+.pr-head { font-size: 11px; color: #767676; margin-bottom: 4px; }
+.pr-head span:nth-child(2), .pr-head span:nth-child(3) { padding-left: 4px; }
+.pr-status { margin-left: 10px; font-size: 12px; color: #16a34a; }
+.pr-ai { margin-top: 34px; border-top: 1px solid #ddd; padding-top: 18px; }
+.pr-ai details { margin: 8px 0; border: 1px solid #ddd; border-radius: 12px; padding: 8px 12px; background: #fff; }
+.pr-ai summary { cursor: pointer; font-weight: 600; }
+.pr-ai textarea { width: 100%; box-sizing: border-box; min-height: 260px; margin: 10px 0 8px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; font-size: 13px; line-height: 1.45; font-family: inherit; }
+
 
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
 .toolbar select, .toolbar input[type="text"] {
@@ -524,6 +538,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="notify">Рассылка</button>
     <button class="tab-btn" data-tab="payouts">Выплаты<span id="payouts-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="accounting">Бухгалтерия</button>
+    <button class="tab-btn" data-tab="pricing">Прайс-лист</button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -733,6 +748,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <button type="button" class="btn-sm ghost" id="acc-refresh">Обновить</button>
     </div>
     <div id="accounting-body"></div>
+  </div>
+
+  <div class="tab-panel" id="panel-pricing">
+    <div id="pricing-body"><p class="count-hint">Загрузка…</p></div>
   </div>
 
   <div class="tab-panel" id="panel-payouts">
@@ -6260,10 +6279,126 @@ async function loadData(opts) {
   }
 }
 
+// =======================================================================
+// Вкладка «Прайс-лист» (price_items) и «Инструкции ИИ» (ai_instructions).
+// Edge Function admin-pricing: list | save_prices | save_instruction.
+// Прайс категории автоматически подставляется в инструкцию чата (chat-order).
+// =======================================================================
+let pricingData = { prices: [], instructions: [] };
+let pricingLoaded = false;
+
+async function callAdminPricing(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-pricing`, {
+    method: 'POST',
+    headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ action, token: adminSessionToken }, extra || {})),
+  });
+  let data;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok || !data || !data.ok) {
+    const reason = data?.error === 'invalid_session' ? 'сессия истекла — войдите заново' : (data?.detail || data?.error || `HTTP ${res.status}`);
+    throw new Error(reason);
+  }
+  return data;
+}
+
+function pricingRowHtml(it) {
+  const v = (x) => (x === null || x === undefined ? '' : escapeHtml(String(x)));
+  return `<div class="pr-row" data-id="${it && it.id ? it.id : ''}">
+    <input type="text" class="pr-name" placeholder="Название работы" value="${v(it && it.name)}" />
+    <input type="number" class="pr-price" min="0" step="50" placeholder="₽" value="${v(it && it.price)}" />
+    <input type="number" class="pr-min" min="0" step="5" placeholder="мин" value="${v(it && it.minutes)}" />
+  </div>`;
+}
+
+function renderPricing() {
+  const body = document.getElementById('pricing-body');
+  if (!body) return;
+  const cats = Object.keys(CATEGORY_TITLES);
+  const catHtml = cats.map((cat) => {
+    const items = pricingData.prices.filter((p) => p.category === cat);
+    return `<div class="pr-cat" data-cat="${cat}">
+      <h3>${escapeHtml(CATEGORY_TITLES[cat])}</h3>
+      <div class="pr-head pr-row"><span>Работа</span><span>Цена, ₽</span><span>Время, мин</span></div>
+      <div class="pr-rows">${items.map(pricingRowHtml).join('')}${pricingRowHtml(null)}</div>
+      <button type="button" class="btn-sm primary pr-save">Сохранить</button><span class="pr-status"></span>
+    </div>`;
+  }).join('');
+
+  const insTitle = (key) => key === 'base' ? 'Основная инструкция' : (CATEGORY_TITLES[key.replace('cat:', '')] ? 'Категория: ' + CATEGORY_TITLES[key.replace('cat:', '')] : key);
+  const keys = ['base'].concat(cats.map((c) => 'cat:' + c));
+  const aiHtml = keys.map((key) => {
+    const row = pricingData.instructions.find((r) => r.key === key);
+    return `<details data-key="${key}"><summary>${escapeHtml(insTitle(key))}${row && row.body ? '' : ' — пусто'}</summary>
+      <textarea>${escapeHtml(row ? row.body : '')}</textarea>
+      <button type="button" class="btn-sm primary ai-save">Сохранить</button><span class="pr-status"></span></details>`;
+  }).join('');
+
+  body.innerHTML = `<p class="count-hint" style="margin:0 0 14px">Цена — за работу без детали. Чтобы удалить строку, очистите название и нажмите «Сохранить». Время в минутах — для расчёта длительности визита.</p>
+    ${catHtml}
+    <div class="pr-ai"><h3 style="margin:0 0 4px">Инструкции ИИ-чата</h3>
+      <p class="count-hint" style="margin:0 0 8px">Прайс категории подставляется в инструкцию автоматически — цены и время здесь дублировать не нужно. Первая «Основная» работает всегда, блок категории подключается, когда категория понятна.</p>
+      ${aiHtml}</div>`;
+
+  // Новая пустая строка, когда начинают вводить в последней
+  body.querySelectorAll('.pr-cat').forEach((box) => {
+    const rows = box.querySelector('.pr-rows');
+    rows.addEventListener('input', () => {
+      const last = rows.lastElementChild;
+      if (last && last.querySelector('.pr-name').value.trim()) rows.insertAdjacentHTML('beforeend', pricingRowHtml(null));
+    });
+    box.querySelector('.pr-save').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget, status = box.querySelector('.pr-status');
+      const items = [...rows.querySelectorAll('.pr-row')].map((r) => ({
+        id: r.dataset.id ? Number(r.dataset.id) : null,
+        name: r.querySelector('.pr-name').value.trim(),
+        price: r.querySelector('.pr-price').value,
+        minutes: r.querySelector('.pr-min').value,
+      })).filter((it) => it.name);
+      btn.disabled = true; status.style.color = '#767676'; status.textContent = 'Сохраняем…';
+      try {
+        const data = await callAdminPricing('save_prices', { category: box.dataset.cat, items });
+        pricingData.prices = pricingData.prices.filter((p) => p.category !== box.dataset.cat).concat(data.prices);
+        rows.innerHTML = data.prices.map(pricingRowHtml).join('') + pricingRowHtml(null);
+        status.style.color = '#16a34a'; status.textContent = 'Сохранено';
+      } catch (err) {
+        status.style.color = '#dc2626'; status.textContent = 'Не удалось сохранить: ' + err.message;
+      }
+      btn.disabled = false;
+    });
+  });
+  body.querySelectorAll('.pr-ai details').forEach((d) => {
+    d.querySelector('.ai-save').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget, status = d.querySelector('.pr-status');
+      btn.disabled = true; status.style.color = '#767676'; status.textContent = 'Сохраняем…';
+      try {
+        await callAdminPricing('save_instruction', { key: d.dataset.key, title: d.querySelector('summary').textContent.replace(' — пусто', ''), body: d.querySelector('textarea').value });
+        status.style.color = '#16a34a'; status.textContent = 'Сохранено';
+      } catch (err) {
+        status.style.color = '#dc2626'; status.textContent = 'Не удалось сохранить: ' + err.message;
+      }
+      btn.disabled = false;
+    });
+  });
+}
+
+async function loadPricing() {
+  const body = document.getElementById('pricing-body');
+  try {
+    const data = await callAdminPricing('list');
+    pricingData = { prices: data.prices || [], instructions: data.instructions || [] };
+    pricingLoaded = true;
+    renderPricing();
+  } catch (err) {
+    if (body) body.innerHTML = `<p style="color:#dc2626">Не удалось загрузить прайс: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
+  if (tab === 'pricing' && !pricingLoaded) loadPricing();
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
   if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
 }
