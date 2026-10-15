@@ -495,6 +495,31 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ai-msg.assistant { background:#f3f3f3; }
 .ai-order { margin:10px 0; padding:8px 10px; border-radius:8px; background:#fffbe6; font-size:13px; }
 .ai-det textarea { width:100%; box-sizing:border-box; min-height:60px; font:inherit; font-size:13px; padding:8px; border:1px solid #ccc; border-radius:8px; }
+
+.ch-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+.ch-bar select, .ch-bar button { font:inherit; font-size:13px; padding:7px 10px; border:1px solid #ccc; border-radius:8px; background:#fff; cursor:pointer; }
+.ch-row { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid #ddd; border-radius:10px; margin-bottom:8px; background:#fff; cursor:pointer; }
+.ch-row.await { border-left:4px solid #e04b4b; background:#fff7f7; }
+.ch-row.unread { border-left:4px solid #2563eb; }
+.ch-dot { width:10px; height:10px; border-radius:50%; margin-top:5px; flex:none; background:#ccc; }
+.ch-row.await .ch-dot { background:#e04b4b; } .ch-row.unread .ch-dot { background:#2563eb; }
+.ch-main { flex:1; min-width:0; } .ch-name { font-weight:600; font-size:14px; } .ch-last { font-size:13px; color:#666; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ch-meta { font-size:11px; color:#888; white-space:nowrap; text-align:right; }
+.ch-chip { display:inline-block; font-size:11px; padding:2px 7px; border-radius:10px; background:#eee; color:#555; margin-left:6px; font-weight:400; }
+.ch-chip.await { background:#e04b4b; color:#fff; }
+.ch-msgs { height:52vh; overflow-y:auto; border:1px solid #ddd; border-radius:10px; padding:10px; background:#fafafa; margin:10px 0; }
+.ch-msg { margin:6px 0; padding:7px 10px; border-radius:12px; font-size:13px; white-space:pre-wrap; max-width:85%; }
+.ch-msg.user { background:#fff; border:1px solid #e3e3e3; }
+.ch-msg.assistant { background:#eef3ff; }
+.ch-msg.admin { background:#2563eb; color:#fff; margin-left:auto; }
+.ch-msg.sys { background:none; color:#888; font-style:italic; max-width:100%; text-align:center; font-size:12px; }
+.ch-msg small { display:block; font-size:10px; opacity:.7; margin-bottom:2px; }
+.ch-input { display:flex; gap:8px; } .ch-input textarea { flex:1; min-height:44px; font:inherit; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:10px; }
+.ch-input button, .ch-act button { font:inherit; font-size:13px; padding:8px 14px; border:0; border-radius:10px; background:#2563eb; color:#fff; cursor:pointer; }
+.ch-act { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; } .ch-act button.sec { background:#eee; color:#333; }
+.ch-ov { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; align-items:center; justify-content:center; padding:16px; }
+.ch-ov > div { background:#fff; border-radius:14px; padding:16px; width:100%; max-width:340px; font-size:14px; }
+.ch-ov select, .ch-ov input { width:100%; box-sizing:border-box; margin:6px 0 10px; padding:9px; border:1px solid #ccc; border-radius:8px; font:inherit; }
 </style>
 </head>
 <body>
@@ -552,6 +577,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
   </div>
   <div class="tabs">
+    <button class="tab-btn" data-tab="chats">Чаты<span id="chats-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn active" data-tab="orders">Заказы<span id="orders-rating-badge" title="Оценки, ожидающие решения «учитывать»/«не учитывать»" style="display:none; margin-left:6px; background:#d97706; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="masters">Мастера<span id="masters-pending-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span><span id="masters-task-review-badge" title="Ждут подтверждения задания" style="display:none; margin-left:6px; background:#e08a24; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="tasks">Задачи<span id="admin-tasks-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
@@ -562,6 +588,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="pricing">Прайс-лист</button>
     <button class="tab-btn" data-tab="ai">ИИ<span id="ai-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
+  </div>
+
+  <div class="tab-panel" id="panel-chats">
+    <div id="chats-body"><p class="count-hint">Загрузка…</p></div>
   </div>
 
   <div class="tab-panel active" id="panel-orders">
@@ -6421,6 +6451,111 @@ async function loadPricing() {
 }
 
 
+
+// ===== Вкладка «Чаты» =====
+let chatThreads = [], chatOpenId = null, chatFilter = 'all', chatSortAsc = false, chatPoll = null, chatThread = null, chatLastMsgId = 0;
+function chEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function chTime(iso) { return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
+async function refreshChatsBadge() {
+  try {
+    const d = await callAdminPricing('threads_badge');
+    const b = document.getElementById('chats-badge');
+    if (b) { b.textContent = d.count; b.style.display = d.count ? '' : 'none'; }
+  } catch (e) { /* тихо */ }
+}
+function startChatsPolling() {
+  refreshChatsBadge();
+  if (chatPoll) return;
+  chatPoll = setInterval(() => {
+    refreshChatsBadge();
+    const panel = document.getElementById('panel-chats');
+    if (panel && panel.classList.contains('active')) { if (chatOpenId) openChat(chatOpenId, true); else loadChats(true); }
+  }, 15000);
+}
+async function loadChats(silent) {
+  const el = document.getElementById('chats-body');
+  try {
+    const d = await callAdminPricing('list_threads');
+    chatThreads = d.threads || [];
+    if (!chatOpenId) renderChatList();
+  } catch (e) { if (!silent) el.innerHTML = '<p class="count-hint">Ошибка: ' + chEsc(e.message) + '</p>'; }
+}
+function renderChatList() {
+  const el = document.getElementById('chats-body');
+  let list = chatThreads.filter((t) => chatFilter === 'all' || (chatFilter === 'await' && t.awaiting) || (chatFilter === 'unread' && t.unread) || (chatFilter === 'read' && !t.unread));
+  list = list.slice().sort((a, b) => (chatSortAsc ? 1 : -1) * (new Date(a.lastAt) - new Date(b.lastAt)));
+  const opt = (v, t) => '<option value="' + v + '"' + (chatFilter === v ? ' selected' : '') + '>' + t + '</option>';
+  el.innerHTML = '<div class="ch-bar"><select id="ch-filter">' + opt('all', 'Все') + opt('await', 'Ждут ответа') + opt('unread', 'Не прочитано') + opt('read', 'Прочитано') + '</select>' +
+    '<button id="ch-sort" type="button">' + (chatSortAsc ? '↑ Старые сверху' : '↓ Новые сверху') + '</button><button id="ch-refresh" type="button">Обновить</button></div>' +
+    (list.length ? list.map((t) => '<div class="ch-row ' + (t.awaiting ? 'await' : t.unread ? 'unread' : '') + '" data-uid="' + chEsc(t.userId) + '"><span class="ch-dot"></span><div class="ch-main"><div class="ch-name">' + chEsc(t.userName || 'Гость') + (t.phone ? ' · ' + chEsc(t.phone) : '') +
+      (t.awaiting ? '<span class="ch-chip await">ждёт ответа</span>' : '') + '<span class="ch-chip">' + (t.mode === 'human' ? 'человек' : 'ИИ') + '</span></div><div class="ch-last">' + chEsc(t.lastText) + '</div></div><div class="ch-meta">' + chTime(t.lastAt) + '</div></div>').join('') : '<p class="count-hint">Чатов нет.</p>');
+  document.getElementById('ch-filter').onchange = (e) => { chatFilter = e.target.value; renderChatList(); };
+  document.getElementById('ch-sort').onclick = () => { chatSortAsc = !chatSortAsc; renderChatList(); };
+  document.getElementById('ch-refresh').onclick = () => loadChats();
+  el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = () => openChat(r.dataset.uid); });
+}
+function chMsgHtml(m) {
+  const sys = m.role === 'user' && String(m.text).startsWith('[Система]');
+  const cls = sys ? 'sys' : (m.role === 'admin' ? 'admin' : m.role === 'assistant' ? 'assistant' : 'user');
+  const who = sys ? '' : (m.role === 'admin' ? 'Администратор' : m.role === 'assistant' ? 'ИИ' : 'Клиент');
+  const pay = m.draft && m.draft.type === 'pay_request' ? '<br>💳 Запрос оплаты: ' + chEsc(m.draft.amount) + ' ₽' : '';
+  return '<div class="ch-msg ' + cls + '">' + (who ? '<small>' + who + ' · ' + chTime(m.at) + '</small>' : '') + chEsc(m.text) + pay + '</div>';
+}
+async function openChat(uid, silent) {
+  const el = document.getElementById('chats-body');
+  try {
+    const d = await callAdminPricing('get_thread', { userId: uid });
+    const first = chatOpenId !== uid || !document.getElementById('ch-msgs');
+    chatOpenId = uid; chatThread = d;
+    if (first) {
+      el.innerHTML = '<div class="ch-bar"><button id="ch-back" type="button">← Назад</button><b id="ch-title"></b><span id="ch-mode"></span></div><div class="ch-msgs" id="ch-msgs"></div>' +
+        '<div class="ch-input"><textarea id="ch-text" placeholder="Ответ клиенту"></textarea><button id="ch-send" type="button">Отправить</button></div>' +
+        '<div class="ch-act"><button id="ch-pay" type="button">💳 Отправить на оплату</button><button id="ch-ai" type="button" class="sec">Вернуть ассистенту</button></div><div id="ch-orders" class="count-hint" style="margin-top:10px"></div>';
+      document.getElementById('ch-back').onclick = () => { chatOpenId = null; loadChats(); renderChatList(); refreshChatsBadge(); };
+      document.getElementById('ch-send').onclick = sendChatMsg;
+      document.getElementById('ch-pay').onclick = openPayRequest;
+      document.getElementById('ch-ai').onclick = async () => { if (!confirm('Вернуть клиента к ИИ-ассистенту?')) return; await callAdminPricing('back_to_ai', { userId: chatOpenId }); openChat(chatOpenId, true); };
+      document.getElementById('ch-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChatMsg(); });
+    }
+    document.getElementById('ch-title').textContent = (d.userName || 'Гость') + (d.phone ? ' · ' + d.phone : '');
+    document.getElementById('ch-mode').innerHTML = '<span class="ch-chip' + (d.awaiting ? ' await' : '') + '">' + (d.awaiting ? 'ждёт ответа' : d.mode === 'human' ? 'человек' : 'ИИ') + '</span>';
+    const lastId = d.messages.length ? d.messages[d.messages.length - 1].id : 0;
+    if (first || lastId !== chatLastMsgId) {
+      const box = document.getElementById('ch-msgs');
+      const atBottom = first || box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      box.innerHTML = d.messages.map(chMsgHtml).join('');
+      if (atBottom) box.scrollTop = box.scrollHeight;
+      chatLastMsgId = lastId;
+    }
+    document.getElementById('ch-orders').innerHTML = 'Заказы клиента: ' + (d.orders.length ? d.orders.map((o) => (o.number ? 'T-' + chEsc(o.number) : '№') + ' ' + chEsc(o.title || '') + ' — ' + chEsc(o.status) + (o.price != null ? ', ' + chEsc(o.price) + ' ₽' : '')).join(' · ') : 'нет');
+    refreshChatsBadge();
+  } catch (e) { if (!silent) alert('Не открылось: ' + e.message); }
+}
+async function sendChatMsg() {
+  const ta = document.getElementById('ch-text'); const text = ta.value.trim(); if (!text) return;
+  ta.disabled = true;
+  try { await callAdminPricing('send', { userId: chatOpenId, text }); ta.value = ''; await openChat(chatOpenId, true); }
+  catch (e) { alert('Не отправилось: ' + e.message); }
+  ta.disabled = false; ta.focus();
+}
+function openPayRequest() {
+  const orders = (chatThread && chatThread.orders) || [];
+  if (!orders.length) { alert('У клиента пока нет заказов — нечего отправлять на оплату.'); return; }
+  const pref = orders.find((o) => o.status === 'draft') || orders[0];
+  const ov = document.createElement('div'); ov.className = 'ch-ov';
+  ov.innerHTML = '<div><b>Отправить на оплату</b><select id="po-order">' + orders.map((o) => '<option value="' + chEsc(o.id) + '" data-price="' + chEsc(o.price || '') + '"' + (o.id === pref.id ? ' selected' : '') + '>' + (o.number ? 'T-' + chEsc(o.number) + ' ' : '') + chEsc(o.title || '') + ' (' + chEsc(o.status) + ')</option>').join('') + '</select>' +
+    '<input id="po-amount" type="number" min="1" placeholder="Сумма, ₽" value="' + chEsc(pref.price || '') + '"><div class="ch-act"><button id="po-ok" type="button">Отправить</button><button id="po-no" type="button" class="sec">Отмена</button></div></div>';
+  document.body.appendChild(ov);
+  ov.querySelector('#po-order').onchange = (e) => { ov.querySelector('#po-amount').value = e.target.selectedOptions[0].dataset.price || ''; };
+  ov.querySelector('#po-no').onclick = () => ov.remove();
+  ov.querySelector('#po-ok').onclick = async () => {
+    const amount = Number(ov.querySelector('#po-amount').value);
+    if (!(amount > 0)) { alert('Укажите сумму'); return; }
+    try { await callAdminPricing('pay_request', { userId: chatOpenId, orderId: ov.querySelector('#po-order').value, amount }); ov.remove(); openChat(chatOpenId, true); }
+    catch (e) { alert('Не отправилось: ' + e.message); }
+  };
+}
+
 // ===== Вкладка «ИИ» =====
 let aiChats = [], aiLoaded = false, aiOpen = {};
 function aiEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -6500,6 +6635,7 @@ function activateTab(tab) {
   if (tab === 'map') renderMap();
   if (tab === 'pricing' && !pricingLoaded) loadPricing();
   if (tab === 'ai') loadAi();
+  if (tab === 'chats') { chatOpenId = null; loadChats(); }
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
   if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
 }
@@ -6546,6 +6682,7 @@ window.goToMasterCard = function (userId) {
 // Вход / выход
 // -----------------------------------------------------------------------
 function showApp() {
+  startChatsPolling();
   setTimeout(() => { if (!payoutsLoaded && !payoutsLoading) loadPayouts(); }, 2500);
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('admin-app').style.display = 'block';
