@@ -1372,7 +1372,10 @@ body {
    «Закрыть» (у них flex-shrink:0) не обрезаются, а карта не пропадает
    полностью — это единственный способ закрыть попап и сохранить
    результат. */
+.center-pin { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; background: url(red-dot.png) center/contain no-repeat; pointer-events: none; z-index: 1000; }
+.location-confirm-map { position: relative; }
 .map-picker-map {
+  position: relative;
   flex: 1 1 auto;
   min-height: 160px;
   background: var(--gray-100);
@@ -7917,6 +7920,27 @@ function loadYmapsScriptForCompose() {
  * контейнере, поэтому его сперва аккуратно уничтожаем (.destroy()), чтобы
  * не плодить утечки и невидимые обработчики событий.
  */
+/** Точка всегда по центру карты (как в такси): двигаем карту, метка неподвижна. */
+function attachCenterPin(map, container, onPick) {
+  const pin = document.createElement('div');
+  pin.className = 'center-pin';
+  container.appendChild(pin);
+  let timer = null;
+  let armed = false;
+  let last = null;
+  setTimeout(() => { armed = true; }, 800);
+  map.events.add('boundschange', () => {
+    if (!armed) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const c = map.getCenter();
+      if (last && Math.abs(last[0] - c[0]) < 1e-6 && Math.abs(last[1] - c[1]) < 1e-6) return;
+      last = c;
+      onPick(c[0], c[1]);
+    }, 450);
+  });
+}
+
 async function initQuickReviewMap() {
   const container = document.getElementById('quick-review-map');
   if (!container) return; // не на этом шаге композера — ничего делать не нужно
@@ -7971,19 +7995,6 @@ async function initQuickReviewMap() {
     });
     quickReviewMapInstance = map;
 
-    const placemark = new window.ymaps.Placemark(
-      startCoords,
-      {},
-      {
-        iconLayout: 'default#image',
-        iconImageHref: 'red-dot.png',
-        iconImageSize: [22, 22],
-        iconImageOffset: [-11, -11], // кружок симметричный — центрируем прямо на координате
-        draggable: true,
-      }
-    );
-    map.geoObjects.add(placemark);
-
     const applyPoint = async (lat, lng) => {
       state.draft.exactLocation = { lat, lng };
       const hint = document.getElementById('quick-review-map-address');
@@ -8009,15 +8020,7 @@ async function initQuickReviewMap() {
       if (warn) warn.remove();
     };
 
-    placemark.events.add('dragend', () => {
-      const coords = placemark.geometry.getCoordinates();
-      applyPoint(coords[0], coords[1]);
-    });
-    map.events.add('click', (e) => {
-      const coords = e.get('coords');
-      placemark.geometry.setCoordinates(coords);
-      applyPoint(coords[0], coords[1]);
-    });
+    attachCenterPin(map, containerNow, applyPoint);
   });
 }
 
@@ -8138,19 +8141,6 @@ async function initMapPickerMap() {
     });
     mapPickerInstance = map;
 
-    const placemark = new window.ymaps.Placemark(
-      startCoords,
-      {},
-      {
-        iconLayout: 'default#image',
-        iconImageHref: 'red-dot.png',
-        iconImageSize: [22, 22],
-        iconImageOffset: [-11, -11],
-        draggable: true,
-      }
-    );
-    map.geoObjects.add(placemark);
-
     const applyPickerPoint = async (lat, lng) => {
       mapPickerLocation = { lat, lng };
       const hint = document.getElementById('map-picker-address');
@@ -8168,15 +8158,7 @@ async function initMapPickerMap() {
       }
     };
 
-    placemark.events.add('dragend', () => {
-      const coords = placemark.geometry.getCoordinates();
-      applyPickerPoint(coords[0], coords[1]);
-    });
-    map.events.add('click', (e) => {
-      const coords = e.get('coords');
-      placemark.geometry.setCoordinates(coords);
-      applyPickerPoint(coords[0], coords[1]);
-    });
+    attachCenterPin(map, containerNow, applyPickerPoint);
   });
 }
 
@@ -8190,7 +8172,7 @@ function renderMapPickerOverlay() {
         </div>
         <div class="map-picker-map" id="map-picker-map"></div>
         <p class="map-picker-address" id="map-picker-address">${
-          mapPickerAddressText ? `📍 ${escapeHtml(mapPickerAddressText)}` : 'Перетащите метку или нажмите на карте'
+          mapPickerAddressText ? `📍 ${escapeHtml(mapPickerAddressText)}` : 'Двигайте карту — точка по центру'
         }</p>
         <div class="map-picker-actions">
           <button type="button" class="secondary-button" data-action="close-map-picker">Закрыть</button>
@@ -9147,7 +9129,7 @@ function renderHome() {
           </div>
         </div>
       </div>
-      <p class="legal-footer"><a href="/about.html" style="color:inherit;">О сервисе и реквизиты</a> · <a href="/privacy-policy.html" style="color:inherit;">Конфиденциальность</a> · <a href="/personal-data-policy.html" style="color:inherit;">Персональные данные</a></p>
+      <p class="legal-footer"><a href="/voprosy/" style="color:inherit;">Вопросы и ответы</a> · <a href="/price-list.html" style="color:inherit;">Цены</a> · <a href="/about.html" style="color:inherit;">О сервисе и реквизиты</a> · <a href="/privacy-policy.html" style="color:inherit;">Конфиденциальность</a> · <a href="/personal-data-policy.html" style="color:inherit;">Персональные данные</a></p>
     </div>
   `;
 }
@@ -10066,7 +10048,7 @@ function renderCompose() {
           <div class="location-confirm-map" id="quick-review-map"></div>
           ${
             isMapsJsConfigured()
-              ? `<p class="location-confirm-hint">Перетащите метку или нажмите на карте, чтобы уточнить точку</p>
+              ? `<p class="location-confirm-hint">Двигайте карту — точка всегда по центру</p>
                  <p class="location-confirm-address" id="quick-review-map-address">${hasValidLocation(d.exactLocation) ? `📍 ${escapeHtml(d.fullAddress || d.district || '')}` : 'Уточните точку на карте'}</p>`
               : ''
           }
