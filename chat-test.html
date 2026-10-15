@@ -289,6 +289,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 <script>
 (function () {
   var URL_BASE = 'https://youyvbqdxuigvjciklfk.supabase.co';
+  var GEO_KEY = '4be0a4fc-08bd-4859-9145-ac737b71c49f';
   var ANON = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
   var HIST_KEY = 'muzhik_chat_test_v1', DRAFT_KEY = 'muzhik_chat_draft_v1';
   var CAT = { electrics:'Электрика', plumbing:'Сантехника', windows_doors:'Окна и двери', air_conditioning:'Кондиционеры', assembly:'Сборка мебели', minor_repair:'Мелкий ремонт', household_help:'Уборка и бытовая помощь', moving_help:'Вынос и перемещение', cars:'Автомобили', computers:'Компьютеры', other:'Другое' };
@@ -317,11 +318,52 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       '<div>Срочность: <b>' + esc(URG[draft.urgency] || 'обычная') + '</b></div>' +
       '<button type="button" class="draft-btn ' + (draft.ready ? 'on' : '') + '">Создать заказ</button>';
     log.appendChild(draftEl); toBottom();
-    draftEl.querySelector('button').onclick = function () {
-      if (!draft.ready) { add('sys', 'Пока не хватает данных — ответьте на вопросы выше.'); return; }
-      ls(DRAFT_KEY, JSON.stringify(draft));
-      add('sys', 'Это тест: черновик сохранён в браузере, заказ не создаётся. В боевой версии здесь откроется оформление и оплата.');
+    draftEl.querySelector('button').onclick = createTestOrder;
+  }
+
+  async function geocode(addr) {
+    try {
+      var r = await fetch('https://geocode-maps.yandex.ru/1.x/?apikey=' + GEO_KEY + '&geocode=' + encodeURIComponent(addr) + '&format=json&results=1');
+      var j = await r.json();
+      var pos = j.response.GeoObjectCollection.featureMember[0].GeoObject.Point.pos.split(' ').map(Number);
+      return (isFinite(pos[0]) && isFinite(pos[1])) ? { lat: pos[1], lng: pos[0] } : null;
+    } catch (e) { return null; }
+  }
+
+  async function createTestOrder() {
+    if (!draft || !draft.ready) { add('sys', 'Пока не хватает данных — ответьте на вопросы выше.'); return; }
+    if (busy) return;
+    var uid = ls('muzhik_session_v1'), tok = ls('muzhik_session_token_v1');
+    if (!uid || !tok) { add('sys', 'Сначала войдите на сайте.'); return; }
+    busy = true;
+    var btn = draftEl && draftEl.querySelector('button'); if (btn) { btn.textContent = 'Создаём…'; btn.classList.remove('on'); }
+    var loc = await geocode(draft.address);
+    var now = new Date().toISOString();
+    var order = {
+      title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: '',
+      scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: [], hasVoiceTranscript: false, voiceTranscript: '',
+      exactLocation: loc || { lat: 0, lng: 0 }, district: draft.address, houseNumberPublic: '', fullAddress: draft.address,
+      desiredDate: '', timeWindow: '', urgency: draft.urgency, customerBudget: null,
+      estimate: { min: 500, max: 500, factors: [] }, status: 'searching', timeline: [{ status: 'searching', at: now }],
+      warnings: ['Тестовый заказ из чат-помощника'], isPrecedent: false, negotiation: { customerOffer: null, workerOffer: null },
+      isTest: true
     };
+    try {
+      var res = await fetch(URL_BASE + '/functions/v1/create-order', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
+        body: JSON.stringify({ userId: uid, sessionToken: tok, order: order })
+      });
+      var data = await res.json().catch(function () { return null; });
+      if (res.ok && data && data.ok) {
+        var n = data.order && data.order.order_number;
+        add('sys', 'Готово! Тестовый заказ ' + (n ? 'T-' + n : '') + ' создан' + (loc ? '' : ' (адрес на карте не определился)') + '. Он виден только вам и администратору — найдёте в «Мои заказы» на главной.');
+        draft = null; renderDraft(); save();
+      } else {
+        add('sys', data && data.error === 'test_limit' ? 'Лимит тестовых заказов на сегодня (5) исчерпан.' : data && data.error === 'unauthorized' ? 'Сессия устарела — войдите на сайте заново.' : 'Не получилось создать заказ, попробуйте ещё раз.');
+        renderDraft();
+      }
+    } catch (e) { add('sys', 'Нет связи, попробуйте ещё раз.'); renderDraft(); }
+    busy = false;
   }
 
   function restore() {

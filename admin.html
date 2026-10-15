@@ -533,6 +533,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
       <button type="button" class="sort-btn" id="orders-sort-toggle" aria-label="Сортировка" title="Сортировка"></button>
       <button type="button" class="toggle-pill" id="orders-group-toggle">Группировать по заказчику</button>
       <button type="button" class="toggle-pill" id="orders-rating-toggle" style="display:none;">⭐ Оценки на модерации</button>
+      <button type="button" class="toggle-pill" id="orders-test-toggle">Тестовые: скрыты</button>
       <span class="count-hint" id="orders-count"></span>
     </div>
     <div id="orders-list"></div>
@@ -1231,6 +1232,7 @@ async function deleteRow(table, id, byField) {
 // -----------------------------------------------------------------------
 function dbOrderToOrder(row) {
   return {
+    isTest: Boolean(row.is_test),
     id: row.id,
     // Порядковый номер для людей (чек эквайринга, поиск здесь) — НЕ UUID
     // id заказа, см. миграцию orders.order_number (18.09.2026).
@@ -1742,7 +1744,7 @@ function computeAccounting(days, cfg) {
   const since = days > 0 ? Date.now() - days * 24 * 3600 * 1000 : 0;
   const payoutByOrder = new Map(allPayouts.map((p) => [p.orderId, p]));
   let turnover = 0, count = 0, masters = 0, frozen = 0, frozenCount = 0, refunded = 0;
-  allOrders.forEach((o) => {
+  allOrders.filter((o) => !o.isTest).forEach((o) => {
     const pay = o.payment || {};
     if (pay.status !== 'prepayment_paid') return;
     const paidAt = pay.paidAt ? new Date(pay.paidAt).getTime() : new Date(o.createdAt).getTime();
@@ -2011,6 +2013,7 @@ function recalcPayoutTotal(g) {
 // Состояние
 // -----------------------------------------------------------------------
 let allOrders = [];
+let showTestOrders = false; // тестовые заказы из чат-помощника скрыты по умолчанию
 let allUsers = [];
 // Короткий порядковый номер пользователя для отображения в админке (вместо
 // технического UUID) — просьба Sg 08.10.2026: "мой аккаунт id1, главный
@@ -2370,7 +2373,7 @@ function renderOrders() {
   renderOrdersToolbar();
   renderOrdersGroupToggleUi();
   updateOrdersRatingBadge();
-  let list = applyOrdersFilters(allOrders);
+  let list = applyOrdersFilters(allOrders.filter((o) => showTestOrders || !o.isTest));
   const q = ordersSearchQuery.trim().toLowerCase();
   if (q) list = list.filter((o) => orderSearchHaystack(o).includes(q));
   const sorted = [...list].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
@@ -3048,7 +3051,7 @@ function orderCardHtml(o) {
     <div class="card">
       <div class="card-head" id="order-head-${o.id}">
         <div class="card-head-main">
-          ${o.orderNumber ? `<p class="card-order-number">Заказ №${o.orderNumber}</p>` : ''}
+          ${o.orderNumber || o.isTest ? `<p class="card-order-number">${o.isTest ? '<span style="background:#6b21a8;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-right:6px;">ТЕСТ</span>' : ''}${o.orderNumber ? (o.isTest ? 'T-' + o.orderNumber : 'Заказ №' + o.orderNumber) : ''}</p>` : ''}
           <p class="card-title">${customerNameHtml}${districtSuffix}</p>
           ${workerLinksHtml ? `<p class="card-meta" style="margin:0 0 4px;">Мастер: ${workerLinksHtml}</p>` : ''}
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
@@ -4947,7 +4950,7 @@ function wireMasterForm(u) {
       e.stopPropagation();
       const select = document.getElementById(`bulk-status-master-${u.id}`);
       const newStatus = select.value;
-      const userOrders = allOrders.filter((o) => o.customerId === u.id);
+      const userOrders = allOrders.filter((o) => o.customerId === u.id && !o.isTest);
       if (!userOrders.length) {
         alert('У этого пользователя нет заказов.');
         return;
@@ -5195,7 +5198,7 @@ function notifyMatchingUsers() {
 
   if (notifyStatuses.size) {
     const idsWithAnyStatus = new Set(
-      allOrders.filter((o) => notifyStatuses.has(o.status)).map((o) => o.customerId)
+      allOrders.filter((o) => !o.isTest && notifyStatuses.has(o.status)).map((o) => o.customerId)
     );
     list = list.filter((u) => idsWithAnyStatus.has(u.id));
   }
@@ -6330,6 +6333,12 @@ function showApp() {
   });
   document.getElementById('orders-search').addEventListener('input', (e) => {
     ordersSearchQuery = e.target.value;
+    renderOrders();
+  });
+  document.getElementById('orders-test-toggle').addEventListener('click', (e) => {
+    showTestOrders = !showTestOrders;
+    e.target.textContent = showTestOrders ? 'Тестовые: показаны' : 'Тестовые: скрыты';
+    e.target.classList.toggle('active', showTestOrders);
     renderOrders();
   });
   document.getElementById('orders-group-toggle').addEventListener('click', () => {

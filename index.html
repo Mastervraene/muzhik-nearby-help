@@ -3485,6 +3485,7 @@ function dbSkillToSkill(row) {
 
 function dbOrderToOrder(row) {
   return {
+    isTest: Boolean(row.is_test),
     id: row.id,
     // Порядковый номер для людей (чек эквайринга, поиск в админке) — НЕ
     // UUID id заказа, см. миграцию orders.order_number (18.09.2026).
@@ -6584,6 +6585,7 @@ async function refreshAvailableOrders(isRetry) {
       customerName: o.customerName || '',
       customerAvatarUrl: o.customerAvatarUrl || '',
       orderNumber: o.orderNumber ?? null,
+      isTest: Boolean(o.isTest),
       deviceModel: o.deviceModel || '',
       diagnosisLog: o.diagnosisLog || [],
       title: o.title,
@@ -9583,7 +9585,7 @@ function orderCardHtml(order, { viewer }) {
     <div class="order-card" data-action="open-order" data-value="${order.id}" onclick="event.stopPropagation()">
       <div class="order-card-top">
         <div>
-          ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
+          ${order.orderNumber ? `<p class="order-number-tag">${order.isTest ? 'ТЕСТ · T-' + order.orderNumber : 'Заказ №' + order.orderNumber}</p>` : ''}
           ${order.deviceModel ? `<p style="margin:2px 0;"><b>${escapeHtml(order.deviceModel)}</b></p>` : ''}
           <p class="order-title">${escapeHtml(order.title)}</p>
           <div class="order-meta">
@@ -10455,7 +10457,7 @@ function renderOrderDetail() {
       <div class="order-card">
         <div class="order-card-top">
           <div>
-            ${order.orderNumber ? `<p class="order-number-tag">Заказ №${order.orderNumber}</p>` : ''}
+            ${order.orderNumber ? `<p class="order-number-tag">${order.isTest ? 'ТЕСТ · T-' + order.orderNumber : 'Заказ №' + order.orderNumber}</p>` : ''}
             ${
               // Модель неисправного устройства — жирным и первой строкой
               // (продумано с Sg 24.09.2026), чтобы не искать в переписке.
