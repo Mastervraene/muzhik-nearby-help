@@ -5806,6 +5806,25 @@ function fillMapPoints() {
         }
       );
       map.geoObjects.add(pm);
+      if (u.location2) {
+        pointCount++;
+        const pm2 = new window.ymaps.Placemark(
+          [u.location2.lat, u.location2.lng],
+          {
+            hintContent: '2-я локация',
+            balloonContentHeader: escapeHtml(userNameLabel(u) || 'Мастер') + ' — 2-я локация',
+            balloonContentBody: `${escapeHtml(u.district2 || '')}<br/>${escapeHtml(u.phone || '')}<br/><a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Открыть карточку мастера →</a>`,
+          },
+          {
+            iconLayout: 'default#image',
+            iconImageHref: 'logo.png',
+            iconImageSize: isCenter ? [40, 40] : [32, 32],
+            iconImageOffset: isCenter ? [-20, -20] : [-16, -16],
+            iconOpacity: opacity,
+          }
+        );
+        map.geoObjects.add(pm2);
+      }
     });
 
   // Метка заказа — свой SVG-кружок цвета статуса заказа (orderMarkerIconHref),
@@ -5848,25 +5867,6 @@ function fillMapPoints() {
         }
       );
       map.geoObjects.add(pm);
-      if (u.location2) {
-        pointCount++;
-        const pm2 = new window.ymaps.Placemark(
-          [u.location2.lat, u.location2.lng],
-          {
-            hintContent: '2-я локация',
-            balloonContentHeader: escapeHtml(userNameLabel(u) || 'Мастер') + ' — 2-я локация',
-            balloonContentBody: `${escapeHtml(u.district2 || '')}<br/>${escapeHtml(u.phone || '')}<br/><a href="javascript:void(0)" onclick="goToMasterCard('${u.id}')">Открыть карточку мастера →</a>`,
-          },
-          {
-            iconLayout: 'default#image',
-            iconImageHref: 'logo.png',
-            iconImageSize: isCenter ? [40, 40] : [32, 32],
-            iconImageOffset: isCenter ? [-20, -20] : [-16, -16],
-            iconOpacity: opacity,
-          }
-        );
-        map.geoObjects.add(pm2);
-      }
     });
 
   // Кружок радиуса поиска — вокруг мастера (его радиус по умолчанию) или
