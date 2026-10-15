@@ -389,6 +389,13 @@ body {
   color: var(--gray-900);
 }
 
+.home-hero-hint {
+  margin: 10px 0 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--gray-400);
+}
+
 .composer-card {
   background: var(--gray-0);
   border: 1px solid var(--gray-200);
@@ -9086,6 +9093,7 @@ function renderHome() {
       <div class="home-hero-wrap">
         <div class="home-hero" id="home-hero">
           <h1>Что нужно сделать?</h1>
+          <p class="home-hero-hint">Опишите проблему или задачу,<br>приложите фото и укажите адрес.</p>
         </div>
       </div>
       ${
@@ -9100,7 +9108,7 @@ function renderHome() {
           : ''
       }
       <div class="composer-card">
-        <textarea id="composer-input" class="composer-textarea" placeholder="Опишите проблему или задачу,&#10;приложите фото и укажите адрес." rows="1">${escapeHtml(composerDescriptionValue)}</textarea>
+        <textarea id="composer-input" class="composer-textarea" rows="1" aria-label="Опишите проблему или задачу">${escapeHtml(composerDescriptionValue)}</textarea>
         <div id="composer-sanitize-hint" class="composer-sanitize-hint"></div>
         <div id="composer-assistant-hint" class="composer-assistant-hint"></div>
         ${
@@ -9133,7 +9141,7 @@ function renderHome() {
           </div>
         </div>
       </div>
-      <p class="legal-footer">Найти помощника по дому от 500 рублей.<br />Мастер в районе — информационный сервис. ИП Матреницкая Луиза Алексеевна ИНН 770301870259. <a href="/privacy-policy.html" style="color:inherit;">Политика конфиденциальности</a> · <a href="/personal-data-policy.html" style="color:inherit;">Обработка персональных данных</a></p>
+      <p class="legal-footer"><a href="/about.html" style="color:inherit;">О сервисе и реквизиты</a> · <a href="/privacy-policy.html" style="color:inherit;">Конфиденциальность</a> · <a href="/personal-data-policy.html" style="color:inherit;">Персональные данные</a></p>
     </div>
   `;
 }
@@ -12532,7 +12540,7 @@ const COMPOSER_TEXTAREA_PLACEHOLDER_HEIGHT = 48;
 function autosizeComposerTextarea(textarea) {
   if (!textarea) return;
   textarea.style.height = 'auto';
-  const minHeight = textarea.value ? 0 : COMPOSER_TEXTAREA_PLACEHOLDER_HEIGHT;
+  const minHeight = textarea.value || textarea.id === 'composer-input' ? 0 : COMPOSER_TEXTAREA_PLACEHOLDER_HEIGHT;
   textarea.style.height = Math.max(minHeight, Math.min(textarea.scrollHeight, COMPOSER_TEXTAREA_MAX_HEIGHT)) + 'px';
 }
 
