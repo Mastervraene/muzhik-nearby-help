@@ -1993,6 +1993,9 @@ body {
   touch-action: pan-y;
 }
 
+.push-guide ol { margin: 0 0 6px; padding-left: 20px; }
+.push-guide li { margin-bottom: 6px; line-height: 1.45; }
+
 .onboarding-body h2 {
   font-size: 21px;
   font-weight: 800;
@@ -12183,45 +12186,85 @@ async function testPush() {
   }
   pushUi.busy = false; render();
 }
+function pushDeviceKind() {
+  const ua = navigator.userAgent || '';
+  if (pushIsIOS()) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'desktop';
+}
+const PUSH_GUIDES = {
+  ios: {
+    title: 'iPhone / iPad',
+    html: `<ol>
+      <li>Нужен iOS/iPadOS 16.4 или новее (Настройки → Основные → Об этом устройстве → Версия ПО).</li>
+      <li>Откройте сайт в <b>Safari</b> (не в Telegram и не в другом браузере).</li>
+      <li>Нажмите «Поделиться» (квадрат со стрелкой внизу экрана) → «На экран «Домой»» → «Добавить».</li>
+      <li>Закройте Safari и откройте «Мужик» <b>с иконки на экране «Домой»</b>.</li>
+      <li>Войдите, откройте профиль → «Настроить веб-пуш уведомления» → «Включить уведомления» → «Разрешить».</li>
+      <li>Нажмите «Отправить тестовое уведомление» — оно придёт сверху экрана.</li>
+      <li>Если не пришло: Настройки iPhone → Уведомления → Мужик → «Допуск уведомлений» включён; выключены режимы «Фокусирование» / «Не беспокоить».</li>
+    </ol>`,
+  },
+  android: {
+    title: 'Android (Chrome)',
+    html: `<ol>
+      <li>Откройте сайт в <b>Chrome</b> (в других браузерах и во встроенных браузерах мессенджеров может не работать).</li>
+      <li>По желанию: меню ⋮ → «Добавить на главный экран» — так сайт откроется как приложение.</li>
+      <li>Войдите, откройте профиль → «Настроить веб-пуш уведомления» → «Включить уведомления» → «Разрешить».</li>
+      <li>Нажмите «Отправить тестовое уведомление».</li>
+      <li>Если не пришло: Настройки телефона → Приложения → Chrome → Уведомления включены; выключен режим «Не беспокоить»; экономия заряда не «усыпляет» Chrome (Настройки → Батарея → Chrome → «Без ограничений»).</li>
+      <li>Если ранее нажали «Блокировать»: в Chrome нажмите на значок слева от адреса → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.</li>
+    </ol>`,
+  },
+  desktop: {
+    title: 'Компьютер (Chrome, Edge, Firefox, Safari)',
+    html: `<ol>
+      <li>Откройте сайт в браузере и войдите.</li>
+      <li>Профиль → «Настроить веб-пуш уведомления» → «Включить уведомления» → в окне браузера «Разрешить».</li>
+      <li>Нажмите «Отправить тестовое уведомление» — оно появится в углу экрана.</li>
+      <li>Уведомления приходят, пока браузер запущен (можно свёрнутым).</li>
+      <li>Если не пришло: Windows — Параметры → Система → Уведомления (включены, выключен «Не беспокоить»); macOS — Системные настройки → Уведомления → ваш браузер → «Разрешить».</li>
+      <li>Если ранее нажали «Блокировать»: значок замка слева от адреса → «Уведомления» → «Разрешить», затем обновите страницу.</li>
+    </ol>`,
+  },
+};
 function renderPushOverlay() {
   const user = currentUser();
-  const needInstall = pushIsIOS() && !pushIsStandalone();
-  let body;
+  const kind = pushDeviceKind();
+  const needInstall = kind === 'ios' && !pushIsStandalone();
+  const others = ['ios', 'android', 'desktop'].filter((k) => k !== kind);
+  const guide = (k) => `<p class="order-meta" style="margin:10px 0 4px;"><b>${PUSH_GUIDES[k].title}</b></p><div class="order-meta push-guide">${PUSH_GUIDES[k].html}</div>`;
+  let main;
   if (!user) {
-    body = '<p class="order-meta">Сначала войдите в аккаунт.</p>';
+    main = '<p class="order-meta">Сначала войдите в аккаунт.</p>';
   } else if (!pushSupported() || needInstall) {
-    body = needInstall
-      ? '<p class="order-meta"><b>iPhone / iPad:</b> веб-пуш работает только если сайт добавлен на экран «Домой» (iOS 16.4 и новее).</p><ol class="order-meta" style="padding-left:20px;"><li>Откройте сайт в Safari.</li><li>Нажмите «Поделиться» (квадрат со стрелкой внизу).</li><li>Выберите «На экран «Домой»» → «Добавить».</li><li>Откройте «Мужик» с иконки на экране, зайдите в профиль и нажмите «Настроить веб-пуш уведомления» ещё раз.</li></ol>'
-      : '<p class="order-meta">Этот браузер не поддерживает веб-пуш. Попробуйте Chrome, Edge, Firefox или Safari (iOS 16.4+, через «На экран «Домой»»).</p>';
+    main = needInstall
+      ? '<p class="order-meta"><b>Сначала добавьте сайт на экран «Домой»</b> — на iPhone веб-пуш иначе не работает. Подробная инструкция ниже.</p>' + guide('ios')
+      : '<p class="order-meta">Этот браузер не поддерживает веб-пуш. Попробуйте Chrome, Edge, Firefox (на iPhone — Safari через «На экран «Домой»»).</p>';
   } else {
     const denied = pushUi.perm === 'denied';
-    body = `
+    main = `
       <p class="order-meta">${pushUi.subscribed ? '✓ Веб-пуш включён на этом устройстве.' : 'Веб-пуш не включён на этом устройстве.'} Уведомления приходят так же, как в Telegram, — с 07:00 до 22:00 по вашему времени.</p>
-      ${denied ? '<p class="order-meta" style="color:#b91c1c;">Уведомления для сайта заблокированы в браузере. Разрешите их: значок замка в адресной строке → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.</p>' : ''}
+      ${denied ? '<p class="order-meta" style="color:#b91c1c;">Уведомления для сайта заблокированы в браузере — как разрешить, смотрите в инструкции ниже.</p>' : ''}
       ${pushUi.subscribed
         ? `<button type="button" class="primary-button" data-action="push-test" ${pushUi.busy ? 'disabled' : ''}>Отправить тестовое уведомление</button>
            <button type="button" class="secondary-button" style="margin-top:8px;box-sizing:border-box;" data-action="push-disable" ${pushUi.busy ? 'disabled' : ''}>Выключить на этом устройстве</button>`
         : `<button type="button" class="primary-button" data-action="push-enable" ${pushUi.busy ? 'disabled' : ''}>Включить уведомления</button>`}
       ${pushUi.msg ? `<p class="order-meta" style="margin-top:10px;">${escapeHtml(pushUi.msg)}</p>` : ''}
-      <details style="margin-top:14px;"><summary class="order-meta" style="cursor:pointer;">Инструкция</summary>
-        <ol class="order-meta" style="padding-left:20px;">
-          <li>Нажмите «Включить уведомления» и в окне браузера выберите «Разрешить».</li>
-          <li>Нажмите «Отправить тестовое уведомление» — оно должно появиться на экране.</li>
-          <li><b>Android (Chrome):</b> если не пришло — проверьте Настройки → Приложения → Chrome → Уведомления и режим «Не беспокоить».</li>
-          <li><b>iPhone:</b> нужен iOS 16.4+ и сайт, добавленный на экран «Домой»; открывайте его с иконки.</li>
-          <li><b>Компьютер:</b> браузер должен быть запущен; проверьте, что уведомления разрешены системой (Windows: «Параметры → Уведомления»; macOS: «Системные настройки → Уведомления»).</li>
-          <li>Включайте отдельно на каждом устройстве. Отключить можно здесь же.</li>
-        </ol>
-      </details>`;
+      <p class="order-meta" style="margin-top:14px;"><b>Инструкция для вашего устройства</b></p>${guide(kind)}`;
   }
   return `
     <div class="onboarding-overlay" data-action="dismiss-onboarding">
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-drag-handle"></div>
-        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
+        <div class="onboarding-body" style="padding-top: 28px;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
           <h2>Веб-пуш уведомления</h2>
-          ${body}
+          ${main}
+          <details style="margin-top:14px;"><summary class="order-meta" style="cursor:pointer;">Инструкции для других устройств</summary>
+            ${others.map(guide).join('')}
+            <p class="order-meta" style="margin-top:10px;">Включать веб-пуш нужно отдельно на каждом устройстве.</p>
+          </details>
         </div>
       </div>
     </div>

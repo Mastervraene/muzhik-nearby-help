@@ -304,6 +304,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     <div class="chat-log empty" id="log">
       <div class="home-hero"><h1>Что нужно сделать?</h1><p class="home-hero-hint">Опишите проблему или задачу,<br>приложите фото и укажите адрес.</p></div>
     </div>
+    <div style="text-align:center;margin:0 0 6px;"><button type="button" id="calladm" style="background:none;border:0;color:var(--gray-500);font-size:13px;text-decoration:underline;cursor:pointer;padding:4px 8px;">Позвать администратора</button></div>
     <div class="composer-card">
       <textarea id="text" class="composer-textarea" rows="1" maxlength="1000" aria-label="Опишите проблему или задачу"></textarea>
       <div class="ph-row" id="photos"></div>
@@ -503,11 +504,14 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     window.ymaps.ready(function () {
       var start = pos ? [pos.coords.latitude, pos.coords.longitude] : [55.751244, 37.618423];
       myMap = new window.ymaps.Map('mp-map', { center: start, zoom: pos ? 16 : 11, controls: ['zoomControl'] });
-      var pm = new window.ymaps.Placemark(start, {}, { iconLayout: 'default#image', iconImageHref: 'red-dot.png', iconImageSize: [22, 22], iconImageOffset: [-11, -11], draggable: true });
-      myMap.geoObjects.add(pm);
-      pm.events.add('dragend', function () { var c = pm.geometry.getCoordinates(); setPoint(c[0], c[1]); });
-      myMap.events.add('click', function (e) { var c = e.get('coords'); pm.geometry.setCoordinates(c); setPoint(c[0], c[1]); });
-      if (pos) setPoint(start[0], start[1]); else addrEl.textContent = 'Нажмите на карте или перетащите метку';
+      var pin = document.createElement('div'); pin.style.cssText = 'position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;background:url(red-dot.png) center/contain no-repeat;pointer-events:none;z-index:1000';
+      document.getElementById('mp-map').style.position = 'relative'; document.getElementById('mp-map').appendChild(pin);
+      var armed = false, tm = null, lastC = null; setTimeout(function () { armed = true; }, 800);
+      myMap.events.add('boundschange', function () {
+        if (!armed) return; clearTimeout(tm);
+        tm = setTimeout(function () { var c = myMap.getCenter(); if (lastC && Math.abs(lastC[0] - c[0]) < 1e-6 && Math.abs(lastC[1] - c[1]) < 1e-6) return; lastC = c; setPoint(c[0], c[1]); }, 450);
+      });
+      if (pos) setPoint(start[0], start[1]); else addrEl.textContent = 'Двигайте карту — точка по центру';
     });
   }
   function adminBubble(m) {
@@ -734,6 +738,25 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     } catch (x) { wait.remove(); fail('Нет связи.', t, mine, !!mine); messages.pop(); }
     busy = false; save(); toBottom();
   }
+  async function callAdmin() {
+    if (busy) return;
+    var S = await ensureSession();
+    if (!S) { add('sys', 'Не получилось связаться — попробуйте ещё раз.'); return; }
+    busy = true;
+    var btn = document.getElementById('calladm'); btn.disabled = true;
+    try {
+      var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
+        body: JSON.stringify({ userId: S.uid, sessionToken: S.tok, callAdmin: true, messages: [], convId: convId || (newConv(), convId), state: stateFor(), guest: S.guest })
+      });
+      var data = await res.json().catch(function () { return null; });
+      if (!res.ok || !data || !data.ok) { add('sys', 'Не получилось позвать администратора — попробуйте ещё раз.'); }
+      else { messages.push({ role: 'assistant', text: data.reply }); add('ai', data.reply); waitNoted = true; save(); toBottom(); }
+    } catch (x) { add('sys', 'Нет связи.'); }
+    btn.disabled = false; busy = false;
+  }
+  document.getElementById('calladm').addEventListener('click', callAdmin);
   send.addEventListener('click', submit);
   ta.addEventListener('input', function () { grow(); grade(); });
   ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
