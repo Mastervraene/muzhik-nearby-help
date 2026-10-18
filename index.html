@@ -44,17 +44,17 @@
   "logo": "https://мастерврайоне.рф/logo.png",
   "areaServed": { "@type": "City", "name": "Москва" },
   "address": { "@type": "PostalAddress", "addressLocality": "Москва", "addressCountry": "RU" },
-  "priceRange": "500–4500 ₽",
+  "priceRange": "500–4200 ₽",
   "hasOfferCatalog": {
     "@type": "OfferCatalog",
     "name": "Виды работ",
     "itemListElement": [
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/elektrika.html", "itemOffered": { "@type": "Service", "name": "Электрика" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 700, "maxPrice": 4500, "priceCurrency": "RUB" } },
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/santehnika.html", "itemOffered": { "@type": "Service", "name": "Сантехника" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 800, "maxPrice": 2200, "priceCurrency": "RUB" } },
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/sborka-mebeli.html", "itemOffered": { "@type": "Service", "name": "Сборка и крепёж" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 600, "maxPrice": 4000, "priceCurrency": "RUB" } },
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/melkiy-remont.html", "itemOffered": { "@type": "Service", "name": "Мелкий ремонт" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 1200, "priceCurrency": "RUB" } },
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/uborka.html", "itemOffered": { "@type": "Service", "name": "Уборка и бытовая помощь" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 1800, "maxPrice": 3500, "priceCurrency": "RUB" } },
-      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/perenos-veshey.html", "itemOffered": { "@type": "Service", "name": "Вынос и перемещение вещей" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 600, "maxPrice": 1800, "priceCurrency": "RUB" } }
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/elektrika.html", "itemOffered": { "@type": "Service", "name": "Электрика" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 4200, "priceCurrency": "RUB" } },
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/santehnika.html", "itemOffered": { "@type": "Service", "name": "Сантехника" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 1900, "priceCurrency": "RUB" } },
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/sborka-mebeli.html", "itemOffered": { "@type": "Service", "name": "Сборка и крепёж" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 3700, "priceCurrency": "RUB" } },
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/melkiy-remont.html", "itemOffered": { "@type": "Service", "name": "Мелкий ремонт" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 900, "priceCurrency": "RUB" } },
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/uborka.html", "itemOffered": { "@type": "Service", "name": "Уборка и бытовая помощь" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 1500, "maxPrice": 3200, "priceCurrency": "RUB" } },
+      { "@type": "Offer", "url": "https://мастерврайоне.рф/articles/perenos-veshey.html", "itemOffered": { "@type": "Service", "name": "Вынос и перемещение вещей" }, "priceSpecification": { "@type": "PriceSpecification", "minPrice": 500, "maxPrice": 1500, "priceCurrency": "RUB" } }
     ]
   }
 }
@@ -6897,21 +6897,36 @@ function renderEtaPicker(order) {
  * @param {'before'|'after'} kind
  */
 function renderOrderPhotoForm(order, kind) {
-  const photos = (kind === 'before' ? order.beforePhotos : order.afterPhotos) || [];
-  const label = kind === 'before' ? 'Фото до начала работы' : 'Фото после выполнения';
+  // Единая лента фото по ходу работы (просьба Sg 18.10.2026): мастер может
+  // прикладывать фото в любой момент — от принятия заказа до завершения.
+  // Новые фото пишем в order.beforePhotos (с отметкой stage), старые
+  // before/after остаются и показываются в той же ленте по времени.
+  const all = []
+    .concat((order.beforePhotos || []).map((a) => ({ a, legacy: 'До начала' })))
+    .concat((order.afterPhotos || []).map((a) => ({ a, legacy: 'После работы' })));
+  const stageLabel = { assigned: 'Заказ принят', en_route: 'В пути', in_progress: 'В работе' };
+  all.sort((x, y) => (x.a.uploadedAt || 0) - (y.a.uploadedAt || 0));
+  const fmt = (t) => {
+    if (!t) return '';
+    const d = new Date(t);
+    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+  const thumbs = all
+    .map(
+      ({ a, legacy }) => `
+      <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" style="display:block;width:76px;text-decoration:none;color:inherit;">
+        <img src="${escapeHtml(a.url)}" alt="" loading="lazy" style="width:76px;height:76px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100);display:block;" />
+        <span style="display:block;font-size:10.5px;line-height:1.25;color:var(--gray-500);margin-top:2px;">${escapeHtml(fmt(a.uploadedAt))}<br>${escapeHtml(stageLabel[a.stage] || legacy)}</span>
+      </a>`
+    )
+    .join('');
   return `
     <div class="field-card" style="padding:10px 12px;">
-      <p class="order-meta" style="margin-bottom:6px;">${label}</p>
-      <div id="order-photos-${kind}-${order.id}" class="attachment-preview">
-        ${photos.map((a) => `<span class="attachment-chip">📷 ${escapeHtml(a.name || a.url)}</span>`).join('')}
-      </div>
-      ${
-        !photos.length
-          ? `<div class="order-warning">Фото пока нет — приложите ${kind === 'before' ? 'перед началом' : 'после завершения'} работы, для контроля качества.</div>`
-          : ''
-      }
+      <p class="order-meta" style="margin-bottom:6px;">Фото по ходу работы</p>
+      <p class="order-meta" style="margin-bottom:8px;font-size:12.5px;">Прикладывайте в любой момент: до начала, в процессе, после завершения. Фото сохраняются по времени.</p>
+      <div id="order-photos-${kind}-${order.id}" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">${thumbs}</div>
       <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;">
-        📎 Прикрепить фото (до 5 штук)
+        📎 Прикрепить фото
         <input id="order-photos-${kind}-file-${order.id}" type="file" accept="image/*" multiple style="display:none" />
       </label>
     </div>
@@ -10251,11 +10266,9 @@ function renderOrderDetail() {
     // именно к этому шагу (см. renderOrderPhotoForm), чтобы фиксация
     // состояния «до» происходила до начала работы, а не постфактум.
     if (canTransition(order.status, 'in_progress')) {
-      actions += renderOrderPhotoForm(order, 'before');
       actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">На месте, приступаю</button>`;
     }
     if (canTransition(order.status, 'completed')) {
-      actions += renderOrderPhotoForm(order, 'after');
       actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
     }
     if (
@@ -10273,6 +10286,7 @@ function renderOrderDetail() {
         </div>
       `;
     }
+    if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += renderOrderPhotoForm(order, 'before');
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
     // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
@@ -12450,9 +12464,10 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
   if (incoming.length < files.length) {
     showToast('Принимаются только фото');
   }
-  const room = Math.max(0, MAX_ORDER_PHOTOS - targetArrayHolder.value.length);
+  const maxPhotos = (archiveInfo && archiveInfo.max) || MAX_ORDER_PHOTOS;
+  const room = Math.max(0, maxPhotos - targetArrayHolder.value.length);
   if (incoming.length > room) {
-    showToast(`Можно приложить не больше ${MAX_ORDER_PHOTOS} фото`);
+    showToast(`Можно приложить не больше ${maxPhotos} фото`);
     incoming = incoming.slice(0, room);
   }
   if (!incoming.length) {
@@ -12482,6 +12497,7 @@ async function handleFileSelection(files, targetArrayHolder, containerEl, onDone
         uploadedAt,
         archiveNamed: false,
       };
+      if (archiveInfo && archiveInfo.stage) item.stage = archiveInfo.stage;
       if (archiveInfo && archiveInfo.orderNumber) {
         item.name = buildArchiveFileName({ uploadedAt, orderNumber: archiveInfo.orderNumber, prefix: archiveInfo.prefix, origName });
         item.archiveNamed = true;
@@ -12883,7 +12899,7 @@ function wireEvents() {
             openOrder[key] = holder.value;
             saveOrder(openOrder);
             render();
-          }, { orderNumber: openOrder.orderNumber, prefix: 'M' });
+          }, { orderNumber: openOrder.orderNumber, prefix: 'M', max: 30, stage: openOrder.status });
         });
       });
 

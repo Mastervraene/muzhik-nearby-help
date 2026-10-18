@@ -3265,6 +3265,31 @@ function orderQualityPhotosHtml(o, kind, label) {
   `;
 }
 
+/** Единая лента фото мастера по ходу работы (до+после, по времени). */
+function workPhotosList(o) {
+  return []
+    .concat((o.beforePhotos || []).map((a) => Object.assign({}, a, { _legacy: 'До начала' })))
+    .concat((o.afterPhotos || []).map((a) => Object.assign({}, a, { _legacy: 'После работы' })))
+    .sort((x, y) => (x.uploadedAt || 0) - (y.uploadedAt || 0));
+}
+function orderWorkPhotosHtml(o) {
+  const photos = workPhotosList(o);
+  if (!photos.length) return '';
+  const st = { assigned: 'Заказ принят', en_route: 'В пути', in_progress: 'В работе' };
+  const fmt = (v) => (v ? new Date(v).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+  return `
+    <div class="field-sm">
+      <label>Фото мастера по ходу работы (${photos.length})</label>
+      <div class="order-photos" style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;">${photos
+        .map(
+          (a, idx) =>
+            `<div style="width:76px;"><img src="${escapeHtml(a.url)}" alt="" class="order-photo-thumb-work" data-order-id="${o.id}" data-photo-index="${idx}" style="width:76px;height:76px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;display:block;" loading="lazy" onerror="onArchivedPhotoError(this)" /><span style="display:block;font-size:10.5px;line-height:1.25;color:var(--gray-500,#888);margin-top:2px;">${escapeHtml(fmt(a.uploadedAt))}<br>${escapeHtml(st[a.stage] || a._legacy)}</span></div>`
+        )
+        .join('')}</div>
+    </div>
+  `;
+}
+
 /** Статус решения админа по конкретной оценке — см. orderReviewsHtml/applyRatingDecision ниже. */
 function ratingDecisionStatusHtml(counted) {
   if (counted === true) return `<span style="color:#1a7f37;font-size:13px;">✓ учтено в рейтинге</span>`;
@@ -3678,8 +3703,7 @@ function orderFormHtml(o) {
             )
             .join('')}</div>`
         : ''}
-      ${orderQualityPhotosHtml(o, 'before', 'Фото до')}
-      ${orderQualityPhotosHtml(o, 'after', 'Фото после')}
+      ${orderWorkPhotosHtml(o)}
       ${orderReviewsHtml(o)}
       ${adminNoteHtml('order', o.id)}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
@@ -3726,6 +3750,13 @@ function wireOrderForm(o) {
   }
   // Фото «до»/«после» работы мастером — тот же лайтбокс, но своя пара
   // массивов (см. orderQualityPhotosHtml).
+  (function () {
+    const wp = workPhotosList(o);
+    if (!wp.length) return;
+    document.querySelectorAll(`.order-photo-thumb-work[data-order-id="${o.id}"]`).forEach((thumbEl) => {
+      thumbEl.addEventListener('click', () => openLightbox(wp, Number(thumbEl.getAttribute('data-photo-index') || 0)));
+    });
+  })();
   ['before', 'after'].forEach((kind) => {
     const photos = (kind === 'before' ? o.beforePhotos : o.afterPhotos) || [];
     if (!photos.length) return;
@@ -6908,6 +6939,33 @@ function showApp() {
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
   });
+  // Свайп влево/вправо переключает пункты верхнего меню (как на основном сайте)
+  (function () {
+    let sx = 0, sy = 0, st = 0, ok = false;
+    const blocked = (el) => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName)) return true;
+        if (n.id === 'map-container' || (n.classList && (n.classList.contains('ymaps-2-1-79-map') || n.classList.contains('ch-ov') || n.classList.contains('tab-bar')))) return true;
+        if (n.scrollWidth > n.clientWidth + 4 && /(auto|scroll)/.test(getComputedStyle(n).overflowX)) return true;
+      }
+      return false;
+    };
+    document.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1 || document.querySelector('.ch-ov')) { ok = false; return; }
+      const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now(); ok = !blocked(e.target);
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      if (!ok) return; ok = false;
+      const t = e.changedTouches[0]; const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6 || Date.now() - st > 700) return;
+      const btns = Array.from(document.querySelectorAll('.tab-btn')).filter((b) => b.offsetParent !== null);
+      const i = btns.findIndex((b) => b.classList.contains('active'));
+      const n = btns[i + (dx < 0 ? 1 : -1)];
+      if (!n) return;
+      activateTab(n.dataset.tab);
+      n.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }, { passive: true });
+  })();
   document.getElementById('payouts-status-filter').addEventListener('change', (e) => {
     payoutsStatusFilter = e.target.value;
     renderPayouts();
