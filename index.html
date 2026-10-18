@@ -11605,7 +11605,21 @@ function renderPhoneVerifyStep(st) {
 // экранами (go()) scrollTop намеренно остаётся 0 — так и должно быть.
 let lastRenderedScreen = null;
 
+let pendingMasterIntent = false;
+try { if (localStorage.getItem('mnr_intent_master') === '1') pendingMasterIntent = true; } catch (e) { /* ignore */ }
+
 function render() {
+  if (pendingMasterIntent && !state.booting && state.screen !== 'boot') {
+    const u = typeof currentUser === 'function' ? currentUser() : null;
+    if (u) {
+      pendingMasterIntent = false;
+      try { localStorage.removeItem('mnr_intent_master'); } catch (e) { /* ignore */ }
+      if (!['pending', 'approved'].includes(u.masterStatus)) setTimeout(() => openMasterWizard(), 0);
+    } else if (state.screen === 'home') {
+      // не вошёл — ведём на экран профиля, где вход/регистрация; намерение сохранено
+      state.screen = 'profile';
+    }
+  }
   // Подсветка аватарки + поднятый z-index раскрытого меню на время поп-апа
   // «Заявка отправлена» (см. renderOrderCreatedTipOverlay и CSS
   // .order-tip-active) — класс на <body>, а не инлайн-стиль внутри шапки,
@@ -14196,6 +14210,15 @@ async function boot() {
   // оплаты не нужно самому идти в «Заказы» и искать нужный.
   try {
     const params = new URLSearchParams(location.search);
+    // Вход «стать мастером» с листовки/QR (man.html): ?master=1 — после входа
+    // сразу открываем мастер заявки (см. начало render()).
+    if (params.get('master')) {
+      try { localStorage.setItem('mnr_intent_master', '1'); } catch (e) { /* без хранилища — не страшно */ }
+      pendingMasterIntent = true;
+      params.delete('master');
+      const rest = params.toString();
+      history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+    }
     const paidOrderId = params.get('paid_order');
     const failedOrderId = params.get('failed_order');
     if (paidOrderId) {
