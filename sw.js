@@ -8,7 +8,7 @@
 // и для всех — поэтому здесь network-first с откатом в кэш только для
 // офлайна, плюс явное версионирование кэша ниже (бампать CACHE_VERSION
 // при следующей заметной правке app-шелла).
-const CACHE_VERSION = 'mnr-shell-v1';
+const CACHE_VERSION = 'mnr-shell-v2';
 
 // Только публичная часть сайта — НЕ admin.html и НЕ тяжёлые
 // изображения (og.png, coverage-map.jpg), которые не нужны для
@@ -77,4 +77,31 @@ self.addEventListener('fetch', (event) => {
       })
     );
   }
+});
+
+// ===== Веб-пуш (18.10.2026) =====
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data ? event.data.text() : '' }; }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Мужик', {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if ('focus' in c) return c.focus();
+      }
+      return self.clients.openWindow(url);
+    })
+  );
 });

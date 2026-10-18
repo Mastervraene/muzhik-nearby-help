@@ -572,6 +572,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   <div class="topbar">
     <h1 class="heading">Мужик — админка</h1>
     <div style="display:flex; gap:14px; align-items:center;">
+      <button class="logout" id="backup-btn" title="Скачать резервную копию базы (JSON)">Копия БД</button>
       <button class="logout" id="change-password-btn">Пароль</button>
       <button class="logout" id="logout-btn">Выйти</button>
     </div>
@@ -6990,6 +6991,30 @@ function showApp() {
   document.getElementById('logout-btn').addEventListener('click', () => {
     localStorage.removeItem(ADMIN_SESSION_KEY);
     location.reload();
+  });
+  document.getElementById('backup-btn').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Готовлю…';
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-backup`, {
+        method: 'POST', headers: sbHeaders(), body: JSON.stringify({ token: adminSessionToken }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'muzhik-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      const total = Object.values(data.counts || {}).reduce((x, y) => x + y, 0);
+      const errs = Object.keys(data.errors || {});
+      alert('Копия скачана: ' + total + ' записей в ' + Object.keys(data.counts || {}).length + ' таблицах.' + (errs.length ? '\nОшибки в таблицах: ' + errs.join(', ') : ''));
+    } catch (e) {
+      alert('Не удалось сделать копию: ' + (e && e.message ? e.message : e));
+    }
+    btn.disabled = false; btn.textContent = old;
   });
   document.getElementById('change-password-btn').addEventListener('click', openPasswordChangeModal);
   document.getElementById('password-change-close').addEventListener('click', closePasswordChangeModal);

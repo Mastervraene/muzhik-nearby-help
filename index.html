@@ -10696,6 +10696,7 @@ function renderProfile() {
         </div>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;"><span>${escapeHtml(displayPhone(user.phone) || 'Телефон не указан')}</span><span>${user.phone ? (user.phoneVerified ? '✓ подтверждён' : 'не подтверждён') : ''}</span><button type="button" class="icon-edit-btn" data-action="open-phone-overlay" aria-label="Телефон" title="Телефон">${ICON_PENCIL}</button></p>
         <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${user.telegramId ? 'Telegram ✓ подтверждён' : 'Telegram не подключён'}</span><button type="button" class="icon-edit-btn" data-action="open-telegram-overlay" aria-label="Telegram" title="Telegram">${ICON_PENCIL}</button></p>
+        <p class="order-meta" style="display:flex;align-items:center;gap:6px;margin-top:4px;"><span>${pushUi.subscribed ? 'Веб-пуш ✓ включён' : 'Веб-пуш уведомления'}</span><button type="button" class="secondary-button" style="padding:4px 12px;font-size:13px;width:auto;box-sizing:border-box;" data-action="open-push-overlay">Настроить веб-пуш уведомления</button></p>
       </div>
 
       ${
@@ -10987,7 +10988,8 @@ function renderMasterWizardStepBody(step, user) {
         <p style="margin:0 0 10px;">${user.telegramId ? '<span class="mw-ok">✓ Telegram подключён</span>' : 'Telegram пока не подключён.'}</p>
         <button type="button" class="${user.telegramId ? 'secondary-button' : 'primary-button'}" data-action="open-telegram-overlay" style="box-sizing:border-box;">${user.telegramId ? 'Настройки Telegram' : 'Подключить Telegram'}</button>
         <p class="order-meta mw-note">Туда будут приходить уведомления о новых заказах и об изменении статусов.</p>
-        <p class="order-meta mw-note mw-faint">Позже появятся push-уведомления.</p>
+        <button type="button" class="secondary-button" style="box-sizing:border-box;margin-top:8px;" data-action="open-push-overlay">Настроить веб-пуш уведомления</button>
+        <p class="order-meta mw-note mw-faint">Веб-пуш — уведомления в браузере/на экране телефона, если Telegram недоступен.</p>
         ${user.telegramId ? '' : wizardBrokenBlockHtml('telegram')}
       </div>`;
   }
@@ -11676,7 +11678,7 @@ function render() {
         <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -11708,7 +11710,7 @@ function render() {
     ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -12082,6 +12084,144 @@ function renderSupportOverlay() {
               <span class="support-link-value">${escapeHtml(SUPPORT_PHONE_DISPLAY)}</span>
             </span>
           </a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ===== Веб-пуш уведомления (добавлено 18.10.2026) =====
+// Альтернатива Telegram (он в РФ работает нестабильно). Подписка хранится в
+// push_subscriptions (Edge Function webpush); ключи VAPID генерируются на
+// сервере. Уведомления шлёт триггер notify_telegram_on_new_notification
+// (тот же поток, что и Telegram, с той же «тишиной» 22:00–07:00).
+const pushUi = { subscribed: false, perm: 'default', busy: false, msg: '' };
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+function pushIsIOS() {
+  const ua = navigator.userAgent || '';
+  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+function pushIsStandalone() {
+  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+}
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function pushCall(body) {
+  const user = currentUser();
+  return callSecureFn('webpush', Object.assign({ userId: user && user.id, sessionToken: loadSessionToken() }, body));
+}
+async function pushCurrentSub() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function refreshPushStatus() {
+  try {
+    pushUi.perm = pushSupported() ? Notification.permission : 'unsupported';
+    const sub = await pushCurrentSub();
+    let ok = false;
+    if (sub && currentUser()) {
+      const st = await pushCall({ action: 'status' });
+      ok = (st.endpoints || []).includes(sub.endpoint);
+    }
+    pushUi.subscribed = ok;
+  } catch (e) {
+    pushUi.subscribed = false;
+  }
+  render();
+}
+async function enablePush() {
+  if (pushUi.busy) return;
+  pushUi.busy = true; pushUi.msg = ''; render();
+  try {
+    if (!currentUser()) throw new Error('Сначала войдите в аккаунт');
+    if (!pushSupported()) throw new Error('Этот браузер не поддерживает веб-пуш');
+    const perm = await Notification.requestPermission();
+    pushUi.perm = perm;
+    if (perm !== 'granted') throw new Error('Разрешение на уведомления не выдано. Разрешите их в настройках браузера для этого сайта и повторите.');
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const k = await callSecureFn('webpush', { action: 'public_key' });
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(k.publicKey) });
+    }
+    await pushCall({ action: 'subscribe', subscription: sub.toJSON(), userAgent: navigator.userAgent });
+    pushUi.subscribed = true;
+    pushUi.msg = 'Готово! Нажмите «Отправить тестовое уведомление».';
+  } catch (e) {
+    pushUi.msg = 'Не получилось: ' + (e && e.message ? e.message : e);
+  }
+  pushUi.busy = false; render();
+}
+async function disablePush() {
+  if (pushUi.busy) return;
+  pushUi.busy = true; render();
+  try {
+    const sub = await pushCurrentSub();
+    await pushCall({ action: 'unsubscribe', endpoint: sub ? sub.endpoint : undefined });
+    if (sub) await sub.unsubscribe();
+    pushUi.subscribed = false; pushUi.msg = 'Веб-пуш отключён на этом устройстве.';
+  } catch (e) {
+    pushUi.msg = 'Не получилось отключить: ' + (e && e.message ? e.message : e);
+  }
+  pushUi.busy = false; render();
+}
+async function testPush() {
+  if (pushUi.busy) return;
+  pushUi.busy = true; pushUi.msg = 'Отправляю…'; render();
+  try {
+    const r = await pushCall({ action: 'test' });
+    pushUi.msg = r.sent > 0 ? 'Отправлено — уведомление должно прийти в течение нескольких секунд.' : 'Не удалось доставить. Нажмите «Выключить», затем «Включить» заново.';
+  } catch (e) {
+    pushUi.msg = 'Ошибка: ' + (e && e.message ? e.message : e);
+  }
+  pushUi.busy = false; render();
+}
+function renderPushOverlay() {
+  const user = currentUser();
+  const needInstall = pushIsIOS() && !pushIsStandalone();
+  let body;
+  if (!user) {
+    body = '<p class="order-meta">Сначала войдите в аккаунт.</p>';
+  } else if (!pushSupported() || needInstall) {
+    body = needInstall
+      ? '<p class="order-meta"><b>iPhone / iPad:</b> веб-пуш работает только если сайт добавлен на экран «Домой» (iOS 16.4 и новее).</p><ol class="order-meta" style="padding-left:20px;"><li>Откройте сайт в Safari.</li><li>Нажмите «Поделиться» (квадрат со стрелкой внизу).</li><li>Выберите «На экран «Домой»» → «Добавить».</li><li>Откройте «Мужик» с иконки на экране, зайдите в профиль и нажмите «Настроить веб-пуш уведомления» ещё раз.</li></ol>'
+      : '<p class="order-meta">Этот браузер не поддерживает веб-пуш. Попробуйте Chrome, Edge, Firefox или Safari (iOS 16.4+, через «На экран «Домой»»).</p>';
+  } else {
+    const denied = pushUi.perm === 'denied';
+    body = `
+      <p class="order-meta">${pushUi.subscribed ? '✓ Веб-пуш включён на этом устройстве.' : 'Веб-пуш не включён на этом устройстве.'} Уведомления приходят так же, как в Telegram, — с 07:00 до 22:00 по вашему времени.</p>
+      ${denied ? '<p class="order-meta" style="color:#b91c1c;">Уведомления для сайта заблокированы в браузере. Разрешите их: значок замка в адресной строке → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.</p>' : ''}
+      ${pushUi.subscribed
+        ? `<button type="button" class="primary-button" data-action="push-test" ${pushUi.busy ? 'disabled' : ''}>Отправить тестовое уведомление</button>
+           <button type="button" class="secondary-button" style="margin-top:8px;box-sizing:border-box;" data-action="push-disable" ${pushUi.busy ? 'disabled' : ''}>Выключить на этом устройстве</button>`
+        : `<button type="button" class="primary-button" data-action="push-enable" ${pushUi.busy ? 'disabled' : ''}>Включить уведомления</button>`}
+      ${pushUi.msg ? `<p class="order-meta" style="margin-top:10px;">${escapeHtml(pushUi.msg)}</p>` : ''}
+      <details style="margin-top:14px;"><summary class="order-meta" style="cursor:pointer;">Инструкция</summary>
+        <ol class="order-meta" style="padding-left:20px;">
+          <li>Нажмите «Включить уведомления» и в окне браузера выберите «Разрешить».</li>
+          <li>Нажмите «Отправить тестовое уведомление» — оно должно появиться на экране.</li>
+          <li><b>Android (Chrome):</b> если не пришло — проверьте Настройки → Приложения → Chrome → Уведомления и режим «Не беспокоить».</li>
+          <li><b>iPhone:</b> нужен iOS 16.4+ и сайт, добавленный на экран «Домой»; открывайте его с иконки.</li>
+          <li><b>Компьютер:</b> браузер должен быть запущен; проверьте, что уведомления разрешены системой (Windows: «Параметры → Уведомления»; macOS: «Системные настройки → Уведомления»).</li>
+          <li>Включайте отдельно на каждом устройстве. Отключить можно здесь же.</li>
+        </ol>
+      </details>`;
+  }
+  return `
+    <div class="onboarding-overlay" data-action="dismiss-onboarding">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-drag-handle"></div>
+        <div class="onboarding-body" style="padding-top: 28px; touch-action: none;">
+          <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
+          <h2>Веб-пуш уведомления</h2>
+          ${body}
         </div>
       </div>
     </div>
@@ -13731,6 +13871,18 @@ async function handleAction(action, value) {
     case 'unlink-telegram':
       return unlinkTelegram();
 
+    case 'open-push-overlay':
+      state.infoOverlay = 'push';
+      pushUi.msg = '';
+      render();
+      return refreshPushStatus();
+    case 'push-enable':
+      return enablePush();
+    case 'push-disable':
+      return disablePush();
+    case 'push-test':
+      return testPush();
+
     case 'open-phone-overlay':
       profilePhoneEditOpen = false;
       state.infoOverlay = 'phone';
@@ -14289,7 +14441,7 @@ document.addEventListener('visibilitychange', () => {
 // на главном сайте, не в admin.html — там регистрации нет вообще.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((err) => {
+    navigator.serviceWorker.register('/sw.js').then(() => setTimeout(() => { if (currentUser()) refreshPushStatus(); }, 1500)).catch((err) => {
       console.error('[sw] регистрация не удалась', err);
     });
   });
