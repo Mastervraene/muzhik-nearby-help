@@ -10770,12 +10770,13 @@ const MASTER_WIZARD_STEPS = [
   { id: 'intro', title: 'О работе' },
   { id: 'name', title: 'Имя' },
   { id: 'phone', title: 'Телефон' },
-  { id: 'telegram', title: 'Telegram' },
+  { id: 'notifications', title: 'Уведомления' },
   { id: 'location', title: 'Локация' },
   { id: 'skills', title: 'Навыки' },
   { id: 'avatar', title: 'Фото' },
 ];
 let masterWizardStep = 0;
+let masterWizardNotifLater = false;
 let masterWizardSubmitting = false;
 let masterWizardFirstName = '';
 let masterWizardLastName = '';
@@ -10830,7 +10831,7 @@ function masterWizardUserName(user) {
 /** Можно ли идти дальше с текущего шага (и почему нет). */
 function masterWizardCanContinue(stepId, user) {
   if (stepId === 'phone') return Boolean(user.phone && user.phoneVerified);
-  if (stepId === 'telegram') return Boolean(user.telegramId);
+  if (stepId === 'notifications') return Boolean(user.telegramId || pushUi.subscribed || masterWizardNotifLater);
   if (stepId === 'location') return hasValidLocation(user.location) && !profileAddressEditing;
   if (stepId === 'skills') return user.skills.some((s) => parseSkillNote(s.note || '').level);
   if (stepId === 'avatar') return Boolean(user.avatarUrl);
@@ -10853,7 +10854,7 @@ function masterWizardNext() {
   } else if (!masterWizardCanContinue(step.id, user)) {
     const hints = {
       phone: 'Сначала подтвердите номер звонком',
-      telegram: 'Сначала подключите Telegram',
+      notifications: 'Выберите, как получать уведомления, или нажмите «Настроить позже»',
       location: 'Сначала подтвердите или укажите локацию',
       skills: 'Отметьте хотя бы один навык',
       avatar: 'Загрузите свою фотографию',
@@ -10985,15 +10986,18 @@ function renderMasterWizardStepBody(step, user) {
         ${user.phoneVerified ? '' : wizardBrokenBlockHtml('phone')}
       </div>`;
   }
-  if (step.id === 'telegram') {
+  if (step.id === 'notifications') {
+    const tgOk = Boolean(user.telegramId);
+    const pushOk = Boolean(pushUi.subscribed);
     return `
       <div class="field-card">
-        <p style="margin:0 0 10px;">${user.telegramId ? '<span class="mw-ok">✓ Telegram подключён</span>' : 'Telegram пока не подключён.'}</p>
-        <button type="button" class="${user.telegramId ? 'secondary-button' : 'primary-button'}" data-action="open-telegram-overlay" style="box-sizing:border-box;">${user.telegramId ? 'Настройки Telegram' : 'Подключить Telegram'}</button>
-        <p class="order-meta mw-note">Туда будут приходить уведомления о новых заказах и об изменении статусов.</p>
-        <button type="button" class="secondary-button" style="box-sizing:border-box;margin-top:8px;" data-action="open-push-overlay">Настроить веб-пуш уведомления</button>
-        <p class="order-meta mw-note mw-faint">Веб-пуш — уведомления в браузере/на экране телефона, если Telegram недоступен.</p>
-        ${user.telegramId ? '' : wizardBrokenBlockHtml('telegram')}
+        <p style="margin:0 0 10px;">Как вам сообщать о новых заказах рядом?</p>
+        <button type="button" class="${tgOk ? 'secondary-button' : 'primary-button'}" data-action="open-telegram-overlay" style="box-sizing:border-box;">${tgOk ? '✓ Через бота (Telegram) — настройки' : 'Через бота (Telegram)'}</button>
+        <button type="button" class="${pushOk ? 'secondary-button' : 'primary-button'}" data-action="open-push-overlay" style="box-sizing:border-box;margin-top:8px;">${pushOk ? '✓ Через веб-пуш — настройки' : 'Через веб-пуш'}</button>
+        <button type="button" class="secondary-button" data-action="mw-notif-later" style="box-sizing:border-box;margin-top:8px;">Настроить позже</button>
+        ${masterWizardNotifLater && !tgOk && !pushOk ? '<div class="order-warning" style="margin-top:12px;">Без уведомлений вы не увидите подходящий заказ, когда он появится. Настроить их можно в любой момент в профиле.</div>' : ''}
+        <p class="order-meta mw-note">Достаточно одного способа. Уведомления приходят с 07:00 до 22:00 по вашему времени.</p>
+        ${tgOk ? '' : wizardBrokenBlockHtml('telegram')}
       </div>`;
   }
   if (step.id === 'location') {
@@ -13914,6 +13918,9 @@ async function handleAction(action, value) {
     case 'unlink-telegram':
       return unlinkTelegram();
 
+    case 'mw-notif-later':
+      masterWizardNotifLater = true;
+      return render();
     case 'open-push-overlay':
       state.infoOverlay = 'push';
       pushUi.msg = '';
