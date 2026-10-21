@@ -918,8 +918,9 @@ const CATEGORY_TITLES = {
  */
 function parseSkillNote(rawNote) {
   const m = /^LVL([1-5])::/.exec(rawNote || '');
-  if (m) return { level: Number(m[1]), text: rawNote.slice(m[0].length) };
-  return { level: 0, text: rawNote || '' };
+  if (m) return { level: Number(m[1]), pro: false, text: rawNote.slice(m[0].length) };
+  if ((rawNote || '').startsWith('PRO::')) return { level: 5, pro: true, text: rawNote.slice(5) };
+  return { level: 0, pro: false, text: rawNote || '' };
 }
 function renderStars(level) {
   if (!level) return '';
@@ -1049,6 +1050,26 @@ STATUS_COLORS.part_purchase_requested = { bg: '#ede9fe', fg: '#5b21b6', dot: '#8
 
 function statusColor(status) {
   return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
+}
+/** Отмена заказчиком: пометка «нужен возврат» (пока возврат не записан) и причина отмены. */
+function cancelInfoHtml(o) {
+  if (o.status !== 'cancelled') return '';
+  const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
+  if (!t || t.by !== 'customer') return '';
+  const refundNeeded = Boolean(t.refundNeeded) && !(o.refunds || []).length;
+  const accepted = Boolean(t.refundAccepted) || (o.refunds || []).length > 0;
+  return (t.onSite ? `<div class="card-clarification-block" style="background:#fff4e5;">⚠ Отмена после прибытия мастера — возможно удержание стоимости выезда. Обоим доступна форма оценки.</div>` : '')
+    + (refundNeeded && !accepted ? `<div class="card-clarification-block" style="background:#fde8e8;">💸 Заказчик отменил оплаченный заказ — нужен возврат средств. Откройте карточку и нажмите «Принято к возврату», пока готовите перевод (иначе клиент может возобновить заказ).</div>` : '')
+    + (refundNeeded && accepted ? `<div class="card-clarification-block" style="background:#e8f5e9;">✓ Принято к возврату</div>` : '')
+    + (t.reason ? `<div class="card-clarification-block" style="background:#eef3ff;">Причина отмены: ${escapeHtml(t.reason)}</div>` : '');
+}
+/** Кнопка «Принято к возврату» в карточке: блокирует клиенту «Возобновить заказ». */
+function acceptRefundHtml(o) {
+  if (o.status !== 'cancelled') return '';
+  const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
+  if (!t || t.by !== 'customer' || !t.refundNeeded) return '';
+  if (t.refundAccepted || (o.refunds || []).length) return `<div class="field-sm"><b>✓ Принято к возврату</b> — клиент видит эту надпись, «Возобновить заказ» заблокировано.</div>`;
+  return `<div class="field-sm"><button class="btn-sm danger" id="accept-refund-${o.id}" type="button">Принято к возврату</button> <span style="font-size:12px;color:var(--gray-500);">Нажмите, как только начали возврат: у клиента пропадёт кнопка «Возобновить заказ».</span></div>`;
 }
 function statusPillHtml(status) {
   const c = statusColor(status);
@@ -3133,6 +3154,7 @@ function orderCardHtml(o) {
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
+          ${cancelInfoHtml(o)}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
             <span>${fmtDate(orderLastActivityAt(o))}</span>
@@ -3269,7 +3291,7 @@ function orderQualityPhotosHtml(o, kind, label) {
 /** Единая лента фото мастера по ходу работы (до+после, по времени). */
 function workPhotosList(o) {
   return []
-    .concat((o.beforePhotos || []).map((a) => Object.assign({}, a, { _legacy: 'До начала' })))
+    .concat((o.beforePhotos || []).filter((a) => !String(a.stage || '').startsWith('review_')).map((a) => Object.assign({}, a, { _legacy: 'До начала' })))
     .concat((o.afterPhotos || []).map((a) => Object.assign({}, a, { _legacy: 'После работы' })))
     .sort((x, y) => (x.uploadedAt || 0) - (y.uploadedAt || 0));
 }
@@ -3289,6 +3311,22 @@ function orderWorkPhotosHtml(o) {
         .join('')}</div>
     </div>
   `;
+}
+
+/** Фото к отзывам: у заказчика и у мастера (до 5), лежат в beforePhotos со stage review_customer / review_worker. */
+function reviewPhotosList(o, role) {
+  return (o.beforePhotos || []).filter((a) => a.stage === `review_${role}`);
+}
+function orderReviewPhotosHtml(o) {
+  return [['customer', 'Фото заказчика к отзыву'], ['worker', 'Фото мастера к отзыву']]
+    .map(([role, label]) => {
+      const photos = reviewPhotosList(o, role);
+      if (!photos.length) return '';
+      return `<div class="field-sm"><label>${label} (${photos.length})</label><div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 8px;">${photos
+        .map((p, idx) => `<img src="${escapeHtml(p.url)}" alt="" class="order-photo-thumb-review" data-order-id="${o.id}" data-review-role="${role}" data-photo-index="${idx}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" onerror="onArchivedPhotoError(this)" />`)
+        .join('')}</div></div>`;
+    })
+    .join('');
 }
 
 /** Статус решения админа по конкретной оценке — см. orderReviewsHtml/applyRatingDecision ниже. */
@@ -3687,6 +3725,7 @@ function orderFormHtml(o) {
       </div>
       ${deviceModelHistoryHtml(o)}
       ${diagnosisLogHtmlAdmin(o)}
+      ${acceptRefundHtml(o)}
       ${refundsHtml(o)}
       ${formattedBriefHtml(o.formattedBrief)}
       ${
@@ -3705,6 +3744,7 @@ function orderFormHtml(o) {
             .join('')}</div>`
         : ''}
       ${orderWorkPhotosHtml(o)}
+      ${orderReviewPhotosHtml(o)}
       ${orderReviewsHtml(o)}
       ${adminNoteHtml('order', o.id)}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
@@ -3758,6 +3798,13 @@ function wireOrderForm(o) {
       thumbEl.addEventListener('click', () => openLightbox(wp, Number(thumbEl.getAttribute('data-photo-index') || 0)));
     });
   })();
+  ['customer', 'worker'].forEach((role) => {
+    const rp = reviewPhotosList(o, role);
+    if (!rp.length) return;
+    document.querySelectorAll(`.order-photo-thumb-review[data-order-id="${o.id}"][data-review-role="${role}"]`).forEach((thumbEl) => {
+      thumbEl.addEventListener('click', () => openLightbox(rp, Number(thumbEl.getAttribute('data-photo-index') || 0)));
+    });
+  });
   ['before', 'after'].forEach((kind) => {
     const photos = (kind === 'before' ? o.beforePhotos : o.afterPhotos) || [];
     if (!photos.length) return;
@@ -3920,7 +3967,11 @@ function wireOrderForm(o) {
       refundBtn.textContent = 'Сохраняю…';
       try {
         const entry = { amount, note, confirmedAt: new Date().toISOString() };
-        await updateRow('orders', o.id, { refunds: [...(o.refunds || []), entry] });
+        const tlr = [...(o.timeline || [])];
+        for (let i = tlr.length - 1; i >= 0; i--) {
+          if (tlr[i].status === 'cancelled') { tlr[i] = { ...tlr[i], refundAccepted: true, refundAcceptedAt: tlr[i].refundAcceptedAt || new Date().toISOString() }; break; }
+        }
+        await updateRow('orders', o.id, { refunds: [...(o.refunds || []), entry], timeline: tlr });
         await loadData({ keepOpen: true });
         const hint = document.getElementById(`refund-hint-${o.id}`);
         if (hint) {
@@ -3932,6 +3983,26 @@ function wireOrderForm(o) {
       } finally {
         const freshBtn = document.getElementById(`confirm-refund-${o.id}`);
         if (freshBtn) { freshBtn.disabled = false; freshBtn.textContent = 'Подтвердить возврат'; }
+      }
+    });
+  }
+
+  const acceptRefundBtn = document.getElementById(`accept-refund-${o.id}`);
+  if (acceptRefundBtn) {
+    acceptRefundBtn.addEventListener('click', async () => {
+      acceptRefundBtn.disabled = true;
+      acceptRefundBtn.textContent = 'Сохраняю…';
+      try {
+        const tl = [...(o.timeline || [])];
+        for (let i = tl.length - 1; i >= 0; i--) {
+          if (tl[i].status === 'cancelled') { tl[i] = { ...tl[i], refundAccepted: true, refundAcceptedAt: new Date().toISOString() }; break; }
+        }
+        await updateRow('orders', o.id, { timeline: tl });
+        await loadData({ keepOpen: true });
+      } catch (err) {
+        alert('Не удалось сохранить: ' + err.message);
+        acceptRefundBtn.disabled = false;
+        acceptRefundBtn.textContent = 'Принято к возврату';
       }
     });
   }
@@ -4455,8 +4526,8 @@ function masterFormHtml(u) {
         ${skills.length
           ? skills
               .map((s) => {
-                const { level, text } = parseSkillNote(s.note);
-                const stars = level ? ` <span class="pill-stars">${renderStars(level)}</span>` : '';
+                const { level, pro, text } = parseSkillNote(s.note);
+                const stars = pro ? ' <b style="background:#2563eb;color:#FFC933;border-radius:999px;padding:1px 7px;font-size:11px;">PRO</b>' : level ? ` <span class="pill-stars">${renderStars(level)}</span>` : '';
                 const noteText = text ? `: ${escapeHtml(text)}` : '';
                 return `<span class="pill">${escapeHtml(CATEGORY_TITLES[s.categoryId] || s.categoryId)}${noteText}${s.verification === 'verified' ? ' ✓' : ''}${stars}</span>`;
               })
