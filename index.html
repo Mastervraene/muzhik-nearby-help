@@ -2659,7 +2659,7 @@ function toWorkerOrderView(order, requestingUserId) {
 // действие (зайти и что-то сделать) — по просьбе Sg от 17.09.2026: «В каждом
 // уведомлении, требующего действия на сайте должна быть ссылка на сайт».
 const SITE_URL = 'https://мастерврайоне.рф/';
-const ADMIN_URL = 'https://мастерврайоне.рф/admin.html';
+// Адрес админки намеренно нигде не публикуем (ни в уведомлениях, ни в robots.txt).
 
 // Единственный пользователь с is_admin/is_moderator=true в БД на 10.10.2026
 // (Андрей Симкин/Sg) — см. reportIssue ниже: при «Есть проблема» шлём
@@ -2702,13 +2702,13 @@ const TEMPLATES = {
   // «мастер» или «заказчик» (см. reportIssue), ctx.orderTitle — короткое
   // описание заказа для быстрой идентификации в списке.
   issue_reported_admin: (ctx) =>
-    `⚠️ Жалоба по заказу «${ctx.orderTitle || ctx.orderId}»: ${ctx.reporterLabel} сообщил о проблеме. ${ADMIN_URL}`,
+    `⚠️ Жалоба по заказу «${ctx.orderTitle || ctx.orderId}»: ${ctx.reporterLabel} сообщил о проблеме.`,
   new_matching_order: (ctx) => `Рядом появился подходящий заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_assigned_to_you: (ctx) => `Вам назначен заказ: «${ctx.orderTitle}». ${SITE_URL}`,
   order_cancelled: (ctx) => `Заказчик отменил заказ${ctx && ctx.orderTitle ? ' «' + ctx.orderTitle + '»' : ''}.${ctx && ctx.onSite ? ' Вы можете оценить заказчика и оставить комментарий в карточке заказа.' : ''} ${SITE_URL}`,
-  order_cancelled_admin: (ctx) => `Заказчик отменил ${ctx && ctx.refundNeeded ? 'ОПЛАЧЕННЫЙ ' : ''}заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}»${ctx && ctx.onSite ? ' ПОСЛЕ ПРИБЫТИЯ МАСТЕРА (возможно удержание стоимости выезда)' : ''}.${ctx && ctx.refundNeeded ? ' Нужен возврат средств.' : ''} ${ADMIN_URL}`,
-  order_cancel_reason_admin: (ctx) => `Причина отмены заказа «${(ctx && ctx.orderTitle) || ''}»: ${(ctx && ctx.reason) || '—'}. ${ADMIN_URL}`,
-  order_resumed_admin: (ctx) => `Заказчик возобновил заказ «${(ctx && ctx.orderTitle) || ''}» — снова ищем мастера. ${ADMIN_URL}`,
+  order_cancelled_admin: (ctx) => `Заказчик отменил ${ctx && ctx.refundNeeded ? 'ОПЛАЧЕННЫЙ ' : ''}заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}»${ctx && ctx.onSite ? ' ПОСЛЕ ПРИБЫТИЯ МАСТЕРА (возможно удержание стоимости выезда)' : ''}.${ctx && ctx.refundNeeded ? ' Нужен возврат средств.' : ''}`,
+  order_cancel_reason_admin: (ctx) => `Причина отмены заказа «${(ctx && ctx.orderTitle) || ''}»: ${(ctx && ctx.reason) || '—'}.`,
+  order_resumed_admin: (ctx) => `Заказчик возобновил заказ «${(ctx && ctx.orderTitle) || ''}» — снова ищем мастера.`,
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
   // Мастер приехал, но деталь не подошла — только диагностика, работы не
   // выполнены (см. reportDiagnosisOnly). ctx.text — комментарий мастера.

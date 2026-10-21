@@ -1,79 +1,49 @@
 User-agent: *
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 Disallow: /_next/
 Disallow: /_auth_migration/
 
 User-agent: GPTBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: OAI-SearchBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: ChatGPT-User
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: ClaudeBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Claude-SearchBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Claude-User
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: PerplexityBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Perplexity-User
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Google-Extended
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: YandexAdditional
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: YandexAdditionalBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Applebot-Extended
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: CCBot
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 User-agent: Bytespider
 Allow: /
-Disallow: /admin.html
-Disallow: /chat-test.html
 
 Host: https://xn--80aaflcxqniqbin.xn--p1ai
 Sitemap: https://мастерврайоне.рф/sitemap.xml
