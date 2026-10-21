@@ -750,8 +750,21 @@ body {
    вместе с содержимым, а не остаётся только вокруг заголовка (по просьбе Sg
    от 03.10.2026). overflow:hidden — чтобы скруглённые углы подрезали шапку и
    первую/последнюю карточку заказа внутри, а не торчали острыми краями. */
+.orders-toolbar { display: flex; gap: 8px; margin: 0 0 2px; }
+.orders-toolbar-btn {
+  border: none;
+  background: var(--gray-100);
+  color: var(--gray-700, #444);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.orders-toolbar-btn.active { background: var(--accent); color: #fff; }
 .orders-block {
-  margin: 22px 0 10px;
+  margin: 11px 0 5px;
   background: var(--gray-0);
   border: 1px solid var(--gray-200);
   border-radius: var(--radius);
@@ -10178,6 +10191,21 @@ let ordersSortModalOpenFor = null;
 // просьбе Sg от 03.10.2026).
 let expandedOrdersSections = new Set();
 
+// Режим «Активные» (включён по умолчанию): блоки с активными заказами
+// (у заказчика — «Мои заказы», у мастера — «Заказы, которые я выполняю»)
+// всегда развёрнуты. «Свернуть все» и ручное сворачивание выключают режим.
+let ordersActiveMode = true;
+let ordersActiveSections = new Set();
+function isOrdersSectionExpanded(blockKey) {
+  return expandedOrdersSections.has(blockKey) || (ordersActiveMode && ordersActiveSections.has(blockKey));
+}
+function renderOrdersToolbar() {
+  return `<div class="orders-toolbar">
+    <button type="button" class="orders-toolbar-btn ${ordersActiveMode ? 'active' : ''}" data-action="orders-show-active">Активные</button>
+    <button type="button" class="orders-toolbar-btn" data-action="orders-collapse-all">Свернуть все</button>
+  </div>`;
+}
+
 // Кнопка светится синим, если в блоке скрыт хотя бы один статус фильтром
 // и/или включена сортировка — см. .sort-btn.active.
 function isOrderSortActive(blockKey) {
@@ -10287,7 +10315,7 @@ function renderOrdersSectionHeader(
   const active = isOrderSortActive(blockKey);
   const settings = ordersSortSettings[blockKey];
   const showArchived = Boolean(settings && settings.showArchived);
-  const expanded = expandedOrdersSections.has(blockKey);
+  const expanded = isOrdersSectionExpanded(blockKey);
   // Кнопка «Завершено ХХ» — появляется только когда в блоке реально есть
   // хоть один завершённый/отменённый заказ (archivedCount считается в
   // renderOrders по НЕотфильтрованному списку блока, см. вызов ниже), и
@@ -10327,7 +10355,7 @@ function renderOrdersSectionHeader(
  * растягивается вместе с содержимым, а не остаётся только вокруг заголовка.
  */
 function renderOrdersBlock(title, blockKey, bodyHtml, headerOpts = {}) {
-  const expanded = expandedOrdersSections.has(blockKey);
+  const expanded = isOrdersSectionExpanded(blockKey);
   return `
     <div class="orders-block">
       ${renderOrdersSectionHeader(title, blockKey, headerOpts)}
@@ -10340,6 +10368,9 @@ function renderOrders() {
   const user = currentUser();
   const myOrders = getOrders().filter((o) => o.customerId === state.currentUserId);
   const hasSkills = user.skills.length > 0;
+  ordersActiveSections = new Set();
+  if (myOrders.some((o) => !isArchivedOrder(o))) ordersActiveSections.add("my");
+  if (getOrders().some((o) => o.assignedWorkerId === state.currentUserId && !isArchivedOrder(o))) ordersActiveSections.add("assigned");
 
   // Пока человек не мастер (нет ни одного навыка) — блоки «Заказы, которые я
   // выполняю» и «Подходит вам рядом» ему попросту не нужны: это для
@@ -10349,7 +10380,7 @@ function renderOrders() {
   // чтобы кнопка сортировки/фильтра и счётчик «Завершено ХХ» продолжали
   // работать как обычно.
   if (!hasSkills) {
-    expandedOrdersSections.add('my');
+    if (ordersActiveMode) expandedOrdersSections.add('my');
     const myOrdersSorted = applyOrdersBlockSettings(myOrders, 'my');
     const myArchivedCount = myOrders.filter((o) => isArchivedOrder(o)).length;
     const myBodyHtml = myOrdersSorted.length
@@ -10359,6 +10390,7 @@ function renderOrders() {
       : `<div class="empty-state">Вы ещё не публиковали заказы</div>`;
     return `
       <div class="screen">
+        ${renderOrdersToolbar()}
         ${renderOrdersBlock('Мои заказы', 'my', myBodyHtml, { archivedCount: myArchivedCount, count: myOrdersSorted.length })}
       </div>
       ${ordersSortModalOpenFor ? renderOrdersSortModal(ordersSortModalOpenFor) : ''}
@@ -10463,6 +10495,7 @@ function renderOrders() {
 
   return `
     <div class="screen">
+      ${renderOrdersToolbar()}
       ${renderOrdersBlock('Мои заказы', 'my', myBodyHtml, { archivedCount: myArchivedCount, count: myCount })}
 
       ${renderOrdersBlock('Заказы, которые я выполняю', 'assigned', assignedBodyHtml, { archivedCount: assignedArchivedCount, count: assignedCount })}
@@ -14332,10 +14365,23 @@ async function handleAction(action, value) {
       return render();
     }
     case 'toggle-orders-section': {
+      // Ручное переключение выключает режим «Активные», сохранив то, что видно сейчас.
+      if (ordersActiveMode) {
+        ordersActiveSections.forEach((k) => expandedOrdersSections.add(k));
+        ordersActiveMode = false;
+      }
       if (expandedOrdersSections.has(value)) expandedOrdersSections.delete(value);
       else expandedOrdersSections.add(value);
       return render();
     }
+    case 'orders-show-active':
+      ordersActiveMode = true;
+      expandedOrdersSections.clear();
+      return render();
+    case 'orders-collapse-all':
+      ordersActiveMode = false;
+      expandedOrdersSections.clear();
+      return render();
     case 'go-home':
       // Сброс черновика при уходе на главную — в т.ч. по кнопке «Отменить»
       // на экране проверки заявки (см. resetComposerDraft). Клик по логотипу
