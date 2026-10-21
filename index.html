@@ -4841,8 +4841,12 @@ function isCancelledOnSite(order) {
 }
 /** Админ принял возврат в работу (или возврат записан) — возобновлять уже нельзя. */
 function isRefundAccepted(order) {
-  const last = lastCancelEntry(order);
-  return Boolean(last && last.refundAccepted) || (order.refunds || []).length > 0;
+  return (order.timeline || []).some((t) => t && t.refundAccepted) || (order.refunds || []).length > 0;
+}
+/** Админ нажал «Принято к возврату» — действия заказчика над заказом заблокированы. */
+const LOCKED_CUSTOMER_ACTIONS = ['pay-order', 'cancel-order-ask', 'cancel-order-confirm', 'resume-order', 'pay-surcharge', 'confirm-completion', 'submit-clarification', 'decline-order', 'confirm-part-ready', 'confirm-part-purchased', 'confirm-part-purchased-with-question', 'edit-device-model'];
+function isCustomerLocked(order) {
+  return Boolean(order) && order.customerId === state.currentUserId && isRefundAccepted(order);
 }
 function canResumeOrder(order) {
   return isRefundPending(order) && !isRefundAccepted(order) && !isCancelledOnSite(order);
@@ -11214,7 +11218,8 @@ function renderOrderDetail() {
         ${isCustomer ? cashWarningHtml(order) : ''}
         ${(isCustomer || isAssignedWorker) ? myFeedbackBlockHtml(order) : ''}
         ${isCustomer && !['draft', 'collecting_details'].includes(order.status) ? `<button class="secondary-button" data-action="report-issue" data-value="${order.id}" style="box-sizing:border-box;margin:6px 0;">Сообщить о проблеме</button>` : ''}
-        <div style="margin-top:12px;">${actions}</div>
+        ${isCustomerLocked(order) && order.status !== 'cancelled' ? `<div class="order-warning" style="margin-top:12px;"><b>Принято к возврату</b><br>Действия по заказу недоступны. Если нужна помощь — нажмите «Сообщить о проблеме».</div>` : ''}
+        <div style="margin-top:12px;">${isCustomerLocked(order) && order.status !== 'cancelled' ? '' : actions}</div>
       </div>
       ${
         isCustomer
@@ -11222,7 +11227,7 @@ function renderOrderDetail() {
           : ''
       }
       ${
-        isCustomer && CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)
+        isCustomer && CUSTOMER_CANCELLABLE_STATUSES.includes(order.status) && !isCustomerLocked(order)
           ? `<button class="secondary-button" data-action="cancel-order-ask" data-value="${order.id}" style="color:#b42318;box-sizing:border-box;">Отменить заказ</button>`
           : ''
       }
@@ -14425,6 +14430,11 @@ function triggerSwipeAnim(direction) {
 }
 
 async function handleAction(action, value) {
+  if (LOCKED_CUSTOMER_ACTIONS.includes(action)) {
+    const oid = action === 'cancel-order-confirm' ? (state.cancelFlow && state.cancelFlow.orderId) : String(value || '').split(':')[0];
+    const lo = oid && getOrders().find((x) => x.id === oid);
+    if (lo && isCustomerLocked(lo)) { state.cancelFlow = null; state.infoOverlay = null; return render(); }
+  }
   // Попап аккаунта закрывается при любом другом действии (переход по
   // пункту меню, клик по чему угодно ещё на экране) — сам toggle
   // управляет собой ниже отдельным case'ом.

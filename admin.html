@@ -1100,19 +1100,16 @@ function cancelInfoHtml(o) {
   const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
   if (!t || !['customer', 'admin'].includes(t.by)) return '';
   const refundNeeded = Boolean(t.refundNeeded) && !(o.refunds || []).length;
-  const accepted = Boolean(t.refundAccepted) || (o.refunds || []).length > 0;
+  const accepted = (o.timeline || []).some((x) => x && x.refundAccepted) || (o.refunds || []).length > 0;
   return (t.onSite ? `<div class="card-clarification-block" style="background:#fff4e5;">⚠ Отмена после прибытия мастера — возможно удержание стоимости выезда. Обоим доступна форма оценки.</div>` : '')
     + (refundNeeded && !accepted ? `<div class="card-clarification-block" style="background:#fde8e8;">💸 Заказчик отменил оплаченный заказ — нужен возврат средств. Откройте карточку и нажмите «Принято к возврату», пока готовите перевод (иначе клиент может возобновить заказ).</div>` : '')
     + (refundNeeded && accepted ? `<div class="card-clarification-block" style="background:#e8f5e9;">✓ Принято к возврату</div>` : '')
     + (t.reason ? `<div class="card-clarification-block" style="background:#eef3ff;">Причина отмены: ${escapeHtml(t.reason)}</div>` : '');
 }
-/** Кнопка «Принято к возврату» в карточке: блокирует клиенту «Возобновить заказ». */
+/** Кнопка «Принято к возврату» — в любом заказе; блокирует все действия заказчика над заказом. */
 function acceptRefundHtml(o) {
-  if (o.status !== 'cancelled') return '';
-  const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
-  if (!t || !['customer', 'admin'].includes(t.by) || !t.refundNeeded) return '';
-  if (t.refundAccepted || (o.refunds || []).length) return `<div class="field-sm"><b>✓ Принято к возврату</b> — клиент видит эту надпись, «Возобновить заказ» заблокировано.</div>`;
-  return `<div class="field-sm"><button class="btn-sm danger" id="accept-refund-${o.id}" type="button">Принято к возврату</button> <span style="font-size:12px;color:var(--gray-500);">Нажмите, как только начали возврат: у клиента пропадёт кнопка «Возобновить заказ».</span></div>`;
+  if ((o.timeline || []).some((x) => x && x.refundAccepted) || (o.refunds || []).length) return `<div class="field-sm"><b>✓ Принято к возврату</b> — клиент видит эту надпись, его действия по заказу заблокированы.</div>`;
+  return `<div class="field-sm"><button class="btn-sm danger" id="accept-refund-${o.id}" type="button">Принято к возврату</button> <span style="font-size:12px;color:var(--gray-500);">Заблокирует все действия заказчика над заказом (отмену, оплату, подтверждение, возобновление).</span></div>`;
 }
 function statusPillHtml(status) {
   const c = statusColor(status);
@@ -4051,9 +4048,8 @@ function wireOrderForm(o) {
       acceptRefundBtn.textContent = 'Сохраняю…';
       try {
         const tl = [...(o.timeline || [])];
-        for (let i = tl.length - 1; i >= 0; i--) {
-          if (tl[i].status === 'cancelled') { tl[i] = { ...tl[i], refundAccepted: true, refundAcceptedAt: new Date().toISOString() }; break; }
-        }
+        if (tl.length) tl[tl.length - 1] = { ...tl[tl.length - 1], refundAccepted: true, refundAcceptedAt: new Date().toISOString() };
+        else tl.push({ status: o.status, at: new Date().toISOString(), by: 'admin', refundAccepted: true, refundAcceptedAt: new Date().toISOString() });
         await updateRow('orders', o.id, { timeline: tl });
         await loadData({ keepOpen: true });
       } catch (err) {
