@@ -4332,29 +4332,50 @@ function wireOrderExtras(o) {
     } catch (e) { alert('Не удалось: ' + e.message); toCancel.disabled = false; }
   });
 }
-/** Показатели мастера по отказам/жалобам: считаются по заказам, загруженным в админку. */
-function masterFlagStats(userId) {
-  let declines = 0, declinesStarted = 0, cash = 0, custCancels = 0;
+/** Инциденты мастера: отказы, жалобы на наличные, отмены заказчиками после назначения (по загруженным заказам). */
+function masterIncidents(userId) {
+  const list = [];
   allOrders.forEach((o) => {
     (o.timeline || []).forEach((t) => {
-      if (t.declined && t.workerId === userId) { declines++; if (t.started) declinesStarted++; }
-      (t.cashReports || []).forEach((c) => { if ((c.workerId || o.assignedWorkerId) === userId) cash++; });
+      if (t.declined && t.workerId === userId) {
+        list.push({ order: o, kind: 'decline', at: t.at, text: `отказ${t.started ? ' ПОСЛЕ начала' : ''}: ${t.reason || '—'}${t.comment ? ' — ' + t.comment : ''}` });
+      }
+      (t.cashReports || []).forEach((c) => {
+        if ((c.workerId || o.assignedWorkerId) === userId) {
+          list.push({ order: o, kind: 'cash', at: c.at || t.at, text: c.kind === 'cancel_cash' ? 'жалоба: предложил отменить заказ и заплатить наличными' : 'жалоба: просит доплату наличными' });
+        }
+      });
     });
     if (o.status === 'cancelled' && o.assignedWorkerId === userId) {
       const last = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
-      if (last && last.by === 'customer') custCancels++;
+      if (last && last.by === 'customer') list.push({ order: o, kind: 'cancel', at: last.at, text: `отмена заказчиком${last.reason ? ': ' + last.reason : ''}` });
     }
   });
-  return { declines, declinesStarted, cash, custCancels };
+  return list.sort((x, y) => new Date(y.at) - new Date(x.at));
 }
 function masterFlagsPillsHtml(u) {
   if (!u.availableAsWorker) return '';
-  const f = masterFlagStats(u.id);
-  const alarm = f.cash > 0 || f.declines + f.custCancels >= 3;
-  if (!f.declines && !f.cash && !f.custCancels) return '';
-  return `<span class="pill ${alarm ? 'warn' : 'muted'}" title="Отказы мастера / отмены заказчиками после назначения / жалобы на наличные">${alarm ? '🚨 ' : ''}отказов: ${f.declines}${f.declinesStarted ? ` (после начала: ${f.declinesStarted})` : ''} · отмен заказчиками: ${f.custCancels} · жалоб на наличные: ${f.cash}</span>`;
+  const inc = masterIncidents(u.id);
+  if (!inc.length) return '';
+  const n = (k) => inc.filter((i) => i.kind === k).length;
+  const alarm = n('cash') > 0 || n('decline') + n('cancel') >= 3;
+  return `<span class="pill ${alarm ? 'warn' : 'muted'}" title="Отказов / отмен заказчиками после назначения / жалоб на наличные">${alarm ? '🚨 ' : '⚠ '}${n('decline')} ${n('cancel')} ${n('cash')}</span>`;
 }
-
+function masterIncidentsHtml(u) {
+  if (!u.availableAsWorker) return '';
+  const inc = masterIncidents(u.id);
+  if (!inc.length) return '';
+  const icon = { decline: '↩', cash: '🚨', cancel: '✖' };
+  return `<div class="field-sm dense" style="margin-bottom:8px;font-size:12.5px;line-height:1.35;">
+    <p class="form-section-label" style="margin:0 0 4px;">Отказы и жалобы</p>
+    ${inc.map((i) => `<div class="order-user-row" data-order-id="${i.order.id}" style="padding:2px 0;cursor:default;border:none;">${icon[i.kind]} <b>№${i.order.orderNumber ?? '—'}</b> · ${escapeHtml(fmtDate(i.at))} · ${escapeHtml(i.text)}</div>`).join('')}
+  </div>`;
+}
+/** Отметка «!» в истории заказов пользователя: по заказу были отказ мастера, жалоба или отмена. */
+function orderIncidentMark(o, userId) {
+  const hasInc = masterIncidents(userId).some((i) => i.order.id === o.id) || orderCashReports(o).length || orderDeclines(o).length;
+  return hasInc ? ' <span title="По заказу были отказ мастера, жалоба на наличные или отмена" style="color:#b42318;font-weight:700;">❗</span>' : '';
+}
 function masterCardHtml(u) {
   const open = openMasterId === u.id;
   const chatCount = u.telegramId ? messagesForTelegramId(u.telegramId).length : 0;
@@ -4400,8 +4421,8 @@ function masterCardHtml(u) {
             ${statusBadge('telegram', Boolean(u.telegramId), u.telegramId ? 'Telegram подключён' : 'Telegram не подключён')}
             ${statusBadge('location', hasLocation, hasLocation ? 'Локация указана' : 'Локации нет')}
             ${chatCount ? `<span class="pill chat-count${unreadCount ? ' unread' : ''}" title="${unreadCount ? 'Есть непрочитанные сообщения' : 'Переписка в Telegram'}">💬 ${chatCount}${unreadCount ? ` · новых ${unreadCount}` : ''}</span>` : ''}
-            ${statusPills}
             ${masterFlagsPillsHtml(u)}
+            ${statusPills}
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
@@ -4459,7 +4480,7 @@ function userOrdersListHtml(u) {
               .map(
                 ({ order: o, roleLabel }) => `
             <div class="order-user-row" data-order-id="${o.id}">
-              <b>№${o.orderNumber ?? '—'}</b> · ${escapeHtml(o.title || 'без названия')} · ${escapeHtml(fmtDate(orderLastActivityAt(o)))} · <span style="color:var(--gray-500);">${escapeHtml(roleLabel)}</span>
+              <b>№${o.orderNumber ?? '—'}</b> · ${escapeHtml(o.title || 'без названия')} · ${escapeHtml(fmtDate(orderLastActivityAt(o)))} · <span style="color:var(--gray-500);">${escapeHtml(roleLabel)}</span>${orderIncidentMark(o, u.id)}
             </div>`
               )
               .join('')
@@ -4474,6 +4495,7 @@ function masterFormHtml(u) {
   const requestsHistory = requestsHistoryForMaster(u);
   return `
     <div class="card-body open" id="master-body-${u.id}">
+      ${masterIncidentsHtml(u)}
       ${userOrdersListHtml(u)}
       ${u.masterStatus !== 'none' ? `
       <p class="form-section-label">Заявка в мастера</p>

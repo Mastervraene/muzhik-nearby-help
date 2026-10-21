@@ -2723,13 +2723,13 @@ const TEMPLATES = {
   order_cancelled: (ctx) => `Заказчик отменил заказ${ctx && ctx.orderTitle ? ' «' + ctx.orderTitle + '»' : ''}.${ctx && ctx.onSite ? ' Вы можете оценить заказчика и оставить комментарий в карточке заказа.' : ''} ${SITE_URL}`,
   order_cancelled_admin: (ctx) => `Заказчик отменил ${ctx && ctx.refundNeeded ? 'ОПЛАЧЕННЫЙ ' : ''}заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}»${ctx && ctx.onSite ? ' ПОСЛЕ ПРИБЫТИЯ МАСТЕРА (возможно удержание стоимости выезда)' : ''}.${ctx && ctx.refundNeeded ? ' Нужен возврат средств.' : ''}`,
   order_cancel_reason_admin: (ctx) => `Причина отмены заказа «${(ctx && ctx.orderTitle) || ''}»: ${(ctx && ctx.reason) || '—'}.`,
-  cash_report_admin: (ctx) => `⚠️ ЖАЛОБА: ${ctx && ctx.kind === 'cancel_cash' ? 'мастер предложил отменить заказ и расплатиться наличными' : 'мастер просит доплату наличными'}. Заказ «${(ctx && ctx.orderTitle) || ''}»${ctx && ctx.workerName ? ', мастер ' + ctx.workerName : ''}. Свяжитесь с заказчиком.`,
+  cash_report_admin: (ctx) => `⚠️ ЖАЛОБА: ${ctx && ctx.kind === 'cancel_cash' ? 'мастер предложил отменить заказ и расплатиться наличными' : 'мастер просит доплату наличными'}. Заказ №${(ctx && ctx.orderNumber) || ''}. Подробности — в админке.`,
   order_resumed_admin: (ctx) => `Заказчик возобновил заказ «${(ctx && ctx.orderTitle) || ''}» — снова ищем мастера.`,
   worker_declined_customer: (ctx) => ctx && ctx.started
-    ? `По заказу «${(ctx && ctx.orderTitle) || ''}» возникли вопросы. Администратор разбирается и свяжется с вами.`
-    : `Мастер не сможет выполнить заказ «${(ctx && ctx.orderTitle) || ''}», ищем другого мастера.`,
-  worker_declined_admin: (ctx) => `Мастер отказался от заказа «${(ctx && ctx.orderTitle) || ''}»${ctx && ctx.started ? ' ПОСЛЕ НАЧАЛА РАБОТЫ — нужно разбирательство' : ' (до начала работы, заказ возвращён в поиск)'}. Причина: ${(ctx && ctx.reason) || '—'}.${ctx && ctx.comment ? ' Комментарий: ' + ctx.comment : ''}`,
-  surcharge_customer: (ctx) => `По заказу «${(ctx && ctx.orderTitle) || ''}» требуется доплата ${(ctx && ctx.amount) || ''} ₽${ctx && ctx.reason ? ': ' + ctx.reason : ''}. Оплатить можно в карточке заказа: ${SITE_URL}`,
+    ? `По заказу №${(ctx && ctx.orderNumber) || ''} возникли вопросы. Администратор разбирается и свяжется с вами.`
+    : `Мастер не сможет выполнить заказ №${(ctx && ctx.orderNumber) || ''}, ищем другого мастера.`,
+  worker_declined_admin: (ctx) => `Мастер отказался от заказа №${(ctx && ctx.orderNumber) || ''}${ctx && ctx.started ? ' ПОСЛЕ НАЧАЛА РАБОТЫ — нужно разбирательство' : ' (до начала работы, заказ возвращён в поиск)'}. Причина: ${(ctx && ctx.reason) || '—'}. Подробности — в админке.`,
+  surcharge_customer: (ctx) => `По заказу №${(ctx && ctx.orderNumber) || ''} требуется доплата ${(ctx && ctx.amount) || ''} ₽. Подробности и оплата — в карточке заказа: ${SITE_URL}`,
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
   // Мастер приехал, но деталь не подошла — только диагностика, работы не
   // выполнены (см. reportDiagnosisOnly). ctx.text — комментарий мастера.
@@ -4908,6 +4908,7 @@ const state = {
   photoViewer: null,
   cancelFlow: null,
   declineFlow: null,
+  cashFlow: null,
   // Полноэкранный «сторис»-просмотрщик (null — закрыт) — см.
   // renderStoriesOverlay/MASTER_INFO_SLIDES, добавлено 04.10.2026 по
   // просьбе Sg: инструкция «Как стать мастером» — набор слайдов (сейчас
@@ -7253,7 +7254,7 @@ function saveCancelReason(orderId, reason, askKind) {
   saveOrder(order);
   if (askKind) {
     const w = order.assignedWorkerId && getUsers().find((u) => u.id === order.assignedWorkerId);
-    pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, kind: askKind, workerName: w ? w.displayName : '' }));
+    pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, orderNumber: order.orderNumber, kind: askKind }));
   }
   if (!text) return;
   pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'order_cancel_reason_admin', { orderId: order.id, orderTitle: order.title, reason: text }));
@@ -7302,19 +7303,35 @@ function reportWorkerCash(orderId, kind) {
   order = { ...order, timeline: tl };
   saveOrder(order);
   const w = order.assignedWorkerId && getUsers().find((u) => u.id === order.assignedWorkerId);
-  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, kind, workerName: w ? w.displayName : '' }));
+  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, orderNumber: order.orderNumber, kind }));
   showToast('Спасибо! Мы получили сообщение и свяжемся с вами. Ничего не платите мастеру наличными.');
   render();
 }
 function cashWarningHtml(order) {
   if (!order.assignedWorkerId || !CASH_STATUSES.includes(order.status)) return '';
   const sent = (order.timeline || []).some((t) => (t.cashReports || []).length);
-  return `<div class="order-warning" style="margin:8px 0;"><b>Все платежи — только через сервис.</b> Если мастер просит доплату наличными или предлагает отменить заказ и заплатить ему наличными — не соглашайтесь и сообщите нам.
-    ${sent ? '<br><i>Сообщение уже отправлено в поддержку.</i>' : ''}
-    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
-      <button type="button" class="secondary-button" data-action="report-cash" data-value="${order.id}:cash_surcharge" style="box-sizing:border-box;">Мастер просит доплату наличными</button>
-      <button type="button" class="secondary-button" data-action="report-cash" data-value="${order.id}:cancel_cash" style="box-sizing:border-box;">Мастер предлагает отменить заказ и заплатить наличными</button>
-    </div></div>`;
+  return `<button type="button" data-action="open-cash-report" data-value="${order.id}" style="display:block;width:100%;box-sizing:border-box;text-align:left;border:none;background:var(--gray-100);border-left:3px solid #b42318;border-radius:10px;padding:8px 10px;margin:8px 0;font:inherit;font-size:13px;line-height:1.3;color:inherit;cursor:pointer;">
+    <b>Платите только через сервис.</b> Мастер просит наличные или предлагает отменить заказ? <span style="color:var(--accent);font-weight:600;">Сообщить →</span>${sent ? ' <span style="color:#2e7d32;">✓ отправлено</span>' : ''}
+  </button>`;
+}
+function renderCashReportOverlay() {
+  const f = state.cashFlow;
+  const order = f && getOrders().find((o) => o.id === f.orderId);
+  if (!f || !order) return '';
+  const sent = (order.timeline || []).some((t) => (t.cashReports || []).length);
+  return `
+    <div class="onboarding-overlay" data-action="cash-report-close">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-body" style="padding-top: 28px;">
+          <h2>Сообщить в поддержку</h2>
+          <p>Все платежи — только через сервис. Если мастер просит доплату наличными или предлагает отменить заказ и заплатить ему наличными — не соглашайтесь. Выберите, что произошло, — мы свяжемся с вами. Заказ при этом не отменяется.</p>
+          ${sent ? '<p class="order-meta">Вы уже отправляли сообщение по этому заказу.</p>' : ''}
+          <button type="button" class="onboarding-cta" data-action="report-cash" data-value="${order.id}:cash_surcharge">Мастер просит доплату наличными</button>
+          <button type="button" class="onboarding-cta" data-action="report-cash" data-value="${order.id}:cancel_cash" style="margin-top:8px;">Мастер предлагает отменить заказ и заплатить наличными</button>
+          <button type="button" class="secondary-button" data-action="cash-report-close" style="margin-top:8px;box-sizing:border-box;">Закрыть</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ===== Отказ мастера от заказа =====
@@ -7343,8 +7360,8 @@ function declineOrderByWorker(orderId, reason, comment) {
   order = { ...order, timeline: tl };
   if (!started) order.assignedWorkerId = null;
   saveOrder(order);
-  const ctx = { orderId: order.id, orderTitle: order.title, started, reason, comment };
-  pushNotification(createNotification(order.customerId, 'customer', order.id, 'worker_declined_customer', { orderId: order.id, orderTitle: order.title, started }));
+  const ctx = { orderId: order.id, orderTitle: order.title, orderNumber: order.orderNumber, started, reason };
+  pushNotification(createNotification(order.customerId, 'customer', order.id, 'worker_declined_customer', { orderId: order.id, orderTitle: order.title, orderNumber: order.orderNumber, started }));
   pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'worker_declined_admin', ctx));
   if (!started) notifyNearbyWorkers(order.id);
   return true;
@@ -12186,7 +12203,7 @@ function render() {
         <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -12218,7 +12235,7 @@ function render() {
     ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -14810,8 +14827,18 @@ async function handleAction(action, value) {
     case 'cancel-ask-pick':
       cancelAskKind = cancelAskKind === value ? '' : value;
       return render();
+    case 'open-cash-report':
+      state.cashFlow = { orderId: value };
+      state.infoOverlay = 'cash-report';
+      return render();
+    case 'cash-report-close':
+      state.cashFlow = null;
+      state.infoOverlay = null;
+      return render();
     case 'report-cash': {
       const [oid, kind] = value.split(':');
+      state.cashFlow = null;
+      state.infoOverlay = null;
       return reportWorkerCash(oid, kind);
     }
     case 'cancel-reason-skip':
