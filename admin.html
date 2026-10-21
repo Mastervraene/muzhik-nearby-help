@@ -4342,7 +4342,7 @@ function masterIncidents(userId) {
       }
       (t.cashReports || []).forEach((c) => {
         if ((c.workerId || o.assignedWorkerId) === userId) {
-          list.push({ order: o, kind: 'cash', at: c.at || t.at, text: c.kind === 'cancel_cash' ? 'жалоба: предложил отменить заказ и заплатить наличными' : 'жалоба: просит доплату наличными' });
+          list.push({ order: o, kind: c.kind === 'cancel_cash' ? 'cash_cancel' : 'cash_surcharge', at: c.at || t.at, text: c.kind === 'cancel_cash' ? 'жалоба: предложил отменить заказ и заплатить наличными' : 'жалоба: просит доплату наличными' });
         }
       });
     });
@@ -4358,18 +4358,23 @@ function masterFlagsPillsHtml(u) {
   const inc = masterIncidents(u.id);
   if (!inc.length) return '';
   const n = (k) => inc.filter((i) => i.kind === k).length;
-  const alarm = n('cash') > 0 || n('decline') + n('cancel') >= 3;
-  return `<span class="pill ${alarm ? 'warn' : 'muted'}" title="Отказов / отмен заказчиками после назначения / жалоб на наличные">${alarm ? '🚨 ' : '⚠ '}${n('decline')} ${n('cancel')} ${n('cash')}</span>`;
+  const c0 = n('decline'), c1 = n('cancel'), c2 = n('cash_cancel'), c3 = n('cash_surcharge');
+  const alarm = c2 + c3 > 0 || c0 + c1 >= 3;
+  return `<span class="pill ${alarm ? 'warn' : 'muted'}" title="1) отказался от заказа · 2) отмены заказчиком при назначенном мастере · 3) просит отменить и заплатить лично · 4) просит доплату наличными">${alarm ? '🚨 ' : '⚠ '}${c0} ${c1} ${c2} ${c3}</span>`;
 }
 function masterIncidentsHtml(u) {
   if (!u.availableAsWorker) return '';
   const inc = masterIncidents(u.id);
   if (!inc.length) return '';
-  const icon = { decline: '↩', cash: '🚨', cancel: '✖' };
-  return `<div class="field-sm dense" style="margin-bottom:8px;font-size:12.5px;line-height:1.35;">
-    <p class="form-section-label" style="margin:0 0 4px;">Отказы и жалобы</p>
-    ${inc.map((i) => `<div class="order-user-row" data-order-id="${i.order.id}" style="padding:2px 0;cursor:default;border:none;">${icon[i.kind]} <b>№${i.order.orderNumber ?? '—'}</b> · ${escapeHtml(fmtDate(i.at))} · ${escapeHtml(i.text)}</div>`).join('')}
-  </div>`;
+  const icon = { decline: '↩', cancel: '✖', cash_cancel: '🚨', cash_surcharge: '🚨' };
+  const n = (k) => inc.filter((i) => i.kind === k).length;
+  return `<details class="requests-history" style="margin-bottom:8px;">
+    <summary>Отказы и жалобы (${inc.length})</summary>
+    <div class="field-sm dense" style="font-size:12.5px;line-height:1.35;">
+      <p style="margin:0 0 4px;color:var(--gray-500);">Цифры в карточке: 1) отказался от заказа — ${n('decline')}; 2) отмены заказчиком при назначенном мастере — ${n('cancel')}; 3) просит отменить и заплатить лично — ${n('cash_cancel')}; 4) просит доплату наличными — ${n('cash_surcharge')}</p>
+      ${inc.map((i) => `<div class="order-user-row" data-order-id="${i.order.id}" style="padding:2px 0;cursor:default;border:none;">${icon[i.kind]} <b>№${i.order.orderNumber ?? '—'}</b> · ${escapeHtml(fmtDate(i.at))} · ${escapeHtml(i.text)}</div>`).join('')}
+    </div>
+  </details>`;
 }
 /** Отметка «!» в истории заказов пользователя: по заказу были отказ мастера, жалоба или отмена. */
 function orderIncidentMark(o, userId) {

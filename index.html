@@ -4805,6 +4805,8 @@ const STATUS_LABELS = {
   // requestPartPurchase). См. renderOrderDetail (isCustomer) ниже.
   part_purchase_requested: 'Нужно купить деталь',
   worker_declined: 'На проверке у администратора',
+  // Только в «моём» виде бывшего мастера (см. restrictOrderForFormerWorker) — не реальный статус заказа.
+  part_done: 'Ваша часть выполнена',
 };
 
 // «Архивные» статусы заказа — скрыты по умолчанию в блоке «Мои заказы»
@@ -4846,6 +4848,7 @@ function canResumeOrder(order) {
 }
 /** В «архив» уходят завершённые и отменённые заказы; отменённый оплаченный без возврата и отмена после прибытия мастера (пока не оставлена оценка) остаются в списке. */
 function isArchivedOrder(order) {
+  if (order.isFormerView) return true;
   if (order.status === 'cancelled') {
     if (isRefundPending(order)) return false;
     if (isCancelledOnSite(order)) {
@@ -4858,7 +4861,7 @@ function isArchivedOrder(order) {
   return ARCHIVED_ORDER_STATUSES.includes(order.status);
 }
 function isOrderClosed(order) {
-  return ARCHIVED_ORDER_STATUSES.includes(order.status);
+  return Boolean(order.isFormerView) || ARCHIVED_ORDER_STATUSES.includes(order.status);
 }
 
 // Подписи для order.payment.method/status (см. initiatePayment/payOrder) —
@@ -7334,6 +7337,40 @@ function renderCashReportOverlay() {
     </div>`;
 }
 
+// ===== Бывший мастер заказа: остаётся в истории, видит только свою часть =====
+/** Я работал по заказу, но сейчас он не за мной (ждёт деталь / передан другому / отказ). */
+function isFormerWorker(order, userId = state.currentUserId) {
+  return Boolean(order && order.customerId !== userId && order.assignedWorkerId !== userId && (order.workerHistory || []).some((h) => h.workerId === userId));
+}
+/** Момент (ms), когда закончилась моя часть: leftAt в истории мастеров, иначе первая «внерабочая» запись таймлайна после моего назначения. */
+function formerWorkerCutoffMs(order, userId = state.currentUserId) {
+  const h = (order.workerHistory || []).find((x) => x.workerId === userId);
+  if (!h) return Date.now();
+  if (h.leftAt) return new Date(h.leftAt).getTime();
+  const from = new Date(h.at).getTime();
+  const end = (order.timeline || []).find((t) => new Date(t.at).getTime() > from && ['awaiting_part', 'searching', 'cancelled', 'worker_declined', 'issue_reported', 'completed'].includes(t.status));
+  return end ? new Date(end.at).getTime() : Date.now();
+}
+/** Урезанная копия заказа для бывшего мастера: только то, что было до его ухода; без контактов и действий. */
+function restrictOrderForFormerWorker(order) {
+  const cut = formerWorkerCutoffMs(order);
+  const before = (t) => new Date(t.at).getTime() <= cut;
+  const tl = (order.timeline || []).filter(before);
+  return {
+    ...order,
+    status: 'part_done',
+    timeline: [...tl, { status: 'part_done', at: new Date(cut).toISOString() }],
+    diagnosisLog: (order.diagnosisLog || []).filter((d) => !d.at || new Date(d.at).getTime() <= cut),
+    beforePhotos: (order.beforePhotos || []).filter((a) => !a.uploadedAt || a.uploadedAt <= cut),
+    afterPhotos: (order.afterPhotos || []).filter((a) => !a.uploadedAt || a.uploadedAt <= cut),
+    isFormerView: true,
+  };
+}
+/** Проставляет время ухода мастера в workerHistory заказа. */
+function markWorkerLeft(order, workerId) {
+  return (order.workerHistory || []).map((h) => (h.workerId === workerId && !h.leftAt ? { ...h, leftAt: new Date().toISOString() } : h));
+}
+
 // ===== Отказ мастера от заказа =====
 const WORKER_DECLINE_REASONS = ['Не смогу приехать в срок', 'Не подходит по навыкам', 'Слишком далеко', 'Заказчик не отвечает', 'Информация в заказе не совпала с реальностью', 'Другое'];
 const WORKER_DECLINABLE_STATUSES = ['assigned', 'en_route', 'in_progress'];
@@ -7357,7 +7394,7 @@ function declineOrderByWorker(orderId, reason, comment) {
   order = transition(order, started ? 'worker_declined' : 'searching');
   const tl = [...order.timeline];
   tl[tl.length - 1] = { ...tl[tl.length - 1], by: 'worker', workerId, declined: true, started, reason, ...(comment ? { comment } : {}) };
-  order = { ...order, timeline: tl };
+  order = { ...order, timeline: tl, workerHistory: markWorkerLeft(order, workerId) };
   if (!started) order.assignedWorkerId = null;
   saveOrder(order);
   const ctx = { orderId: order.id, orderTitle: order.title, orderNumber: order.orderNumber, started, reason };
@@ -7758,6 +7795,7 @@ function reportDiagnosisOnly(orderId, comment) {
     ...(order.diagnosisLog || []),
     { authorRole: 'worker', authorName: worker?.displayName || '', text: trimmed, at: new Date().toISOString() },
   ];
+  order.workerHistory = markWorkerLeft(order, order.assignedWorkerId);
   order.assignedWorkerId = null;
   saveOrder(order);
   pushNotification(createNotification(order.customerId, 'customer', order.id, 'diagnosis_only', { text: trimmed }));
@@ -10443,7 +10481,9 @@ function renderOrders() {
   // массив — все заказы, где я назначенный мастер, без исключений; показ/
   // скрытие rated/cancelled по умолчанию делает тот же showArchived, что и
   // у «Мои заказы».
-  const assignedToMe = getOrders().filter((o) => o.assignedWorkerId === state.currentUserId);
+  const assignedToMe = getOrders()
+    .filter((o) => o.assignedWorkerId === state.currentUserId || (isFormerWorker(o) && o.status !== 'searching'))
+    .map((o) => (o.assignedWorkerId === state.currentUserId ? o : restrictOrderForFormerWorker(o)));
   // Кнопка «Обновить» и разделение «ошибка / честный ноль» имеют смысл
   // только пока список реально считает сервер (см. refreshAvailableOrders) —
   // в демо-режиме без Supabase candidateOrders считается синхронно тут же,
@@ -10721,8 +10761,9 @@ function renderWorkerPayoutBlock(order) {
 }
 
 function renderOrderDetail() {
-  const order = getOrders().find((o) => o.id === state.openOrderId);
+  let order = getOrders().find((o) => o.id === state.openOrderId);
   if (!order) return `<div class="screen"><div class="empty-state">Заказ не найден</div></div>`;
+  if (isFormerWorker(order) && order.status !== 'searching') order = restrictOrderForFormerWorker(order);
 
   const isCustomer = order.customerId === state.currentUserId;
   const isAssignedWorker = order.assignedWorkerId === state.currentUserId;
