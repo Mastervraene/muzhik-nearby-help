@@ -2324,9 +2324,11 @@ const ALLOWED_TRANSITIONS = {
   // купил: работы не выполнены, это НЕ «есть проблема» (issue_reported,
   // которая про совсем другое — например, невозможность связаться с
   // заказчиком), а именно ожидание материала (см. reportDiagnosisOnly).
-  assigned: ['en_route', 'cancelled', 'issue_reported', 'awaiting_part'],
-  en_route: ['in_progress', 'issue_reported', 'cancelled'],
-  in_progress: ['completed', 'issue_reported', 'awaiting_part', 'cancelled'],
+  assigned: ['en_route', 'cancelled', 'issue_reported', 'awaiting_part', 'searching'],
+  en_route: ['in_progress', 'issue_reported', 'cancelled', 'searching'],
+  in_progress: ['completed', 'issue_reported', 'awaiting_part', 'cancelled', 'worker_declined'],
+  // Мастер отказался после начала работы — разбирается админ (см. declineOrderByWorker).
+  worker_declined: ['searching', 'assigned', 'cancelled', 'completed'],
   completed: ['confirmed', 'issue_reported'],
   confirmed: ['rated'],
   rated: [],
@@ -2708,7 +2710,13 @@ const TEMPLATES = {
   order_cancelled: (ctx) => `Заказчик отменил заказ${ctx && ctx.orderTitle ? ' «' + ctx.orderTitle + '»' : ''}.${ctx && ctx.onSite ? ' Вы можете оценить заказчика и оставить комментарий в карточке заказа.' : ''} ${SITE_URL}`,
   order_cancelled_admin: (ctx) => `Заказчик отменил ${ctx && ctx.refundNeeded ? 'ОПЛАЧЕННЫЙ ' : ''}заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}»${ctx && ctx.onSite ? ' ПОСЛЕ ПРИБЫТИЯ МАСТЕРА (возможно удержание стоимости выезда)' : ''}.${ctx && ctx.refundNeeded ? ' Нужен возврат средств.' : ''}`,
   order_cancel_reason_admin: (ctx) => `Причина отмены заказа «${(ctx && ctx.orderTitle) || ''}»: ${(ctx && ctx.reason) || '—'}.`,
+  cash_report_admin: (ctx) => `⚠️ ЖАЛОБА: ${ctx && ctx.kind === 'cancel_cash' ? 'мастер предложил отменить заказ и расплатиться наличными' : 'мастер просит доплату наличными'}. Заказ «${(ctx && ctx.orderTitle) || ''}»${ctx && ctx.workerName ? ', мастер ' + ctx.workerName : ''}. Свяжитесь с заказчиком.`,
   order_resumed_admin: (ctx) => `Заказчик возобновил заказ «${(ctx && ctx.orderTitle) || ''}» — снова ищем мастера.`,
+  worker_declined_customer: (ctx) => ctx && ctx.started
+    ? `По заказу «${(ctx && ctx.orderTitle) || ''}» возникли вопросы. Администратор разбирается и свяжется с вами.`
+    : `Мастер не сможет выполнить заказ «${(ctx && ctx.orderTitle) || ''}», ищем другого мастера.`,
+  worker_declined_admin: (ctx) => `Мастер отказался от заказа «${(ctx && ctx.orderTitle) || ''}»${ctx && ctx.started ? ' ПОСЛЕ НАЧАЛА РАБОТЫ — нужно разбирательство' : ' (до начала работы, заказ возвращён в поиск)'}. Причина: ${(ctx && ctx.reason) || '—'}.${ctx && ctx.comment ? ' Комментарий: ' + ctx.comment : ''}`,
+  surcharge_customer: (ctx) => `По заказу «${(ctx && ctx.orderTitle) || ''}» требуется доплата ${(ctx && ctx.amount) || ''} ₽${ctx && ctx.reason ? ': ' + ctx.reason : ''}. Оплатить можно в карточке заказа: ${SITE_URL}`,
   order_confirmed_by_customer: () => 'Заказчик подтвердил выполнение заказа.',
   // Мастер приехал, но деталь не подошла — только диагностика, работы не
   // выполнены (см. reportDiagnosisOnly). ctx.text — комментарий мастера.
@@ -4783,6 +4791,7 @@ const STATUS_LABELS = {
   // ещё на первичной модерации решил, что нужна деталь (см. admin.html
   // requestPartPurchase). См. renderOrderDetail (isCustomer) ниже.
   part_purchase_requested: 'Нужно купить деталь',
+  worker_declined: 'На проверке у администратора',
 };
 
 // «Архивные» статусы заказа — скрыты по умолчанию в блоке «Мои заказы»
@@ -4885,6 +4894,7 @@ const state = {
   // оверлее появляется листание влево-вправо (добавлено 04.10.2026).
   photoViewer: null,
   cancelFlow: null,
+  declineFlow: null,
   // Полноэкранный «сторис»-просмотрщик (null — закрыт) — см.
   // renderStoriesOverlay/MASTER_INFO_SLIDES, добавлено 04.10.2026 по
   // просьбе Sg: инструкция «Как стать мастером» — набор слайдов (сейчас
@@ -7194,6 +7204,7 @@ async function payOrder(orderId) {
 
 const CUSTOMER_CANCELLABLE_STATUSES = ['collecting_details', 'clarification_requested', 'estimate_ready', 'paid', 'searching', 'assigned', 'en_route', 'awaiting_part', 'part_purchase_requested', 'issue_reported', 'in_progress'];
 let cancelReasonText = '';
+let cancelAskKind = '';
 
 /** Заказчик отменяет заказ (после подтверждения в окне): статус «Отменено», уведомления админу и мастеру. */
 function cancelOrderByCustomer(orderId) {
@@ -7214,16 +7225,24 @@ function cancelOrderByCustomer(orderId) {
 }
 
 /** Причина отмены — в запись «отменено» таймлайна (её видит админ) + уведомление админу. */
-function saveCancelReason(orderId, reason) {
+function saveCancelReason(orderId, reason, askKind) {
   const text = String(reason || '').trim().slice(0, 1000);
   let order = getOrders().find((o) => o.id === orderId);
-  if (!order || !text) return;
+  if (!order || (!text && !askKind)) return;
   const tl = [...order.timeline];
   for (let i = tl.length - 1; i >= 0; i--) {
-    if (tl[i].status === 'cancelled') { tl[i] = { ...tl[i], reason: text }; break; }
+    if (tl[i].status === 'cancelled') {
+      tl[i] = { ...tl[i], reason: text || (askKind === 'cancel_cash' ? 'Мастер предложил отменить заказ и расплатиться наличными' : 'Мастер просит доплату наличными'), ...(askKind ? { cashReports: [...(tl[i].cashReports || []), { kind: askKind, at: new Date().toISOString() }] } : {}) };
+      break;
+    }
   }
   order = { ...order, timeline: tl };
   saveOrder(order);
+  if (askKind) {
+    const w = order.assignedWorkerId && getUsers().find((u) => u.id === order.assignedWorkerId);
+    pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, kind: askKind, workerName: w ? w.displayName : '' }));
+  }
+  if (!text) return;
   pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'order_cancel_reason_admin', { orderId: order.id, orderTitle: order.title, reason: text }));
 }
 
@@ -7259,6 +7278,127 @@ async function resumeOrder(orderId) {
   render();
 }
 
+const CASH_STATUSES = ['assigned', 'en_route', 'in_progress', 'completed', 'awaiting_part', 'issue_reported'];
+/** Заказчик сообщает, что мастер просит наличные / предлагает отменить заказ и расплатиться мимо сервиса. */
+function reportWorkerCash(orderId, kind) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.customerId !== state.currentUserId) return;
+  const tl = [...order.timeline];
+  const last = tl.length - 1;
+  tl[last] = { ...tl[last], cashReports: [...(tl[last].cashReports || []), { kind, at: new Date().toISOString(), workerId: order.assignedWorkerId || null }] };
+  order = { ...order, timeline: tl };
+  saveOrder(order);
+  const w = order.assignedWorkerId && getUsers().find((u) => u.id === order.assignedWorkerId);
+  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'cash_report_admin', { orderId: order.id, orderTitle: order.title, kind, workerName: w ? w.displayName : '' }));
+  showToast('Спасибо! Мы получили сообщение и свяжемся с вами. Ничего не платите мастеру наличными.');
+  render();
+}
+function cashWarningHtml(order) {
+  if (!order.assignedWorkerId || !CASH_STATUSES.includes(order.status)) return '';
+  const sent = (order.timeline || []).some((t) => (t.cashReports || []).length);
+  return `<div class="order-warning" style="margin:8px 0;"><b>Все платежи — только через сервис.</b> Если мастер просит доплату наличными или предлагает отменить заказ и заплатить ему наличными — не соглашайтесь и сообщите нам.
+    ${sent ? '<br><i>Сообщение уже отправлено в поддержку.</i>' : ''}
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
+      <button type="button" class="secondary-button" data-action="report-cash" data-value="${order.id}:cash_surcharge" style="box-sizing:border-box;">Мастер просит доплату наличными</button>
+      <button type="button" class="secondary-button" data-action="report-cash" data-value="${order.id}:cancel_cash" style="box-sizing:border-box;">Мастер предлагает отменить заказ и заплатить наличными</button>
+    </div></div>`;
+}
+
+// ===== Отказ мастера от заказа =====
+const WORKER_DECLINE_REASONS = ['Не смогу приехать в срок', 'Не подходит по навыкам', 'Слишком далеко', 'Заказчик не отвечает', 'Информация в заказе не совпала с реальностью', 'Другое'];
+const WORKER_DECLINABLE_STATUSES = ['assigned', 'en_route', 'in_progress'];
+let declineReasonSel = '';
+let declineCommentText = '';
+
+/** Мастера, уже отказавшиеся от заказа (записи timeline с declined) — им он повторно не предлагается. */
+function declinedWorkerIds(order) {
+  return (order.timeline || []).filter((t) => t.declined && t.workerId).map((t) => t.workerId);
+}
+/** Мастер отказался после начала работы: заказ ждёт разбирательства. */
+function isWorkerDeclinedStarted(order) {
+  return Boolean(order && order.status === 'worker_declined');
+}
+
+function declineOrderByWorker(orderId, reason, comment) {
+  let order = getOrders().find((o) => o.id === orderId);
+  if (!order || order.assignedWorkerId !== state.currentUserId || !WORKER_DECLINABLE_STATUSES.includes(order.status)) return false;
+  const started = order.status === 'in_progress';
+  const workerId = order.assignedWorkerId;
+  order = transition(order, started ? 'worker_declined' : 'searching');
+  const tl = [...order.timeline];
+  tl[tl.length - 1] = { ...tl[tl.length - 1], by: 'worker', workerId, declined: true, started, reason, ...(comment ? { comment } : {}) };
+  order = { ...order, timeline: tl };
+  if (!started) order.assignedWorkerId = null;
+  saveOrder(order);
+  const ctx = { orderId: order.id, orderTitle: order.title, started, reason, comment };
+  pushNotification(createNotification(order.customerId, 'customer', order.id, 'worker_declined_customer', { orderId: order.id, orderTitle: order.title, started }));
+  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'worker_declined_admin', ctx));
+  if (!started) notifyNearbyWorkers(order.id);
+  return true;
+}
+
+function renderDeclineOrderOverlay() {
+  const f = state.declineFlow;
+  const order = f && getOrders().find((o) => o.id === f.orderId);
+  if (!f || !order) return '';
+  const started = order.status === 'in_progress';
+  return `
+    <div class="onboarding-overlay" data-action="decline-flow-close">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-body" style="padding-top: 28px;max-height:85vh;overflow:auto;">
+          <h2>Отказаться от заказа?</h2>
+          ${started
+            ? `<div class="order-warning"><b>Вы уже приступили к работе.</b> Если отказаться сейчас, вы можете не получить оплату за этот заказ. Заказ уйдёт на разбирательство администратору.</div>`
+            : `<p>Заказ вернётся в поиск, заказчику придёт уведомление, что ищем другого мастера. Этот заказ вам больше не предложат.</p>`}
+          <p class="order-meta"><b>Причина отказа:</b></p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+            ${WORKER_DECLINE_REASONS.map((r) => `<button type="button" class="sort-pill ${declineReasonSel === r ? 'active' : ''}" data-action="decline-reason-pick" data-value="${escapeHtml(r)}">${escapeHtml(r)}</button>`).join('')}
+          </div>
+          <textarea id="decline-comment" rows="3" maxlength="1000" placeholder="Комментарий${declineReasonSel === 'Другое' ? ' (обязательно)' : ' (необязательно)'}" style="width:100%;box-sizing:border-box;border:1px solid var(--gray-200);border-radius:12px;padding:12px;font:inherit;font-size:16px;">${escapeHtml(declineCommentText)}</textarea>
+          <button type="button" class="onboarding-cta" data-action="decline-order-confirm" style="margin-top:12px;background:#b42318;" ${declineReasonSel ? '' : 'disabled'}>${started ? 'Всё равно отказаться' : 'Отказаться от заказа'}</button>
+          <button type="button" class="secondary-button" data-action="decline-flow-close" style="margin-top:8px;box-sizing:border-box;">Нет, оставить за мной</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Блок доплат в карточке заказа (данные пишут только Edge Functions: orders.payment.surcharges). */
+function surchargeBlockHtml(order, isCustomer) {
+  const list = (order.payment && order.payment.surcharges) || [];
+  const shown = list.filter((x) => x.status === 'pending' || x.status === 'paid');
+  if (!shown.length) return '';
+  return shown.map((x) => {
+    if (x.status === 'paid') return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доплата ${x.amount} ₽ оплачена</b>${x.reason ? ' — ' + escapeHtml(x.reason) : ''}</p></div>`;
+    if (!isCustomer) return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доплата ${x.amount} ₽</b> — ждёт оплаты заказчиком</p></div>`;
+    return `<div class="field-card clarification-alert" style="margin:8px 0;"><p class="order-meta"><b>Требуется доплата ${x.amount} ₽</b>${x.reason ? '<br>' + escapeHtml(x.reason) : ''}</p><button type="button" class="primary-button" id="pay-surcharge-${x.id}" data-action="pay-surcharge" data-value="${order.id}:${x.id}">Оплатить доплату ${x.amount} ₽</button></div>`;
+  }).join('');
+}
+function paidSurchargeTotal(order) {
+  return (((order.payment && order.payment.surcharges) || []).filter((x) => x.status === 'paid').reduce((a, x) => a + (Number(x.amount) || 0), 0));
+}
+
+async function paySurcharge(orderId, surchargeId) {
+  const token = loadSessionToken();
+  if (!token) { showToast('Не получилось подтвердить вход — зайдите заново по номеру телефона'); return; }
+  const btn = document.getElementById(`pay-surcharge-${surchargeId}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Переходим к оплате…'; }
+  try {
+    const { url } = getConfig();
+    const res = await fetch(`${url}/functions/v1/create-payment`, { method: 'POST', headers: headers(), body: JSON.stringify({ orderId, surchargeId, sessionToken: token }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok || !data.paymentUrl) {
+      if (handleUnauthorizedResponse(data)) return;
+      showToast('Не получилось перейти к оплате доплаты — обновите страницу и попробуйте ещё раз');
+      if (btn) { btn.disabled = false; btn.textContent = 'Оплатить доплату'; }
+      return;
+    }
+    window.location.href = data.paymentUrl;
+  } catch (err) {
+    reportError('оплата доплаты', err);
+    if (btn) { btn.disabled = false; btn.textContent = 'Оплатить доплату'; }
+  }
+}
+
 function renderCancelOrderOverlay() {
   const f = state.cancelFlow;
   const order = f && getOrders().find((o) => o.id === f.orderId);
@@ -7272,6 +7412,11 @@ function renderCancelOrderOverlay() {
         <div class="onboarding-body" style="padding-top: 28px;">
           <h2>Заказ отменён</h2>
           <p>Расскажите, пожалуйста, почему вы отменили заказ — это поможет нам стать лучше.</p>
+ <p class="order-meta"><b>Если причина в мастере:</b></p>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;">
+            <button type="button" class="sort-pill ${cancelAskKind === 'cancel_cash' ? 'active' : ''}" data-action="cancel-ask-pick" data-value="cancel_cash">Мастер предложил отменить заказ и заплатить наличными</button>
+            <button type="button" class="sort-pill ${cancelAskKind === 'cash_surcharge' ? 'active' : ''}" data-action="cancel-ask-pick" data-value="cash_surcharge">Мастер просит доплату наличными</button>
+          </div>
           <textarea id="cancel-reason" rows="4" maxlength="1000" placeholder="Например: нашёл мастера сам, передумал, долго ждал…" style="width:100%;box-sizing:border-box;border:1px solid var(--gray-200);border-radius:12px;padding:12px;font:inherit;font-size:16px;">${escapeHtml(cancelReasonText)}</textarea>
           <button type="button" class="onboarding-cta" data-action="cancel-reason-send" style="margin-top:12px;">Отправить</button>
           <button type="button" class="secondary-button" data-action="cancel-reason-skip" style="margin-top:8px;box-sizing:border-box;">Пропустить</button>
@@ -7284,6 +7429,7 @@ function renderCancelOrderOverlay() {
       <div class="onboarding-card" onclick="event.stopPropagation()">
         <div class="onboarding-body" style="padding-top: 28px;">
           <h2>${onSite ? 'Мастер уже начал работу' : 'Отменить заказ?'}</h2>
+          <div class="order-warning" style="margin-bottom:8px;">Если мастер предложил вам отменить заказ и расплатиться с ним наличными — не соглашайтесь и сообщите нам: нажмите «Отменить» и выберите причину на следующем шаге либо используйте кнопку в карточке заказа.</div>
           <p>${onSite ? 'Мастер уже начал работу, вы действительно хотите отменить заказ? После выяснения всех обстоятельств может быть удержана стоимость выезда.' : paid ? 'Заказ уже оплачен. После отмены администратор вернёт вам деньги. Пока возврата нет, заказ можно будет возобновить.' : 'Заказ будет отменён.'}</p>
           <button type="button" class="onboarding-cta" data-action="cancel-order-confirm" style="background:#b42318;">${onSite ? 'Всё равно отменить' : 'Да, отменить заказ'}</button>
           <button type="button" class="secondary-button" data-action="cancel-flow-close" style="margin-top:8px;box-sizing:border-box;">Нет, оставить</button>
@@ -10500,11 +10646,12 @@ function renderWorkerPayoutBlock(order) {
   // ДО того, как админ выставил финальную цену (та же логика, что у
   // «Оплачено»/«Итого к оплате» в блоке заказчика выше).
   if (typeof order.finalPrice === 'number') {
+    const extra = paidSurchargeTotal(order);
     return `
       <div class="worker-payout">
-        <p class="worker-payout-price">Стоимость заказа ${order.finalPrice} ₽</p>
+        <p class="worker-payout-price">Стоимость заказа ${order.finalPrice} ₽${extra ? ` + доплата ${extra} ₽` : ''}</p>
         <p class="worker-payout-earn-label">Вы заработаете</p>
-        <p class="worker-payout-earn-amount">${workerPayout(order.finalPrice)} ₽</p>
+        <p class="worker-payout-earn-amount">${workerPayout(order.finalPrice + extra)} ₽</p>
       </div>
     `;
   }
@@ -10586,6 +10733,8 @@ function renderOrderDetail() {
     }
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += renderOrderPhotoForm(order, 'before');
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
+    if (WORKER_DECLINABLE_STATUSES.includes(order.status)) actions += `<button class="secondary-button" data-action="decline-order-ask" data-value="${order.id}" style="color:#b42318;box-sizing:border-box;">Отказаться от заказа</button>`;
+    if (isWorkerDeclinedStarted(order)) actions += `<div class="order-warning">Вы отказались от заказа после начала работы. Администратор проверит обстоятельства и сообщит решение. Оставьте, пожалуйста, оценку заказчику и комментарий с фото ниже.</div>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
     // выполненной, и не привязана к машине состояний заказа (см. rateCustomer()).
     // ИСПРАВЛЕНО 10.10.2026 (жалоба Sg: «оценка уходит при нажатии на
@@ -10595,7 +10744,7 @@ function renderOrderDetail() {
     // написано в комментарии. Кнопка неактивна, пока звезда не выбрана.
     // Красивые звёзды — тот же star-picker/star-btn, что и у навыков
     // мастера (просьба Sg: «сами звёзды надо сделать красивее»).
-    if ((['completed', 'confirmed', 'rated'].includes(order.status) || isCancelledOnSite(order)) && !order.customerRating) {
+    if ((['completed', 'confirmed', 'rated', 'worker_declined'].includes(order.status) || isCancelledOnSite(order)) && !order.customerRating) {
       const draft = ratingDrafts[`${order.id}:customer`] || 0;
       actions += `
         <p class="order-meta"><b>Оцените заказчика:</b></p>
@@ -10908,6 +11057,8 @@ function renderOrderDetail() {
             .map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`)
             .join('')
         }
+        ${surchargeBlockHtml(order, isCustomer)}
+        ${isCustomer ? cashWarningHtml(order) : ''}
         <div style="margin-top:12px;">${actions}</div>
       </div>
       ${
@@ -11241,6 +11392,7 @@ document.addEventListener('input', (e) => {
   const id = e.target && e.target.id;
   if (id && id.startsWith('rating-comment-')) { ratingCommentDrafts[id] = e.target.value; }
   else if (id === 'cancel-reason') { cancelReasonText = e.target.value; }
+  else if (id === 'decline-comment') { declineCommentText = e.target.value; }
   else if (id === 'mw-first') { masterWizardFirstName = e.target.value; masterWizardNameTouched = true; }
   else if (id === 'mw-last') { masterWizardLastName = e.target.value; masterWizardNameTouched = true; }
 });
@@ -12001,7 +12153,7 @@ function render() {
         <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -12033,7 +12185,7 @@ function render() {
     ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -14575,6 +14727,7 @@ async function handleAction(action, value) {
     case 'cancel-order-ask':
       state.cancelFlow = { orderId: value, step: 'confirm' };
       cancelReasonText = '';
+      cancelAskKind = '';
       state.infoOverlay = 'cancel-order';
       return render();
     case 'cancel-order-confirm': {
@@ -14601,13 +14754,22 @@ async function handleAction(action, value) {
     case 'cancel-reason-send': {
       const f = state.cancelFlow;
       const ta = document.getElementById('cancel-reason');
-      if (f) saveCancelReason(f.orderId, (ta && ta.value) || cancelReasonText);
+      if (f) saveCancelReason(f.orderId, (ta && ta.value) || cancelReasonText, cancelAskKind);
+      cancelAskKind = '';
       state.cancelFlow = null;
       state.infoOverlay = null;
       showToast('Спасибо, заказ отменён');
       return render();
     }
+    case 'cancel-ask-pick':
+      cancelAskKind = cancelAskKind === value ? '' : value;
+      return render();
+    case 'report-cash': {
+      const [oid, kind] = value.split(':');
+      return reportWorkerCash(oid, kind);
+    }
     case 'cancel-reason-skip':
+      cancelAskKind = '';
       state.cancelFlow = null;
       state.infoOverlay = null;
       showToast('Заказ отменён');
@@ -14618,6 +14780,39 @@ async function handleAction(action, value) {
       return render();
     case 'resume-order':
       return resumeOrder(value);
+    case 'decline-order-ask':
+      state.declineFlow = { orderId: value };
+      declineReasonSel = '';
+      declineCommentText = '';
+      state.infoOverlay = 'decline-order';
+      return render();
+    case 'decline-reason-pick':
+      declineReasonSel = value;
+      return render();
+    case 'decline-flow-close':
+      state.declineFlow = null;
+      state.infoOverlay = null;
+      return render();
+    case 'decline-order-confirm': {
+      const f = state.declineFlow;
+      if (!f || !declineReasonSel) return;
+      const ta = document.getElementById('decline-comment');
+      const comment = String((ta && ta.value) || declineCommentText || '').trim().slice(0, 1000);
+      if (declineReasonSel === 'Другое' && !comment) { showToast('Напишите комментарий — почему отказываетесь'); return; }
+      const before = getOrders().find((o) => o.id === f.orderId);
+      const wasStarted = before && before.status === 'in_progress';
+      const ok = declineOrderByWorker(f.orderId, declineReasonSel, comment);
+      state.declineFlow = null;
+      state.infoOverlay = null;
+      if (!ok) { showToast('Этот заказ уже нельзя отклонить здесь'); return render(); }
+      showToast(wasStarted ? 'Вы отказались от заказа. Администратор проверит обстоятельства — оцените заказчика ниже.' : 'Вы отказались от заказа — он вернулся в поиск');
+      if (!wasStarted) return go('orders');
+      return render();
+    }
+    case 'pay-surcharge': {
+      const [oid, sid] = value.split(':');
+      return paySurcharge(oid, sid);
+    }
     case 'view-person-avatar': {
       if (!value) return;
       state.photoViewer = { photos: [{ url: value, name: '' }], index: 0 };

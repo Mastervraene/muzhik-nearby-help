@@ -948,6 +948,7 @@ const STATUS_LABELS = {
   // заказчику сначала нужно купить деталь — до назначения мастера (см.
   // requestPartPurchase, кнопка рядом с «Уточнить»). Просьба Sg 25.09.2026.
   part_purchase_requested: 'Нужно купить деталь',
+  worker_declined: 'Мастер отказался — проверка',
 };
 const STATUS_KEYS = Object.keys(STATUS_LABELS);
 // Статусы, скрытые по умолчанию в списке заказов (см. ordersShowArchived) —
@@ -1030,6 +1031,7 @@ STATUS_FLOW_ORDER.forEach((key, i) => {
     dot: `hsl(${hue}, 70%, 45%)`,
   };
 });
+STATUS_COLORS.worker_declined = { bg: '#fee2e2', fg: '#991b1b', dot: '#dc2626' };
 STATUS_COLORS.cancelled = { bg: '#f1f5f9', fg: '#64748b', dot: '#94a3b8' };
 STATUS_COLORS.issue_reported = { bg: '#fce7f3', fg: '#be185d', dot: '#ec4899' };
 // «Нужно уточнение» — не часть прогресса (боковая ветка из collecting_details,
@@ -1055,7 +1057,7 @@ function statusColor(status) {
 function cancelInfoHtml(o) {
   if (o.status !== 'cancelled') return '';
   const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
-  if (!t || t.by !== 'customer') return '';
+  if (!t || !['customer', 'admin'].includes(t.by)) return '';
   const refundNeeded = Boolean(t.refundNeeded) && !(o.refunds || []).length;
   const accepted = Boolean(t.refundAccepted) || (o.refunds || []).length > 0;
   return (t.onSite ? `<div class="card-clarification-block" style="background:#fff4e5;">⚠ Отмена после прибытия мастера — возможно удержание стоимости выезда. Обоим доступна форма оценки.</div>` : '')
@@ -1067,7 +1069,7 @@ function cancelInfoHtml(o) {
 function acceptRefundHtml(o) {
   if (o.status !== 'cancelled') return '';
   const t = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
-  if (!t || t.by !== 'customer' || !t.refundNeeded) return '';
+  if (!t || !['customer', 'admin'].includes(t.by) || !t.refundNeeded) return '';
   if (t.refundAccepted || (o.refunds || []).length) return `<div class="field-sm"><b>✓ Принято к возврату</b> — клиент видит эту надпись, «Возобновить заказ» заблокировано.</div>`;
   return `<div class="field-sm"><button class="btn-sm danger" id="accept-refund-${o.id}" type="button">Принято к возврату</button> <span style="font-size:12px;color:var(--gray-500);">Нажмите, как только начали возврат: у клиента пропадёт кнопка «Возобновить заказ».</span></div>`;
 }
@@ -3155,6 +3157,7 @@ function orderCardHtml(o) {
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
           ${cancelInfoHtml(o)}
+          ${declineInfoHtml(o)}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
             <span>${fmtDate(orderLastActivityAt(o))}</span>
@@ -3726,6 +3729,7 @@ function orderFormHtml(o) {
       ${deviceModelHistoryHtml(o)}
       ${diagnosisLogHtmlAdmin(o)}
       ${acceptRefundHtml(o)}
+      ${orderPaymentAdminHtml(o)}
       ${refundsHtml(o)}
       ${formattedBriefHtml(o.formattedBrief)}
       ${
@@ -3763,6 +3767,7 @@ function autosizeAdminTextarea(textarea) {
 }
 
 function wireOrderForm(o) {
+  wireOrderExtras(o);
   const statusSelectEl = document.getElementById(`f-status-${o.id}`);
   statusSelectEl.addEventListener('change', () => {
     statusSelectEl.style.borderLeft = `4px solid ${statusColor(statusSelectEl.value).dot}`;
@@ -4205,6 +4210,151 @@ function cityFromCoords(lat, lng) {
   return best;
 }
 
+// ===== Отказ мастера, жалобы на наличные, доплата, журнал платежей =====
+async function callAdminSurcharge(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-surcharge`, {
+    method: 'POST',
+    headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ action, token: adminSessionToken }, extra || {})),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok || !data || !data.ok) {
+    throw new Error(data?.error === 'invalid_session' ? 'сессия истекла — войдите заново' : data?.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+function orderDeclines(o) {
+  return (o.timeline || []).filter((t) => t.declined);
+}
+function orderCashReports(o) {
+  const r = [];
+  (o.timeline || []).forEach((t) => (t.cashReports || []).forEach((c) => r.push(c)));
+  return r;
+}
+/** Плашки в свёрнутой карточке заказа: отказ мастера и жалобы на наличные. */
+function declineInfoHtml(o) {
+  let h = '';
+  const dec = orderDeclines(o);
+  const last = dec[dec.length - 1];
+  if (o.status === 'worker_declined' && last) {
+    h += `<div class="card-clarification-block" style="background:#fde8e8;">🛑 Мастер ${escapeHtml(userName(last.workerId))} отказался ПОСЛЕ начала работы — нужно разбирательство. Причина: ${escapeHtml(last.reason || '—')}${last.comment ? '. ' + escapeHtml(last.comment) : ''}</div>`;
+  } else if (dec.length) {
+    h += `<div class="card-clarification-block" style="background:#fff4e5;">↩ Отказов мастеров по заказу: ${dec.length}. Последний: ${escapeHtml(userName(last.workerId))} — ${escapeHtml(last.reason || '—')}${last.comment ? '. ' + escapeHtml(last.comment) : ''}</div>`;
+  }
+  const cash = orderCashReports(o);
+  if (cash.length) {
+    h += `<div class="card-clarification-block" style="background:#fde8e8;">🚨 Жалоба заказчика (${cash.length}): ${cash.map((c) => c.kind === 'cancel_cash' ? 'мастер предложил отменить заказ и заплатить наличными' : 'мастер просит доплату наличными').filter((v, i, a) => a.indexOf(v) === i).join('; ')}</div>`;
+  }
+  return h;
+}
+function orderPaymentAdminHtml(o) {
+  const sur = (o.payment && o.payment.surcharges) || [];
+  const rows = sur.map((x) => `<div style="margin:4px 0;font-size:13px;">${x.status === 'paid' ? '✅' : x.status === 'cancelled' ? '✖' : '⏳'} Доплата <b>${x.amount} ₽</b> — ${escapeHtml(x.reason || '')} <i>(${x.status === 'paid' ? 'оплачена' : x.status === 'cancelled' ? 'отменена' : 'ждёт оплаты'})</i>${x.status === 'pending' ? ` <button type="button" class="btn-sm ghost" id="sur-cancel-${o.id}-${x.id}">Отозвать</button>` : ''}</div>`).join('');
+  const declinedBtns = o.status === 'worker_declined' ? `
+    <div class="field-sm" style="border:1px solid #fca5a5;border-radius:10px;padding:10px;">
+      <label>Разбирательство: мастер отказался после начала</label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+        <button type="button" class="btn-sm primary" id="wd-search-${o.id}">Вернуть в поиск (другой мастер)</button>
+        <button type="button" class="btn-sm danger" id="wd-cancel-${o.id}">Отменить заказ (с возвратом)</button>
+      </div>
+      <p style="margin:6px 0 0;font-size:12px;color:var(--gray-500);">Прежний мастер этот заказ повторно не увидит. Доплату выставьте ниже, если она нужна. Оценки обоих — решайте «учитывать/не учитывать» ниже в карточке.</p>
+    </div>` : '';
+  const canSur = ['paid', 'searching', 'assigned', 'en_route', 'in_progress', 'worker_declined', 'completed', 'confirmed', 'awaiting_part', 'issue_reported'].includes(o.status);
+  return `${declinedBtns}
+    <div class="field-sm">
+      <label>Доплата и история платежей</label>
+      ${rows || '<p style="margin:4px 0;font-size:13px;color:var(--gray-500);">Доплат нет</p>'}
+      ${canSur ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+        <input type="number" min="1" id="sur-amount-${o.id}" placeholder="Сумма, ₽" style="width:120px;">
+        <input type="text" id="sur-reason-${o.id}" placeholder="Причина доплаты" style="flex:1;min-width:160px;">
+        <button type="button" class="btn-sm primary" id="sur-add-${o.id}">Выставить доплату</button>
+      </div>
+      <p style="margin:4px 0 0;font-size:12px;color:var(--gray-500);">Заказчик получит уведомление и кнопку оплаты в заказе. Выплата мастеру — 70% от общей суммы вместе с доплатой.</p>` : ''}
+      <div style="margin-top:8px;"><button type="button" class="btn-sm ghost" id="pay-log-btn-${o.id}">История платежей</button></div>
+      <div id="pay-log-${o.id}" style="margin-top:6px;font-size:13px;"></div>
+    </div>`;
+}
+function wireOrderExtras(o) {
+  const $ = (id) => document.getElementById(id);
+  const reload = () => loadData({ keepOpen: true });
+  const addBtn = $(`sur-add-${o.id}`);
+  if (addBtn) addBtn.addEventListener('click', async () => {
+    const amount = Number($(`sur-amount-${o.id}`).value);
+    const reason = $(`sur-reason-${o.id}`).value.trim();
+    if (!Number.isFinite(amount) || amount <= 0) return alert('Укажите сумму доплаты');
+    if (!reason) return alert('Укажите причину доплаты — её увидит заказчик');
+    if (!confirm(`Выставить доплату ${amount} ₽ по этому заказу?\nПричина: ${reason}`)) return;
+    addBtn.disabled = true;
+    try { await callAdminSurcharge('create', { orderId: o.id, amount, reason }); await reload(); }
+    catch (e) { alert('Не удалось: ' + e.message); addBtn.disabled = false; }
+  });
+  ((o.payment && o.payment.surcharges) || []).forEach((x) => {
+    const b = $(`sur-cancel-${o.id}-${x.id}`);
+    if (b) b.addEventListener('click', async () => {
+      if (!confirm('Отозвать неоплаченную доплату?')) return;
+      try { await callAdminSurcharge('cancel', { orderId: o.id, surchargeId: x.id }); await reload(); }
+      catch (e) { alert('Не удалось: ' + e.message); }
+    });
+  });
+  const logBtn = $(`pay-log-btn-${o.id}`);
+  if (logBtn) logBtn.addEventListener('click', async () => {
+    const box = $(`pay-log-${o.id}`);
+    box.textContent = 'Загружаю…';
+    try {
+      const d = await callAdminSurcharge('list', { orderId: o.id });
+      box.innerHTML = (d.log || []).length
+        ? d.log.map((r) => `<div style="border-bottom:1px solid var(--gray-100,#eee);padding:3px 0;">${escapeHtml(fmtDate(r.at))} — <b>${escapeHtml(r.event)}</b>${r.amount != null ? ` · ${r.amount} ₽` : ''}${r.old_status || r.new_status ? ` · ${escapeHtml(r.old_status || '—')} → ${escapeHtml(r.new_status || '—')}` : ''}${r.details && r.details.reason ? ` · ${escapeHtml(r.details.reason)}` : ''}</div>`).join('')
+        : 'Записей пока нет';
+    } catch (e) { box.textContent = 'Не удалось загрузить: ' + e.message; }
+  });
+  const toSearch = $(`wd-search-${o.id}`);
+  if (toSearch) toSearch.addEventListener('click', async () => {
+    if (!confirm('Вернуть заказ в поиск? Мастер, отказавшийся от него, заказ больше не увидит.')) return;
+    toSearch.disabled = true;
+    try {
+      const tl = [...(o.timeline || []), { status: 'searching', at: new Date().toISOString(), by: 'admin' }];
+      await updateRow('orders', o.id, { status: 'searching', assigned_worker_id: null, timeline: tl });
+      try { await insertRow('notifications', { recipient_user_id: o.customerId, recipient_role: 'customer', order_id: o.id, text: 'Мы продолжаем искать мастера для вашего заказа.' }); } catch (e) { /* best-effort */ }
+      await reload();
+    } catch (e) { alert('Не удалось: ' + e.message); toSearch.disabled = false; }
+  });
+  const toCancel = $(`wd-cancel-${o.id}`);
+  if (toCancel) toCancel.addEventListener('click', async () => {
+    if (!confirm('Отменить заказ? Если он оплачен, появится пометка «нужен возврат».')) return;
+    toCancel.disabled = true;
+    try {
+      const paid = Boolean(o.payment && o.payment.status === 'prepayment_paid') && !(o.refunds || []).length;
+      const tl = [...(o.timeline || []), { status: 'cancelled', at: new Date().toISOString(), by: 'admin', refundNeeded: paid, reason: 'Отмена администратором после разбирательства' }];
+      await updateRow('orders', o.id, { status: 'cancelled', timeline: tl });
+      try { await insertRow('notifications', { recipient_user_id: o.customerId, recipient_role: 'customer', order_id: o.id, text: paid ? 'Заказ отменён администратором. Оплата будет возвращена вам.' : 'Заказ отменён администратором.' }); } catch (e) { /* best-effort */ }
+      await reload();
+    } catch (e) { alert('Не удалось: ' + e.message); toCancel.disabled = false; }
+  });
+}
+/** Показатели мастера по отказам/жалобам: считаются по заказам, загруженным в админку. */
+function masterFlagStats(userId) {
+  let declines = 0, declinesStarted = 0, cash = 0, custCancels = 0;
+  allOrders.forEach((o) => {
+    (o.timeline || []).forEach((t) => {
+      if (t.declined && t.workerId === userId) { declines++; if (t.started) declinesStarted++; }
+      (t.cashReports || []).forEach((c) => { if ((c.workerId || o.assignedWorkerId) === userId) cash++; });
+    });
+    if (o.status === 'cancelled' && o.assignedWorkerId === userId) {
+      const last = [...(o.timeline || [])].reverse().find((x) => x.status === 'cancelled');
+      if (last && last.by === 'customer') custCancels++;
+    }
+  });
+  return { declines, declinesStarted, cash, custCancels };
+}
+function masterFlagsPillsHtml(u) {
+  if (!u.availableAsWorker) return '';
+  const f = masterFlagStats(u.id);
+  const alarm = f.cash > 0 || f.declines + f.custCancels >= 3;
+  if (!f.declines && !f.cash && !f.custCancels) return '';
+  return `<span class="pill ${alarm ? 'warn' : 'muted'}" title="Отказы мастера / отмены заказчиками после назначения / жалобы на наличные">${alarm ? '🚨 ' : ''}отказов: ${f.declines}${f.declinesStarted ? ` (после начала: ${f.declinesStarted})` : ''} · отмен заказчиками: ${f.custCancels} · жалоб на наличные: ${f.cash}</span>`;
+}
+
 function masterCardHtml(u) {
   const open = openMasterId === u.id;
   const chatCount = u.telegramId ? messagesForTelegramId(u.telegramId).length : 0;
@@ -4251,6 +4401,7 @@ function masterCardHtml(u) {
             ${statusBadge('location', hasLocation, hasLocation ? 'Локация указана' : 'Локации нет')}
             ${chatCount ? `<span class="pill chat-count${unreadCount ? ' unread' : ''}" title="${unreadCount ? 'Есть непрочитанные сообщения' : 'Переписка в Telegram'}">💬 ${chatCount}${unreadCount ? ` · новых ${unreadCount}` : ''}</span>` : ''}
             ${statusPills}
+            ${masterFlagsPillsHtml(u)}
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
