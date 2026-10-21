@@ -10964,7 +10964,7 @@ function renderOrderDetail() {
     } else if (order.status === 'completed') {
       actions = `
         <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение <span data-deadline="${autoConfirmDeadlineMs(order)}" data-prefix="(" data-suffix=")"></span></button>
-        <p class="order-meta" style="margin:6px 0;">Если вы не подтвердите, заказ закроется автоматически — осталось <b data-deadline="${autoConfirmDeadlineMs(order)}"></b>. Отзыв можно оставить и после.</p>
+        <p class="order-meta" style="margin:6px 0;">Если не подтвердить — закроется автоматически. Отзыв можно оставить позже.</p>
       `;
     } else if (order.status === 'confirmed' || order.status === 'rated' || isCancelledOnSite(order)) {
       if ((order.timeline || []).some((t) => t.status === 'confirmed' && t.auto)) actions += `<p class="order-meta" style="margin:0 0 8px;">Заказ закрыт автоматически — оценить мастера можно в любое время.</p>`;
