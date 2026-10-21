@@ -2724,6 +2724,7 @@ const TEMPLATES = {
   order_cancelled_admin: (ctx) => `Заказчик отменил ${ctx && ctx.refundNeeded ? 'ОПЛАЧЕННЫЙ ' : ''}заказ «${(ctx && ctx.orderTitle) || (ctx && ctx.orderId) || ''}»${ctx && ctx.onSite ? ' ПОСЛЕ ПРИБЫТИЯ МАСТЕРА (возможно удержание стоимости выезда)' : ''}.${ctx && ctx.refundNeeded ? ' Нужен возврат средств.' : ''}`,
   order_cancel_reason_admin: (ctx) => `Причина отмены заказа «${(ctx && ctx.orderTitle) || ''}»: ${(ctx && ctx.reason) || '—'}.`,
   cash_report_admin: (ctx) => `⚠️ ЖАЛОБА: ${ctx && ctx.kind === 'cancel_cash' ? 'мастер предложил отменить заказ и расплатиться наличными' : 'мастер просит доплату наличными'}. Заказ №${(ctx && ctx.orderNumber) || ''}. Подробности — в админке.`,
+  feedback_admin: (ctx) => `💬 Обращение по заказу №${(ctx && ctx.orderNumber) || ''} от ${ctx && ctx.by === 'worker' ? 'мастера' : 'заказчика'}. Подробности — в админке.`,
   order_resumed_admin: (ctx) => `Заказчик возобновил заказ «${(ctx && ctx.orderTitle) || ''}» — снова ищем мастера.`,
   worker_declined_customer: (ctx) => ctx && ctx.started
     ? `По заказу №${(ctx && ctx.orderNumber) || ''} возникли вопросы. Администратор разбирается и свяжется с вами.`
@@ -4912,6 +4913,7 @@ const state = {
   cancelFlow: null,
   declineFlow: null,
   cashFlow: null,
+  feedbackFlow: null,
   // Полноэкранный «сторис»-просмотрщик (null — закрыт) — см.
   // renderStoriesOverlay/MASTER_INFO_SLIDES, добавлено 04.10.2026 по
   // просьбе Sg: инструкция «Как стать мастером» — набор слайдов (сейчас
@@ -7093,7 +7095,7 @@ function renderOrderPhotoForm(order, kind) {
   // Новые фото пишем в order.beforePhotos (с отметкой stage), старые
   // before/after остаются и показываются в той же ленте по времени.
   const all = []
-    .concat((order.beforePhotos || []).filter((a) => !String(a.stage || '').startsWith('review_')).map((a) => ({ a, legacy: 'До начала' })))
+    .concat((order.beforePhotos || []).filter((a) => !/^(review|problem)_/.test(String(a.stage || ''))).map((a) => ({ a, legacy: 'До начала' })))
     .concat((order.afterPhotos || []).map((a) => ({ a, legacy: 'После работы' })));
   const stageLabel = { assigned: 'Заказ принят', en_route: 'В пути', in_progress: 'В работе' };
   all.sort((x, y) => (x.a.uploadedAt || 0) - (y.a.uploadedAt || 0));
@@ -7742,34 +7744,73 @@ async function confirmPartPurchasedWithQuestion(orderId) {
 
 const PROBLEM_RESOLVED_TEXT = 'Проблема решена.';
 function warningHtml(w, orderId) {
-  if (w === PROBLEM_RESOLVED_TEXT) return `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;"><span>✓ Проблема решена</span><button type="button" data-action="dismiss-warning" data-value="${orderId}" aria-label="Убрать" style="border:none;background:none;font-size:20px;line-height:1;color:inherit;cursor:pointer;padding:0 4px;">×</button></div>`;
+  if (w === PROBLEM_RESOLVED_TEXT) return `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;"><span>✓ Проблема решена</span><button type="button" data-action="dismiss-warning" data-value="${orderId}" aria-label="Убрать" style="border:none;background:none;font-size:20px;line-height:1.1;color:inherit;cursor:pointer;padding:0 4px;">×</button></div>`;
   return `<div class="order-warning">${escapeHtml(w)}</div>`;
 }
 
-function reportIssue(orderId) {
+// ===== Обратная связь по заказу (кнопка «Сообщить о проблеме») =====
+// Заказчик и мастер пишут админу комментарий (+фото до 5); статус заказа не
+// меняется. Обращения лежат в timeline (поле feedback у последней записи),
+// фото — в beforePhotos со stage problem_customer / problem_worker.
+let feedbackText = '';
+function feedbackPhotos(order, role) {
+  return (order.beforePhotos || []).filter((a) => a.stage === `problem_${role}`);
+}
+function orderFeedbacks(order) {
+  const r = [];
+  (order.timeline || []).forEach((t, ti) => (t.feedback || []).forEach((f, fi) => r.push({ f, ti, fi })));
+  return r;
+}
+function myFeedbackRole(order) {
+  return order.customerId === state.currentUserId ? 'customer' : 'worker';
+}
+function feedbackFormPhotosHtml(order, role) {
+  const list = feedbackPhotos(order, role);
+  const thumbs = list.map((a) => `<img src="${escapeHtml(a.url)}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100);" />`).join('');
+  return `<div style="margin:8px 0;">
+    <div id="problem-photos-${role}-${order.id}" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">${thumbs}</div>
+    <label class="secondary-button" style="display:block;text-align:center;cursor:pointer;box-sizing:border-box;">📷 Добавить фото (до ${MAX_ORDER_PHOTOS})${list.length ? ` · добавлено ${list.length}` : ''}
+      <input id="problem-photos-${role}-file-${order.id}" type="file" accept="image/*" multiple style="display:none" /></label></div>`;
+}
+function renderFeedbackOverlay() {
+  const f = state.feedbackFlow;
+  const order = f && getOrders().find((o) => o.id === f.orderId);
+  if (!f || !order) return '';
+  const role = myFeedbackRole(order);
+  return `
+    <div class="onboarding-overlay" data-action="feedback-close">
+      <div class="onboarding-card" onclick="event.stopPropagation()">
+        <div class="onboarding-body" style="padding-top: 28px;max-height:85vh;overflow:auto;">
+          <h2>Обратная связь</h2>
+          <p>Опишите проблему или вопрос по заказу — сообщение увидит только администратор. Статус заказа не изменится.</p>
+          <textarea id="feedback-text" rows="4" maxlength="2000" placeholder="Что случилось?" style="width:100%;box-sizing:border-box;border:1px solid var(--gray-200);border-radius:12px;padding:12px;font:inherit;font-size:16px;">${escapeHtml(feedbackText)}</textarea>
+          ${feedbackFormPhotosHtml(order, role)}
+          <button type="button" class="onboarding-cta" data-action="feedback-send">Отправить</button>
+          <button type="button" class="secondary-button" data-action="feedback-close" style="margin-top:8px;box-sizing:border-box;">Закрыть</button>
+        </div>
+      </div>
+    </div>`;
+}
+function sendFeedback(orderId, text) {
   let order = getOrders().find((o) => o.id === orderId);
-  // «Сообщить о проблеме» доступна и мастеру (assigned/en_route/in_progress),
-  // и заказчику (completed, см. orderActionsHtml) — статус ДО перехода
-  // однозначно говорит, кто из них нажал: 'completed' бывает только когда
-  // заказчик не подтвердил выполнение, остальные — когда заказ ещё у
-  // мастера. Берём это ДО transition(), пока order.status ещё старый.
-  const reporterLabel = order.status === 'completed' ? 'заказчик' : 'мастер';
-  order = transition(order, 'issue_reported');
-  order.warnings = [...order.warnings.filter((w) => w !== PROBLEM_RESOLVED_TEXT), 'Зарегистрирована проблема, ожидает разбора.'];
+  const clean = String(text || '').trim().slice(0, 2000);
+  if (!order || !clean) return false;
+  const role = myFeedbackRole(order);
+  const tl = [...(order.timeline || [])];
+  const last = tl.length - 1;
+  tl[last] = { ...tl[last], feedback: [...(tl[last].feedback || []), { id: String(Date.now()), by: role, userId: state.currentUserId, at: new Date().toISOString(), text: clean }] };
+  order = { ...order, timeline: tl };
   saveOrder(order);
-  pushNotification(createNotification(order.customerId, 'customer', order.id, 'issue_reported'));
-  // ДОБАВЛЕНО 10.10.2026 (просьба Sg) — см. ADMIN_USER_ID/TEMPLATES.issue_reported_admin
-  // выше: раньше о проблеме узнавал только заказчик, админ — только если
-  // сам заглядывал в панель.
-  pushNotification(
-    createNotification(ADMIN_USER_ID, 'moderator', order.id, 'issue_reported_admin', {
-      orderId: order.id,
-      orderTitle: order.title,
-      reporterLabel,
-    })
-  );
-  showToast('Проблема зарегистрирована');
-  render();
+  pushNotification(createNotification(ADMIN_USER_ID, 'moderator', order.id, 'feedback_admin', { orderId: order.id, orderNumber: order.orderNumber, by: role }));
+  return true;
+}
+/** Мои обращения по заказу — видны только мне (и админу). */
+function myFeedbackBlockHtml(order) {
+  const mine = orderFeedbacks(order).filter(({ f }) => f.userId === state.currentUserId && !f.dismissed);
+  if (!mine.length) return '';
+  return mine.map(({ f }) => f.resolvedAt
+    ? `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;"><span>✓ Ваше обращение решено</span><button type="button" data-action="dismiss-feedback" data-value="${order.id}:${f.id}" aria-label="Убрать" style="border:none;background:none;font-size:20px;line-height:1.1;color:inherit;cursor:pointer;padding:0 4px;">×</button></div>`
+    : `<div class="order-warning">Ваше обращение отправлено, администратор разбирается.</div>`).join('');
 }
 
 // ---------------------------------------------------------------------
@@ -10829,7 +10870,7 @@ function renderOrderDetail() {
       `;
     }
     if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += renderOrderPhotoForm(order, 'before');
-    if (['assigned', 'en_route', 'in_progress'].includes(order.status)) actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
+    actions += `<button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>`;
     if (WORKER_DECLINABLE_STATUSES.includes(order.status)) actions += `<button class="secondary-button" data-action="decline-order-ask" data-value="${order.id}" style="color:#b42318;box-sizing:border-box;">Отказаться от заказа</button>`;
     if (isWorkerDeclinedStarted(order)) actions += `<div class="order-warning">Вы отказались от заказа после начала работы. Администратор проверит обстоятельства и сообщит решение. Оставьте, пожалуйста, оценку заказчику и комментарий с фото ниже.</div>`;
     // Оценка заказчика мастером доступна с момента, когда работа отмечена
@@ -10909,7 +10950,6 @@ function renderOrderDetail() {
     } else if (order.status === 'completed') {
       actions = `
         <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение</button>
-        <button class="secondary-button" data-action="report-issue" data-value="${order.id}">Сообщить о проблеме</button>
       `;
     } else if (order.status === 'confirmed' || order.status === 'rated' || isCancelledOnSite(order)) {
       // ИЗМЕНЕНО 10.10.2026 (просьба Sg: «разделим оценку мастера и оценку
@@ -11156,6 +11196,8 @@ function renderOrderDetail() {
         }
         ${surchargeBlockHtml(order, isCustomer)}
         ${isCustomer ? cashWarningHtml(order) : ''}
+        ${(isCustomer || isAssignedWorker) ? myFeedbackBlockHtml(order) : ''}
+        ${isCustomer && !['draft', 'collecting_details'].includes(order.status) ? `<button class="secondary-button" data-action="report-issue" data-value="${order.id}" style="box-sizing:border-box;margin:6px 0;">Сообщить о проблеме</button>` : ''}
         <div style="margin-top:12px;">${actions}</div>
       </div>
       ${
@@ -11490,6 +11532,7 @@ document.addEventListener('input', (e) => {
   if (id && id.startsWith('rating-comment-')) { ratingCommentDrafts[id] = e.target.value; }
   else if (id === 'cancel-reason') { cancelReasonText = e.target.value; }
   else if (id === 'decline-comment') { declineCommentText = e.target.value; }
+  else if (id === 'feedback-text') { feedbackText = e.target.value; }
   else if (id === 'mw-first') { masterWizardFirstName = e.target.value; masterWizardNameTouched = true; }
   else if (id === 'mw-last') { masterWizardLastName = e.target.value; masterWizardNameTouched = true; }
 });
@@ -12250,7 +12293,7 @@ function render() {
         <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -12282,7 +12325,7 @@ function render() {
     ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -13670,6 +13713,24 @@ function wireEvents() {
         });
       });
 
+      // Фото к обращению (форма «Сообщить о проблеме») — сохраняем сразу по выбору файла.
+      ['customer', 'worker'].forEach((role) => {
+        const pFile = document.getElementById(`problem-photos-${role}-file-${openOrder.id}`);
+        const pBox = document.getElementById(`problem-photos-${role}-${openOrder.id}`);
+        if (!pFile || !pBox) return;
+        pFile.addEventListener('change', () => {
+          const files = Array.from(pFile.files);
+          const stage = `problem_${role}`;
+          const holder = { value: (openOrder.beforePhotos || []).filter((a) => a.stage === stage) };
+          handleFileSelection(files, holder, pBox, () => {
+            const others = (openOrder.beforePhotos || []).filter((a) => a.stage !== stage);
+            openOrder.beforePhotos = others.concat(holder.value);
+            saveOrder(openOrder);
+            render();
+          }, { orderNumber: openOrder.orderNumber, prefix: 'P', max: MAX_ORDER_PHOTOS, stage });
+        });
+      });
+
       // Фото к отзыву (заказчик и мастер, до 5 штук у каждого) — сохраняем сразу по выбору файла.
       ['customer', 'worker'].forEach((role) => {
         const rFile = document.getElementById(`review-photos-${role}-file-${openOrder.id}`);
@@ -14760,7 +14821,34 @@ async function handleAction(action, value) {
       return advanceToEnRoute(orderId, { at: input.value });
     }
     case 'report-issue':
-      return reportIssue(value);
+      state.feedbackFlow = { orderId: value };
+      feedbackText = '';
+      state.infoOverlay = 'feedback';
+      return render();
+    case 'feedback-close':
+      state.feedbackFlow = null;
+      state.infoOverlay = null;
+      return render();
+    case 'feedback-send': {
+      const f = state.feedbackFlow;
+      if (!f) return;
+      const ta = document.getElementById('feedback-text');
+      const ok = sendFeedback(f.orderId, (ta && ta.value) || feedbackText);
+      if (!ok) { showToast('Напишите, что случилось'); return; }
+      state.feedbackFlow = null;
+      state.infoOverlay = null;
+      showToast('Сообщение отправлено администратору');
+      return render();
+    }
+    case 'dismiss-feedback': {
+      const [oid, fid] = value.split(':');
+      const o = getOrders().find((x) => x.id === oid);
+      if (o) {
+        const tl = (o.timeline || []).map((t) => (t.feedback ? { ...t, feedback: t.feedback.map((f) => (f.id === fid ? { ...f, dismissed: true } : f)) } : t));
+        saveOrder({ ...o, timeline: tl });
+      }
+      return render();
+    }
     case 'confirm-completion':
       return confirmCompletion(value);
     case 'edit-device-model':

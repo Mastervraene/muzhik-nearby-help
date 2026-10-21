@@ -1053,6 +1053,47 @@ STATUS_COLORS.part_purchase_requested = { bg: '#ede9fe', fg: '#5b21b6', dot: '#8
 function statusColor(status) {
   return STATUS_COLORS[status] || { bg: 'var(--gray-100)', fg: 'var(--gray-600)', dot: 'var(--gray-400)' };
 }
+// ===== Обратная связь по заказу (кнопка «Сообщить о проблеме» на сайте) =====
+function orderFeedbacks(o) {
+  const r = [];
+  (o.timeline || []).forEach((t) => (t.feedback || []).forEach((f) => r.push(f)));
+  return r;
+}
+function hasPendingFeedback(o) {
+  return orderFeedbacks(o).some((f) => !f.resolvedAt);
+}
+function feedbackPhotosList(o, role) {
+  return (o.beforePhotos || []).filter((a) => a.stage === `problem_${role}`);
+}
+/** Плашка в свёрнутой карточке заказа. */
+function feedbackBannerHtml(o) {
+  const pend = orderFeedbacks(o).filter((f) => !f.resolvedAt);
+  if (!pend.length) return '';
+  return `<div class="card-clarification-block" style="background:#fde8e8;">💬 Обращение${pend.length > 1 ? ` (${pend.length})` : ''} от ${pend.map((f) => (f.by === 'worker' ? 'мастера' : 'заказчика')).filter((v, i, a) => a.indexOf(v) === i).join(' и ')}: ${escapeHtml(pend[pend.length - 1].text)}</div>`;
+}
+/** Подробный блок в раскрытой карточке: все обращения и фото. */
+function feedbackDetailsHtml(o) {
+  const all = orderFeedbacks(o);
+  if (!all.length) return '';
+  const photos = ['customer', 'worker'].map((role) => {
+    const list = feedbackPhotosList(o, role);
+    if (!list.length) return '';
+    return `<div style="margin:4px 0;"><span style="font-size:12px;color:var(--gray-500,#888);">Фото ${role === 'worker' ? 'мастера' : 'заказчика'} (${list.length})</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;">${list.map((p, idx) => `<img src="${escapeHtml(p.url)}" alt="" class="order-photo-thumb-feedback" data-order-id="${o.id}" data-fb-role="${role}" data-photo-index="${idx}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-100,#eee);cursor:pointer;" loading="lazy" onerror="onArchivedPhotoError(this)" />`).join('')}</div></div>`;
+  }).join('');
+  return `<div class="field-sm"><label>Обращения по заказу (${all.length})</label>
+    ${all.map((f) => `<div style="margin:3px 0;font-size:13px;">${f.resolvedAt ? '✅' : '💬'} <b>${f.by === 'worker' ? 'Мастер' : 'Заказчик'}</b> · ${escapeHtml(fmtDate(f.at))}${f.resolvedAt ? ' · решено' : ''}<br>${escapeHtml(f.text)}</div>`).join('')}
+    ${photos}</div>`;
+}
+function wireFeedbackPhotos(o) {
+  ['customer', 'worker'].forEach((role) => {
+    const list = feedbackPhotosList(o, role);
+    if (!list.length) return;
+    document.querySelectorAll(`.order-photo-thumb-feedback[data-order-id="${o.id}"][data-fb-role="${role}"]`).forEach((el) => {
+      el.addEventListener('click', () => openLightbox(list, Number(el.getAttribute('data-photo-index') || 0)));
+    });
+  });
+}
+
 /** Отмена заказчиком: пометка «нужен возврат» (пока возврат не записан) и причина отмены. */
 function cancelInfoHtml(o) {
   if (o.status !== 'cancelled') return '';
@@ -3008,9 +3049,11 @@ async function resolveIssue(o) {
     btn.textContent = 'Сохраняю…';
   }
   try {
-    const timeline = statusChange ? [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }] : (o.timeline || []);
+    const nowIso = new Date().toISOString();
+    const baseTl = (o.timeline || []).map((t) => (t.feedback ? { ...t, feedback: t.feedback.map((f) => (f.resolvedAt ? f : { ...f, resolvedAt: nowIso })) } : t));
+    const timeline = statusChange ? [...baseTl, { status: newStatus, at: nowIso }] : baseTl;
     const warnings = [...(o.warnings || []).filter((w) => w !== 'Зарегистрирована проблема, ожидает разбора.' && w !== 'Проблема решена.'), 'Проблема решена.'];
-    await updateRow('orders', o.id, statusChange ? { status: newStatus, timeline, warnings } : { warnings });
+    await updateRow('orders', o.id, statusChange ? { status: newStatus, timeline, warnings } : { timeline, warnings });
     if (statusChange) await notifyManualStatusChange(o, newStatus);
     await loadData({ keepOpen: true });
   } catch (err) {
@@ -3018,7 +3061,7 @@ async function resolveIssue(o) {
     const freshBtn = document.getElementById(`resolve-issue-order-${o.id}`);
     if (freshBtn) {
       freshBtn.disabled = false;
-      freshBtn.textContent = '✅ Проблема решена';
+      freshBtn.textContent = '✅ Решено';
     }
   }
 }
@@ -3164,6 +3207,7 @@ function orderCardHtml(o) {
           ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
           ${cancelInfoHtml(o)}
           ${declineInfoHtml(o)}
+          ${feedbackBannerHtml(o)}
           <div class="card-meta">
             ${statusPillHtml(o.status)}
             <span>${fmtDate(orderLastActivityAt(o))}</span>
@@ -3213,9 +3257,9 @@ function orderCardHtml(o) {
         // и TEMPLATES.issue_reported_admin) — одна кнопка вместо похода в
         // раскрытую карточку за полем «Статус» и ручного подбора, куда
         // вернуть заказ. См. resolveIssue/statusBeforeIssue ниже.
-        (o.status === 'issue_reported' || hasPendingIssueWarning(o))
+        (o.status === 'issue_reported' || hasPendingIssueWarning(o) || hasPendingFeedback(o))
           ? `<div class="card-moderation-bar">
-               <button type="button" class="btn-sm primary" id="resolve-issue-order-${o.id}">✅ Проблема решена</button>
+               <button type="button" class="btn-sm primary" id="resolve-issue-order-${o.id}">✅ Решено</button>
              </div>`
           : ''
       }
@@ -3300,7 +3344,7 @@ function orderQualityPhotosHtml(o, kind, label) {
 /** Единая лента фото мастера по ходу работы (до+после, по времени). */
 function workPhotosList(o) {
   return []
-    .concat((o.beforePhotos || []).filter((a) => !String(a.stage || '').startsWith('review_')).map((a) => Object.assign({}, a, { _legacy: 'До начала' })))
+    .concat((o.beforePhotos || []).filter((a) => !/^(review|problem)_/.test(String(a.stage || ''))).map((a) => Object.assign({}, a, { _legacy: 'До начала' })))
     .concat((o.afterPhotos || []).map((a) => Object.assign({}, a, { _legacy: 'После работы' })))
     .sort((x, y) => (x.uploadedAt || 0) - (y.uploadedAt || 0));
 }
@@ -3754,6 +3798,7 @@ function orderFormHtml(o) {
             .join('')}</div>`
         : ''}
       ${orderWorkPhotosHtml(o)}
+      ${feedbackDetailsHtml(o)}
       ${orderReviewPhotosHtml(o)}
       ${orderReviewsHtml(o)}
       ${adminNoteHtml('order', o.id)}
@@ -3774,6 +3819,7 @@ function autosizeAdminTextarea(textarea) {
 
 function wireOrderForm(o) {
   wireOrderExtras(o);
+  wireFeedbackPhotos(o);
   const statusSelectEl = document.getElementById(`f-status-${o.id}`);
   statusSelectEl.addEventListener('change', () => {
     statusSelectEl.style.borderLeft = `4px solid ${statusColor(statusSelectEl.value).dot}`;
