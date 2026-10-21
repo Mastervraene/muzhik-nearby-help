@@ -7899,6 +7899,21 @@ function submitCustomerDiagnosisNote(orderId) {
   render();
 }
 
+const AUTO_CONFIRM_MINUTES = 60;
+/** Когда заказ закроется автоматически: через 60 минут после отметки «Выполнено» (само закрытие делает сервер — cron auto_confirm_completed_orders). */
+function autoConfirmDeadlineMs(order) {
+  const done = [...(order.timeline || [])].reverse().find((t) => t.status === 'completed');
+  return (done ? new Date(done.at).getTime() : Date.now()) + AUTO_CONFIRM_MINUTES * 60 * 1000;
+}
+setInterval(() => {
+  document.querySelectorAll('[data-deadline]').forEach((el) => {
+    const left = Math.max(0, Math.floor((Number(el.getAttribute('data-deadline')) - Date.now()) / 1000));
+    const mm = String(Math.floor(left / 60)).padStart(2, '0');
+    const ss = String(left % 60).padStart(2, '0');
+    el.textContent = left > 0 ? `${el.getAttribute('data-prefix') || ''}${mm}:${ss}${el.getAttribute('data-suffix') || ''}` : 'закрываем…';
+  });
+}, 1000);
+
 function confirmCompletion(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
   order = transition(order, 'confirmed');
@@ -10948,9 +10963,11 @@ function renderOrderDetail() {
       `;
     } else if (order.status === 'completed') {
       actions = `
-        <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение</button>
+        <button class="primary-button" data-action="confirm-completion" data-value="${order.id}">Подтвердить выполнение <span data-deadline="${autoConfirmDeadlineMs(order)}" data-prefix="(" data-suffix=")"></span></button>
+        <p class="order-meta" style="margin:6px 0;">Если вы не подтвердите, заказ закроется автоматически — осталось <b data-deadline="${autoConfirmDeadlineMs(order)}"></b>. Отзыв можно оставить и после.</p>
       `;
     } else if (order.status === 'confirmed' || order.status === 'rated' || isCancelledOnSite(order)) {
+      if ((order.timeline || []).some((t) => t.status === 'confirmed' && t.auto)) actions += `<p class="order-meta" style="margin:0 0 8px;">Заказ закрыт автоматически — оценить мастера можно в любое время.</p>`;
       // ИЗМЕНЕНО 10.10.2026 (просьба Sg: «разделим оценку мастера и оценку
       // сервиса — 2 поля») — раньше здесь была одна оценка (мастеру), и
       // ровно она же переводила заказ в статус 'rated', поэтому блок жил
