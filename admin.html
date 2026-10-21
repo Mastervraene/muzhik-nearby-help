@@ -3004,7 +3004,8 @@ async function resolveIssue(o) {
   }
   try {
     const timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
-    await updateRow('orders', o.id, { status: newStatus, timeline });
+    const warnings = [...(o.warnings || []).filter((w) => w !== 'Зарегистрирована проблема, ожидает разбора.' && w !== 'Проблема решена.'), 'Проблема решена.'];
+    await updateRow('orders', o.id, { status: newStatus, timeline, warnings });
     await notifyManualStatusChange(o, newStatus);
     await loadData({ keepOpen: true });
   } catch (err) {
@@ -3649,7 +3650,7 @@ function orderFormHtml(o) {
 
   return `
     <div class="card-body open" id="order-body-${o.id}">
-      ${o.warnings && o.warnings.length ? `<div class="warnings-list">${o.warnings.map((w) => `⚠ ${escapeHtml(w)}`).join('<br/>')}</div>` : ''}
+      ${o.warnings && o.warnings.length ? `<div class="warnings-list">${o.warnings.map((w) => w === 'Проблема решена.' ? '<span style="color:#2e7d32;font-weight:600;">✓ Проблема решена</span>' : `⚠ ${escapeHtml(w)}`).join('<br/>')}</div>` : ''}
       <div class="field-sm">
         <label>Описание</label>
         <textarea id="f-desc-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;">${escapeHtml(o.description || o.title || '')}</textarea>

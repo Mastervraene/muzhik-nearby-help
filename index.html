@@ -7740,6 +7740,12 @@ async function confirmPartPurchasedWithQuestion(orderId) {
   render();
 }
 
+const PROBLEM_RESOLVED_TEXT = 'Проблема решена.';
+function warningHtml(w) {
+  if (w === PROBLEM_RESOLVED_TEXT) return `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;">✓ Проблема решена</div>`;
+  return `<div class="order-warning">${escapeHtml(w)}</div>`;
+}
+
 function reportIssue(orderId) {
   let order = getOrders().find((o) => o.id === orderId);
   // «Сообщить о проблеме» доступна и мастеру (assigned/en_route/in_progress),
@@ -7749,7 +7755,7 @@ function reportIssue(orderId) {
   // мастера. Берём это ДО transition(), пока order.status ещё старый.
   const reporterLabel = order.status === 'completed' ? 'заказчик' : 'мастер';
   order = transition(order, 'issue_reported');
-  order.warnings = [...order.warnings, 'Зарегистрирована проблема, ожидает разбора.'];
+  order.warnings = [...order.warnings.filter((w) => w !== PROBLEM_RESOLVED_TEXT), 'Зарегистрирована проблема, ожидает разбора.'];
   saveOrder(order);
   pushNotification(createNotification(order.customerId, 'customer', order.id, 'issue_reported'));
   // ДОБАВЛЕНО 10.10.2026 (просьба Sg) — см. ADMIN_USER_ID/TEMPLATES.issue_reported_admin
@@ -10180,7 +10186,7 @@ function orderCardHtml(order, { viewer }) {
         // точку на карте) показываем как обычно.
         order.warnings
           .filter((w) => !w.includes('Точная цена не найдена'))
-          .map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`)
+          .map((w) => warningHtml(w))
           .join('')
       }
       ${diagnosisLogPreviewHtml(order)}
@@ -11145,7 +11151,7 @@ function renderOrderDetail() {
           // здесь, в детальной карточке, применяем тот же фильтр.
           order.warnings
             .filter((w) => !w.includes('Точная цена не найдена'))
-            .map((w) => `<div class="order-warning">${escapeHtml(w)}</div>`)
+            .map((w) => warningHtml(w))
             .join('')
         }
         ${surchargeBlockHtml(order, isCustomer)}
