@@ -2995,18 +2995,23 @@ function statusBeforeIssue(o) {
  * notifyManualStatusChange выше (просьба Sg 09.10.2026 — у ручных смен
  * статуса должны уходить все уведомления, и на сайт, и в Telegram).
  */
+function hasPendingIssueWarning(o) {
+  return (o.warnings || []).includes('Зарегистрирована проблема, ожидает разбора.');
+}
+
 async function resolveIssue(o) {
-  const newStatus = statusBeforeIssue(o);
+  const statusChange = o.status === 'issue_reported';
+  const newStatus = statusChange ? statusBeforeIssue(o) : o.status;
   const btn = document.getElementById(`resolve-issue-order-${o.id}`);
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Сохраняю…';
   }
   try {
-    const timeline = [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }];
+    const timeline = statusChange ? [...(o.timeline || []), { status: newStatus, at: new Date().toISOString() }] : (o.timeline || []);
     const warnings = [...(o.warnings || []).filter((w) => w !== 'Зарегистрирована проблема, ожидает разбора.' && w !== 'Проблема решена.'), 'Проблема решена.'];
-    await updateRow('orders', o.id, { status: newStatus, timeline, warnings });
-    await notifyManualStatusChange(o, newStatus);
+    await updateRow('orders', o.id, statusChange ? { status: newStatus, timeline, warnings } : { warnings });
+    if (statusChange) await notifyManualStatusChange(o, newStatus);
     await loadData({ keepOpen: true });
   } catch (err) {
     alert('Не удалось снять проблему: ' + err.message);
@@ -3208,7 +3213,7 @@ function orderCardHtml(o) {
         // и TEMPLATES.issue_reported_admin) — одна кнопка вместо похода в
         // раскрытую карточку за полем «Статус» и ручного подбора, куда
         // вернуть заказ. См. resolveIssue/statusBeforeIssue ниже.
-        o.status === 'issue_reported'
+        (o.status === 'issue_reported' || hasPendingIssueWarning(o))
           ? `<div class="card-moderation-bar">
                <button type="button" class="btn-sm primary" id="resolve-issue-order-${o.id}">✅ Проблема решена</button>
              </div>`

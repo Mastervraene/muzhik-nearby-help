@@ -7741,8 +7741,8 @@ async function confirmPartPurchasedWithQuestion(orderId) {
 }
 
 const PROBLEM_RESOLVED_TEXT = 'Проблема решена.';
-function warningHtml(w) {
-  if (w === PROBLEM_RESOLVED_TEXT) return `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;">✓ Проблема решена</div>`;
+function warningHtml(w, orderId) {
+  if (w === PROBLEM_RESOLVED_TEXT) return `<div class="order-warning" style="background:#e8f5e9;border-left-color:#2e7d32;color:#2e7d32;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px;"><span>✓ Проблема решена</span><button type="button" data-action="dismiss-warning" data-value="${orderId}" aria-label="Убрать" style="border:none;background:none;font-size:20px;line-height:1;color:inherit;cursor:pointer;padding:0 4px;">×</button></div>`;
   return `<div class="order-warning">${escapeHtml(w)}</div>`;
 }
 
@@ -10186,7 +10186,7 @@ function orderCardHtml(order, { viewer }) {
         // точку на карте) показываем как обычно.
         order.warnings
           .filter((w) => !w.includes('Точная цена не найдена'))
-          .map((w) => warningHtml(w))
+          .map((w) => warningHtml(w, order.id))
           .join('')
       }
       ${diagnosisLogPreviewHtml(order)}
@@ -11151,7 +11151,7 @@ function renderOrderDetail() {
           // здесь, в детальной карточке, применяем тот же фильтр.
           order.warnings
             .filter((w) => !w.includes('Точная цена не найдена'))
-            .map((w) => warningHtml(w))
+            .map((w) => warningHtml(w, order.id))
             .join('')
         }
         ${surchargeBlockHtml(order, isCustomer)}
@@ -14900,6 +14900,11 @@ async function handleAction(action, value) {
       return render();
     case 'resume-order':
       return resumeOrder(value);
+    case 'dismiss-warning': {
+      const o = getOrders().find((x) => x.id === value);
+      if (o) saveOrder({ ...o, warnings: (o.warnings || []).filter((w) => w !== PROBLEM_RESOLVED_TEXT) });
+      return render();
+    }
     case 'decline-order-ask':
       state.declineFlow = { orderId: value };
       declineReasonSel = '';
