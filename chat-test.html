@@ -396,6 +396,29 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     if (d && d.ok) { ls(G_UID, d.userId); ls(G_TOK, d.token); return { uid: d.userId, tok: d.token, guest: true }; }
     return null;
   }
+  function fnCall(name, body) {
+    return fetch(URL_BASE + '/functions/v1/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().catch(function () { return null; }); }).catch(function () { return null; });
+  }
+  // Склейка: гостевая переписка переносится в настоящий аккаунт, пустая гостевая запись удаляется на сервере.
+  async function mergeGuest(real) {
+    var gu = ls(G_UID), gt = ls(G_TOK);
+    if (!real || real.guest || !gu || !gt || gu === real.uid) return;
+    var d = await act({ action: 'guest_merge', userId: real.uid, sessionToken: real.tok, guestId: gu, guestToken: gt });
+    if (d && d.ok) { ls(G_UID, null); ls(G_TOK, null); }
+  }
+  // Номер уже есть в базе: проверяем пароль прямо в окне и входим в существующий аккаунт.
+  async function loginExisting(phoneRaw, password) {
+    var dg = String(phoneRaw || '').replace(/\D/g, '');
+    if (dg.length === 11 && dg[0] === '8') dg = '7' + dg.slice(1);
+    if (dg.length === 10) dg = '7' + dg;
+    var u = await fnCall('resolve-user-by-phone', { phone: dg });
+    var uid = u && u.user && u.user.id;
+    if (!uid) return null;
+    var l = await fnCall('login-with-password', { phone: dg, password: password });
+    if (!l || !l.ok || !l.token) return null;
+    return { uid: uid, tok: l.token, guest: false };
+  }
   function modal(html) {
     var o = document.createElement('div'); o.className = 'mo'; o.innerHTML = '<div class="mo-card">' + html + '</div>';
     document.body.appendChild(o); return o;
@@ -415,6 +438,17 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
         if (d && d.ok) {
           ls('muzhik_session_v1', d.userId); ls('muzhik_session_token_v1', d.token); ls(G_UID, null); ls(G_TOK, null);
           o.remove(); resolve({ uid: d.userId, tok: d.token, guest: false }); return;
+        }
+        if (d && d.error === 'phone_exists') {
+          var R = await loginExisting(o.querySelector('#rg-ph').value, o.querySelector('#rg-pw').value);
+          if (R) {
+            ls('muzhik_session_v1', R.uid); ls('muzhik_session_token_v1', R.tok);
+            await mergeGuest(R);
+            o.remove(); resolve(R); return;
+          }
+          ok.disabled = false;
+          err.textContent = 'Этот номер уже зарегистрирован. Введите свой пароль от аккаунта — и мы войдём в него.';
+          return;
         }
         ok.disabled = false;
         var m = { bad_phone: 'Проверьте номер телефона', password_too_short: 'Пароль слишком короткий', phone_exists: 'Этот номер уже зарегистрирован — войдите на мастерврайоне.рф и вернитесь сюда', unauthorized: 'Сессия устарела, обновите страницу' };
@@ -761,6 +795,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   ta.addEventListener('input', function () { grow(); grade(); });
   ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
   restore(); grade(); setInterval(pollAdmin, 15000);
+  (function () { var rs = getSess(); if (rs && !rs.guest) mergeGuest(rs); })();
 })();
 </script>
 </body>
