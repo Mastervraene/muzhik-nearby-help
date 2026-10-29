@@ -587,9 +587,15 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     return { unpaid: 'draft_saved', paid: 'paid', part_wait: 'paid_part', part_ready: 'part_ready' }[order.stage] || '';
   }
   async function handleOrderDraft(d) {
-    if (!order || order.timeSaved || !d || !d.time) return;
-    if (order.stage !== 'paid' && order.stage !== 'part_ready') return;
+    if (!order || !d) return;
     var S = getSess(); if (!S) return;
+    // Имя может прийти отдельным, более поздним ответом, чем время — сохраняем его независимо от времени.
+    if (d.name && !order.nameSaved && ['paid', 'part_wait', 'part_ready', 'done'].indexOf(order.stage) !== -1) {
+      var rn = await act({ action: 'order_time', userId: S.uid, sessionToken: S.tok, orderId: order.id, name: d.name });
+      if (rn && rn.ok) { order.nameSaved = true; save(); }
+    }
+    if (order.timeSaved || !d.time) return;
+    if (order.stage !== 'paid' && order.stage !== 'part_ready') return;
     var r = await act({ action: 'order_time', userId: S.uid, sessionToken: S.tok, orderId: order.id, timeWindow: d.time, name: d.name || '', partReady: order.stage === 'part_ready' });
     if (r && r.ok) { order.timeSaved = true; order.stage = 'done'; save(); add('sys', 'Сохранено в заказе: ' + d.time + (d.name ? ' · ' + d.name : '') + '.'); }
   }
