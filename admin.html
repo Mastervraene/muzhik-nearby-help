@@ -6971,7 +6971,7 @@ function aiRowHtml(c, keepComments) {
         '<div class="ai-det">' + msgs + '<div class="ai-order">' + orderHtml + dr + '</div>' +
         '<div class="ai-btns" style="margin:8px 0"><button data-act="good" class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</button><button data-act="bad" class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</button></div>' +
         '<textarea data-key="' + aiEsc(c.key) + '" placeholder="Комментарий для правок">' + aiEsc(cm) + '</textarea>' +
-        '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <button class="btn ai-done-btn ' + (r.done ? 'on' : '') + '" data-act="done">' + (r.done ? '✔ Обработано' : 'Отметить обработанным') + '</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
+        '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
 }
 function aiRerenderRow(key) {
   const c = aiChats.find((x) => x.key === key); if (!c) return;
@@ -7010,12 +7010,9 @@ document.addEventListener('click', async (ev) => {
   } else if (act === 'good' || act === 'bad') {
     await aiSet(key, { verdict: r.verdict === act ? null : act, seen: true });
     aiRerenderRow(key);
-  } else if (act === 'done') {
-    await aiSet(key, { done: !r.done, seen: true });
-    aiRerenderRow(key);
   } else if (act === 'savecm') {
     const val = row.querySelector('textarea').value;
-    await aiSet(key, { comment: val, seen: true });
+    await aiSet(key, { comment: val, seen: true, done: val === (r.comment || '') ? !!r.done : false });
     aiRerenderRow(key);
     const nrow = document.querySelector('#ai-body .ai-row[data-key="' + key.replace(/"/g, '') + '"] .ai-saved');
     if (nrow) nrow.textContent = 'Сохранено';
@@ -7076,6 +7073,10 @@ window.goToMasterCard = function (userId) {
 // -----------------------------------------------------------------------
 function showApp() {
   startChatsPolling();
+  // Открытие админки = «действие» по уведомлениям (сайт перестаёт напоминать в Telegram)
+  const markSeen = () => { try { callAdminPricing('mark_seen').catch(() => {}); } catch (e) {} };
+  markSeen();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markSeen(); });
   setTimeout(() => { if (!payoutsLoaded && !payoutsLoading) loadPayouts(); }, 2500);
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('admin-app').style.display = 'block';

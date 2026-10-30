@@ -8,7 +8,7 @@
 // и для всех — поэтому здесь network-first с откатом в кэш только для
 // офлайна, плюс явное версионирование кэша ниже (бампать CACHE_VERSION
 // при следующей заметной правке app-шелла).
-const CACHE_VERSION = 'mnr-shell-v2';
+const CACHE_VERSION = 'mnr-shell-v3';
 
 // Только публичная часть сайта — НЕ admin.html и НЕ тяжёлые
 // изображения (og.png, coverage-map.jpg), которые не нужны для
@@ -32,8 +32,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
+    caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
@@ -80,28 +79,48 @@ self.addEventListener('fetch', (event) => {
 });
 
 // ===== Веб-пуш (18.10.2026) =====
+// Обратная связь (30.10.2026): сообщаем серверу «пуш получен» и «нажали».
+const PUSH_FN = 'https://youyvbqdxuigvjciklfk.supabase.co/functions/v1/webpush';
+const PUSH_KEY = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
+async function ackPush(nid, kind) {
+  if (nid === undefined || nid === null || nid === '') return;
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!sub) return;
+    await fetch(PUSH_FN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + PUSH_KEY, 'apikey': PUSH_KEY },
+      body: JSON.stringify({ action: 'ack', nid: nid, endpoint: sub.endpoint, kind: kind }),
+      keepalive: true,
+    });
+  } catch (e) { /* не критично */ }
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data ? event.data.text() : '' }; }
-  event.waitUntil(
+  event.waitUntil(Promise.all([
     self.registration.showNotification(data.title || 'Мужик', {
       body: data.body || '',
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      data: { url: data.url || '/' },
-    })
-  );
+      data: { url: data.url || '/', nid: data.nid },
+    }),
+    ackPush(data.nid, 'received'),
+  ]));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
-  event.waitUntil(
+  const d = event.notification.data || {};
+  const url = d.url || '/';
+  event.waitUntil(Promise.all([
+    ackPush(d.nid, 'click'),
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {
         if ('focus' in c) return c.focus();
       }
       return self.clients.openWindow(url);
-    })
-  );
+    }),
+  ]));
 });
