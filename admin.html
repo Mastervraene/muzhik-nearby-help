@@ -484,6 +484,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ai-row.unseen { border-left:4px solid #e04b4b; }
 .ai-row.good { border-left:4px solid #2e9e5b; }
 .ai-row.bad { border-left:4px solid #e04b4b; background:#fff7f7; }
+.ai-row.done, .ai-row.done.unseen, .ai-row.done.bad, .ai-row.done.good { border-left:4px solid #2e9e5b; background:#f3fbf6; }
+.ai-done-btn.on { background:#2e9e5b; color:#fff; border-color:#2e9e5b; }
 .ai-head { display:flex; align-items:center; gap:8px; padding:14px 12px; min-height:48px; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:rgba(0,0,0,.06); }
 .ai-title { flex:1; min-width:0; cursor:pointer; font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ai-row.seen .ai-title { font-weight:400; color:#555; }
@@ -6955,7 +6957,7 @@ function aiBadge() {
 }
 function aiRowHtml(c, keepComments) {
       const r = c.review || {};
-      const cls = [r.seen ? 'seen' : 'unseen', r.verdict || '', aiOpen[c.key] ? 'open' : ''].join(' ').replace('unseen', 'unseen');
+      const cls = [r.seen ? 'seen' : 'unseen', r.verdict || '', r.done ? 'done' : '', aiOpen[c.key] ? 'open' : ''].join(' ').replace('unseen', 'unseen');
       const when = c.lastAt ? new Date(c.lastAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const o = c.order;
       const orderHtml = o ? ('Заказ' + (o.number ? ' №' + aiEsc(o.number) : '') + ': ' + aiEsc(o.title || '') + ' · статус: ' + aiEsc(o.status || '—') + ' · стоимость: ' + (o.price != null ? aiEsc(o.price) + ' ₽' : '—')) : 'Заказ не создан';
@@ -6969,7 +6971,7 @@ function aiRowHtml(c, keepComments) {
         '<div class="ai-det">' + msgs + '<div class="ai-order">' + orderHtml + dr + '</div>' +
         '<div class="ai-btns" style="margin:8px 0"><button data-act="good" class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</button><button data-act="bad" class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</button></div>' +
         '<textarea data-key="' + aiEsc(c.key) + '" placeholder="Комментарий для правок">' + aiEsc(cm) + '</textarea>' +
-        '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
+        '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <button class="btn ai-done-btn ' + (r.done ? 'on' : '') + '" data-act="done">' + (r.done ? '✔ Обработано' : 'Отметить обработанным') + '</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
 }
 function aiRerenderRow(key) {
   const c = aiChats.find((x) => x.key === key); if (!c) return;
@@ -7007,6 +7009,9 @@ document.addEventListener('click', async (ev) => {
     aiRerenderRow(key);
   } else if (act === 'good' || act === 'bad') {
     await aiSet(key, { verdict: r.verdict === act ? null : act, seen: true });
+    aiRerenderRow(key);
+  } else if (act === 'done') {
+    await aiSet(key, { done: !r.done, seen: true });
     aiRerenderRow(key);
   } else if (act === 'savecm') {
     const val = row.querySelector('textarea').value;
