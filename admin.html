@@ -484,7 +484,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ai-row.unseen { border-left:4px solid #e04b4b; }
 .ai-row.good { border-left:4px solid #2e9e5b; }
 .ai-row.bad { border-left:4px solid #e04b4b; background:#fff7f7; }
-.ai-head { display:flex; align-items:center; gap:8px; padding:10px 12px; }
+.ai-head { display:flex; align-items:center; gap:8px; padding:14px 12px; min-height:48px; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:rgba(0,0,0,.06); }
 .ai-title { flex:1; min-width:0; cursor:pointer; font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ai-row.seen .ai-title { font-weight:400; color:#555; }
 .ai-meta { font-size:11px; color:#888; white-space:nowrap; }
@@ -6963,7 +6963,7 @@ function aiRowHtml(c, keepComments) {
       const msgs = !aiOpen[c.key] ? '' : (c.messages || []).map((m) => '<div class="ai-msg ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + aiEsc(m.text) + '</div>').join('');
       const cm = (keepComments && keepComments[c.key] != null) ? keepComments[c.key] : (r.comment || '');
       return '<div class="ai-row ' + cls + '" data-key="' + aiEsc(c.key) + '">' +
-        '<div class="ai-head"><div class="ai-title" data-act="toggle">' + aiEsc(c.title || 'Без названия') + '</div>' +
+        '<div class="ai-head" data-act="toggle"><div class="ai-title">' + aiEsc(c.title || 'Без названия') + '</div>' +
         '<span class="ai-meta">' + aiEsc(c.userName || '') + ' · ' + when + '</span>' +
         '<div class="ai-btns ai-ind"><span class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</span><span class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</span></div></div>' +
         '<div class="ai-det">' + msgs + '<div class="ai-order">' + orderHtml + dr + '</div>' +
