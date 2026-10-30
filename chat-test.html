@@ -377,6 +377,54 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     } catch (e) { return null; }
   }
 
+  // Подробный геокодинг: нужна точность «до дома». precision exact/number + kind house = адрес найден до номера дома.
+  async function geocodeFull(q) {
+    try {
+      var r = await fetch('https://geocode-maps.yandex.ru/1.x/?apikey=' + GEO_KEY + '&geocode=' + encodeURIComponent(q) + '&format=json&results=1');
+      var j = await r.json();
+      var m = j.response.GeoObjectCollection.featureMember[0]; if (!m) return null;
+      var g = m.GeoObject, meta = g.metaDataProperty.GeocoderMetaData, pos = g.Point.pos.split(' ').map(Number);
+      return { lat: pos[1], lng: pos[0], text: String(meta.text || '').replace(/^Россия,\s*/, ''), precision: meta.precision, kind: meta.kind };
+    } catch (e) { return null; }
+  }
+  var EXTRAS_RE = /(?:подъезд|под\.|парадная|этаж|эт\.|кв\.?|квартира|домофон|код)[^,;]*/gi;
+  function addrExtras(s) { var m = String(s || '').match(EXTRAS_RE); return m ? m.map(function (x) { return x.trim(); }).join(', ') : ''; }
+  function addrBase(s) { return String(s || '').replace(EXTRAS_RE, '').replace(/[,;\s]+$/g, '').replace(/^[,;\s]+/g, '').replace(/,\s*,/g, ','); }
+  function isHouse(g) { return Boolean(g) && g.kind === 'house' && (g.precision === 'exact' || g.precision === 'number'); }
+  function confirmAddress(addr) {
+    return new Promise(function (resolve) {
+      var o = modal('<h3>Проверьте адрес</h3><p style="color:var(--gray-900);font-size:15px"><b>' + esc(addr) + '</b></p><p>Мастер поедет именно сюда. Если неверно, нажмите «Исправить» и укажите точку на карте.</p><div class="mo-row"><button class="mo-btn" id="ca-no" type="button">Исправить</button><button class="mo-btn pri" id="ca-ok" type="button">Верно</button></div>');
+      o.querySelector('#ca-ok').onclick = function () { o.remove(); resolve(true); };
+      o.querySelector('#ca-no').onclick = function () { o.remove(); resolve(false); };
+    });
+  }
+  // Проверка адреса перед созданием заказа. Точка на карте главнее текста.
+  async function resolveAddress() {
+    var extras = addrExtras(draft && draft.address) || addrExtras(locAddr);
+    var base, point;
+    if (locPoint && locAddr && !/^Точка на карте/.test(locAddr)) { base = addrBase(locAddr); point = locPoint; }
+    else {
+      var src = addrBase(locAddr || (draft && draft.address) || '');
+      var g = src ? await geocodeFull(src) : null;
+      if (!isHouse(g)) {
+        var d = add('sys', 'Не нашёл такой адрес до номера дома' + (src ? ': ' + src : '') + '. Уточните улицу и дом или укажите точку на карте. ');
+        mapBtn(d); return null;
+      }
+      base = g.text; point = { lat: g.lat, lng: g.lng };
+    }
+    var full = base + (extras ? ', ' + extras : '');
+    var okc = await confirmAddress(full);
+    if (!okc) { locAddr = ''; locPoint = null; locSent = false; syncIcons(); save(); addrAsk = false; pickLocation(); return null; }
+    return { full: full, point: point };
+  }
+  var addrAsk = false;
+  function askedAddress(t) { return /адрес|улиц|где (вам|вы|нужно|находится|вас)|куда (приехать|подъехать)/i.test(t || '') && /\?/.test(t || ''); }
+  function mapBtn(bubble) {
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'pay-btn'; b.textContent = '📍 Указать на карте';
+    b.onclick = function () { addrAsk = true; pickLocation(); };
+    bubble.appendChild(b); toBottom();
+  }
+
   function getSess() {
     var u = ls('muzhik_session_v1'), t = ls('muzhik_session_token_v1');
     if (u && t) return { uid: u, tok: t, guest: false };
@@ -523,7 +571,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
     function close() { if (myMap) { try { myMap.destroy(); } catch (e) {} } o.remove(); }
     o.querySelector('#mp-no').onclick = close;
     o.querySelector('#mp-manual').onclick = function (e) { e.preventDefault(); close(); manualAddress(); };
-    ok.onclick = function () { if (!picked) return; locAddr = addrText || ('Точка на карте (' + picked.lat.toFixed(5) + ', ' + picked.lng.toFixed(5) + ')'); locPoint = picked; locSent = false; close(); syncIcons(); save(); add('sys', 'Адрес: ' + locAddr + '. Нажмите значок ещё раз, чтобы сбросить.'); };
+    ok.onclick = function () { if (!picked) return; locAddr = addrText || ('Точка на карте (' + picked.lat.toFixed(5) + ', ' + picked.lng.toFixed(5) + ')'); locPoint = picked; locSent = false; close(); syncIcons(); save(); add('sys', 'Адрес: ' + locAddr + '. Нажмите значок ещё раз, чтобы сбросить.');
+      if (addrAsk && !busy) { addrAsk = false; locSent = true; save(); autoTurn('[клиент указал адрес на карте: ' + locAddr + ' — адрес не спрашивай]'); } };
     async function setPoint(lat, lng) {
       picked = { lat: lat, lng: lng }; ok.disabled = false; ok.style.opacity = 1; addrEl.textContent = 'Определяю адрес…';
       var t = await reverseGeocode(lat, lng); addrText = t;
@@ -603,18 +652,22 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   async function createTestOrder() {
     if (!draft || !draft.ready) { add('sys', 'Пока не хватает данных — ответьте на вопросы выше.'); return; }
     if (busy) return;
+    busy = true;
+    var A = await resolveAddress();
+    busy = false;
+    if (!A) return;
     var S = await ensureSession();
     if (!S) { add('sys', 'Нет связи, попробуйте ещё раз.'); return; }
     if (S.guest) { S = await registerModal(S); if (!S) return; }
     busy = true;
     var btn = draftEl && draftEl.querySelector('button'); if (btn) { btn.textContent = 'Создаём…'; btn.classList.remove('on'); }
-    var loc = locPoint || await geocode(draft.address);
+    var loc = A.point;
     var now = new Date().toISOString();
     var price = draft.price || 500;
     var o = {
       title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: '',
       scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: orderPhotos, hasVoiceTranscript: false, voiceTranscript: '',
-      exactLocation: loc || { lat: 0, lng: 0 }, district: draft.address, houseNumberPublic: '', fullAddress: draft.address,
+      exactLocation: loc || { lat: 0, lng: 0 }, district: A.full, houseNumberPublic: '', fullAddress: A.full,
       desiredDate: '', timeWindow: '', urgency: 'normal', customerBudget: null,
       estimate: { min: price, max: price, factors: [] }, status: 'draft', timeline: [{ status: 'draft', at: now }],
       warnings: ['Тестовый заказ из чат-помощника'], isPrecedent: false, negotiation: { customerOffer: null, workerOffer: null },
@@ -770,7 +823,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
         } else {
           waitNoted = false;
           messages.push({ role: 'assistant', text: data.reply });
-          add('ai', data.reply);
+          var aiB = add('ai', data.reply);
+          if (!locAddr && askedAddress(data.reply)) mapBtn(aiB);
           if (data.draft) { if (order) { handleOrderDraft(data.draft); } else { draft = data.draft; renderDraft(); } }
           if (data.needsHuman) { add('sys', 'Диалог передан администратору — он ответит прямо здесь. Можно писать дальше.'); waitNoted = true; }
         }
