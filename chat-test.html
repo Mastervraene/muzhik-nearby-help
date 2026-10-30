@@ -331,6 +331,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   var log = document.getElementById('log'), ta = document.getElementById('text'), send = document.getElementById('send');
   var messages = [], draft = null, busy = false, draftEl = null;
   var photos = [], orderPhotos = [], MAX_PHOTOS = 5, convId = '', order = null, adminCursor = 0, waitNoted = false, locAddr = '', locSent = false, locPoint = null;
+  // Боевая оплата включается только по адресу chat-test.html?pay=1 (остальные тестеры остаются на заглушке).
+  var LIVE = /[?&]pay=1(&|$)/.test(location.search);
   var ACT = URL_BASE + '/functions/v1/chat-actions', G_UID = 'muzhik_guest_v1', G_TOK = 'muzhik_guest_token_v1';
   function newConv() { convId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
@@ -504,8 +506,47 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       };
     });
   }
+  // Настоящая оплата: сервер проверяет подпись цены и условия, затем переход на форму Т-Банка.
+  async function livePay() {
+    var S = getSess(); if (!S || !order || busy) return;
+    busy = true;
+    try {
+      var sg = order.sign || {};
+      var d = await act({ action: 'order_make_payable', userId: S.uid, sessionToken: S.tok, orderId: order.id, sig: sg.sig, price: sg.price, category: sg.category, title: sg.title, convId: sg.convId });
+      if (!d || !d.ok) { order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось подготовить оплату, попробуйте ещё раз.'); return; }
+      if (!d.auto) {
+        order.stage = 'moderation'; save(); renderDraft();
+        add('sys', 'Заказ отправлен администратору на проверку. Как только он подтвердит стоимость, здесь появится кнопка оплаты.');
+        return;
+      }
+      order.price = d.amount; order.stage = 'paying'; save(); renderDraft();
+      add('sys', 'Переходим к оплате…');
+      var pr = await fnCall('create-payment', { orderId: order.id, sessionToken: S.tok });
+      if (!pr || !pr.ok || !pr.paymentUrl) { order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось открыть форму оплаты. Нажмите «Оплатить» ещё раз.'); return; }
+      window.location.href = pr.paymentUrl;
+    } finally { busy = false; }
+  }
+  // После возврата с формы банка: проверяем, дошла ли оплата (банк подтверждает на сервер чуть позже).
+  async function checkPaid() {
+    if (!order || order.stage !== 'paying') return;
+    var S = getSess(); if (!S) return;
+    for (var i = 0; i < 4; i++) {
+      var d = await act({ action: 'order_status', userId: S.uid, sessionToken: S.tok, orderId: order.id });
+      if (d && d.ok && d.paid) {
+        order.stage = order.part === 'need' ? 'part_wait' : 'paid'; save(); renderDraft();
+        add('sys', 'Оплата прошла.');
+        if (order.stage === 'paid') paidBanner();
+        autoTurn('[Система] Клиент оплатил заказ.');
+        return;
+      }
+      await new Promise(function (r) { setTimeout(r, 3000); });
+    }
+    add('sys', 'Оплата пока не подтверждена банком. Если вы оплатили, обновите страницу через минуту. Если нет, нажмите «Оплатить».');
+    order.stage = 'unpaid'; save(); renderDraft();
+  }
   function payModal() {
     if (!order) return;
+    if (LIVE) { livePay(); return; }
     var o = modal('<h3>Оплата заказа</h3><p>Сумма: <b>' + (order.price ? esc(order.price) + ' ₽' : 'уточнит администратор') + '</b> за работу' + (order.part === 'need' ? '. Деталь вы покупаете отдельно.' : '.') + '</p>' +
       '<p>Здесь будет форма банка. Сейчас это заглушка: выберите, чем закончилась оплата.</p>' +
       '<div class="mo-err" id="pm-err"></div><div class="mo-row"><button class="mo-btn" id="pm-no" type="button">Не оплатил</button><button class="mo-btn pri" id="pm-ok" type="button">Оплатил</button></div>');
@@ -670,8 +711,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       exactLocation: loc || { lat: 0, lng: 0 }, district: A.full, houseNumberPublic: '', fullAddress: A.full,
       desiredDate: '', timeWindow: '', urgency: 'normal', customerBudget: null,
       estimate: { min: price, max: price, factors: [] }, status: 'draft', timeline: [{ status: 'draft', at: now }],
-      warnings: ['Тестовый заказ из чат-помощника'], isPrecedent: false, negotiation: { customerOffer: null, workerOffer: null },
-      isTest: true
+      warnings: LIVE ? [] : ['Тестовый заказ из чат-помощника'], isPrecedent: false, negotiation: { customerOffer: null, workerOffer: null },
+      isTest: !LIVE
     };
     try {
       var res = await fetch(URL_BASE + '/functions/v1/create-order', {
@@ -681,8 +722,8 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
       var data = await res.json().catch(function () { return null; });
       if (res.ok && data && data.ok && data.order && data.order.id) {
         var n = data.order.order_number;
-        order = { id: data.order.id, number: n, price: draft.price || null, part: draft.part || '', stage: 'unpaid' };
-        add('sys', 'Заказ ' + (n ? 'T-' + n + ' ' : '') + 'сохранён как черновик' + (loc ? '' : ' (адрес на карте не определился)') + '. Осталось оплатить.');
+        order = { id: data.order.id, number: n, price: draft.price || null, part: draft.part || '', stage: 'unpaid', sign: { sig: draft.sig || '', price: draft.price || 0, category: draft.category, title: draft.title || '', convId: convId } };
+        add('sys', 'Заказ ' + (n ? (LIVE ? '№' : 'T-') + n + ' ' : '') + 'сохранён как черновик' + (loc ? '' : ' (адрес на карте не определился)') + '. Осталось оплатить.');
         draft = null; renderDraft(); save();
         busy = false; payModal(); return;
       } else {
@@ -855,6 +896,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   ta.addEventListener('input', function () { grow(); grade(); });
   ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
   restore(); grade(); setInterval(pollAdmin, 15000);
+  checkPaid();
   (function () { var rs = getSess(); if (rs && !rs.guest) mergeGuest(rs); })();
 })();
 </script>
