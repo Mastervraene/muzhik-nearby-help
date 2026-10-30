@@ -6953,23 +6953,15 @@ function aiBadge() {
   const b = document.getElementById('ai-badge');
   if (b) { b.textContent = n; b.style.display = n ? '' : 'none'; }
 }
-function renderAi() {
-  const el = document.getElementById('ai-body');
-  aiBadge();
-  if (!aiChats.length) { el.innerHTML = '<p class="count-hint">Переписок пока нет.</p>'; return; }
-  const keepComments = {};
-  el.querySelectorAll('textarea[data-key]').forEach((t) => { keepComments[t.dataset.key] = t.value; });
-  el.innerHTML = '<p class="count-hint">Сверху новые. Красная полоса — не просмотрено; ✅/❌ — оценка. Нажмите на название, чтобы раскрыть.</p>' +
-    '<button class="btn" id="ai-refresh" style="margin-bottom:10px">Обновить</button>' +
-    aiChats.map((c) => {
+function aiRowHtml(c, keepComments) {
       const r = c.review || {};
       const cls = [r.seen ? 'seen' : 'unseen', r.verdict || '', aiOpen[c.key] ? 'open' : ''].join(' ').replace('unseen', 'unseen');
       const when = c.lastAt ? new Date(c.lastAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const o = c.order;
       const orderHtml = o ? ('Заказ' + (o.number ? ' №' + aiEsc(o.number) : '') + ': ' + aiEsc(o.title || '') + ' · статус: ' + aiEsc(o.status || '—') + ' · стоимость: ' + (o.price != null ? aiEsc(o.price) + ' ₽' : '—')) : 'Заказ не создан';
       const dr = c.draft ? ('<div style="font-size:12px;color:#666;margin-top:4px">Черновик: ' + aiEsc(c.draft.title || '') + (c.draft.address ? ' · ' + aiEsc(c.draft.address) : '') + '</div>') : '';
-      const msgs = (c.messages || []).map((m) => '<div class="ai-msg ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + aiEsc(m.text) + '</div>').join('');
-      const cm = keepComments[c.key] != null ? keepComments[c.key] : (r.comment || '');
+      const msgs = !aiOpen[c.key] ? '' : (c.messages || []).map((m) => '<div class="ai-msg ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + aiEsc(m.text) + '</div>').join('');
+      const cm = (keepComments && keepComments[c.key] != null) ? keepComments[c.key] : (r.comment || '');
       return '<div class="ai-row ' + cls + '" data-key="' + aiEsc(c.key) + '">' +
         '<div class="ai-head"><div class="ai-title" data-act="toggle">' + aiEsc(c.title || 'Без названия') + '</div>' +
         '<span class="ai-meta">' + aiEsc(c.userName || '') + ' · ' + when + '</span>' +
@@ -6978,7 +6970,23 @@ function renderAi() {
         '<div class="ai-btns" style="margin:8px 0"><button data-act="good" class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</button><button data-act="bad" class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</button></div>' +
         '<textarea data-key="' + aiEsc(c.key) + '" placeholder="Комментарий для правок">' + aiEsc(cm) + '</textarea>' +
         '<div style="margin-top:6px"><button class="btn" data-act="savecm">Сохранить комментарий</button> <span class="ai-saved" style="font-size:12px;color:#2e9e5b"></span></div></div></div>';
-    }).join('');
+}
+function aiRerenderRow(key) {
+  const c = aiChats.find((x) => x.key === key); if (!c) return;
+  const old = document.querySelector('#ai-body .ai-row[data-key="' + key.replace(/"/g, '') + '"]'); if (!old) { renderAi(); return; }
+  const ta = old.querySelector('textarea[data-key]'); const km = {}; if (ta) km[key] = ta.value;
+  old.outerHTML = aiRowHtml(c, km);
+  aiBadge();
+}
+function renderAi() {
+  const el = document.getElementById('ai-body');
+  aiBadge();
+  if (!aiChats.length) { el.innerHTML = '<p class="count-hint">Переписок пока нет.</p>'; return; }
+  const keepComments = {};
+  el.querySelectorAll('textarea[data-key]').forEach((t) => { keepComments[t.dataset.key] = t.value; });
+  el.innerHTML = '<p class="count-hint">Сверху новые. Красная полоса — не просмотрено; ✅/❌ — оценка. Нажмите на название, чтобы раскрыть.</p>' +
+    '<button class="btn" id="ai-refresh" style="margin-bottom:10px">Обновить</button>' +
+    aiChats.map((c) => aiRowHtml(c, keepComments)).join('');
   document.getElementById('ai-refresh').onclick = loadAi;
 }
 async function aiSet(key, patch, row) {
@@ -6996,14 +7004,14 @@ document.addEventListener('click', async (ev) => {
   if (act === 'toggle') {
     aiOpen[key] = !aiOpen[key];
     if (aiOpen[key] && !r.seen && c) { c.review = Object.assign({}, c.review || {}, { seen: true }); aiSet(key, { seen: true }); }
-    renderAi();
+    aiRerenderRow(key);
   } else if (act === 'good' || act === 'bad') {
     await aiSet(key, { verdict: r.verdict === act ? null : act, seen: true });
-    renderAi();
+    aiRerenderRow(key);
   } else if (act === 'savecm') {
     const val = row.querySelector('textarea').value;
     await aiSet(key, { comment: val, seen: true });
-    renderAi();
+    aiRerenderRow(key);
     const nrow = document.querySelector('#ai-body .ai-row[data-key="' + key.replace(/"/g, '') + '"] .ai-saved');
     if (nrow) nrow.textContent = 'Сохранено';
   }
