@@ -6983,8 +6983,8 @@ function renderAi() {
 }
 async function aiSet(key, patch, row) {
   const c = aiChats.find((x) => x.key === key); if (!c) return;
-  const old = c.review;
-  c.review = Object.assign({}, old || {}, patch);
+  const old = c.review && c.review.seen && patch.seen && Object.keys(patch).length === 1 ? Object.assign({}, c.review, { seen: false }) : c.review;
+  c.review = Object.assign({}, c.review || {}, patch);
   try { await callAdminPricing('set_review', Object.assign({ key }, patch)); }
   catch (e) { c.review = old; alert('Не сохранилось: ' + e.message); }
 }
@@ -6995,7 +6995,7 @@ document.addEventListener('click', async (ev) => {
   const act = t.dataset.act;
   if (act === 'toggle') {
     aiOpen[key] = !aiOpen[key];
-    if (aiOpen[key] && !r.seen) await aiSet(key, { seen: true });
+    if (aiOpen[key] && !r.seen && c) { c.review = Object.assign({}, c.review || {}, { seen: true }); aiSet(key, { seen: true }); }
     renderAi();
   } else if (act === 'good' || act === 'bad') {
     await aiSet(key, { verdict: r.verdict === act ? null : act, seen: true });
