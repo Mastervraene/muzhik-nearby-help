@@ -5232,6 +5232,7 @@ async function ensureUserByPhone(phone, extra = {}) {
  * завершении нужно просто обновить users.phone, а не вести на finishPhoneGateLogin.
  */
 let phoneVerifyState = null;
+let loginPopupOpen = false;
 
 /**
  * Раскрыто ли поле редактирования номера в renderPhoneOverlay() — живёт вне
@@ -12149,6 +12150,16 @@ function renderNoUsers() {
 }
 
 /** Экран «нужен номер телефона» — показывается перед заказами/профилем, если человек ещё не указал телефон. */
+function renderLoginPopup() {
+  return `
+    <div class="map-picker-overlay" data-action="close-login-popup">
+      <div id="login-popup-card" style="max-width:380px;width:100%;margin:0;max-height:92vh;overflow-y:auto;" onclick="event.stopPropagation()">
+        ${renderPhoneGate()}
+      </div>
+    </div>
+  `;
+}
+
 function renderPhoneGate() {
   if (phoneVerifyState) return renderPhoneVerifyStep(phoneVerifyState);
 
@@ -12170,19 +12181,7 @@ function renderPhoneGate() {
       <div class="order-warning" id="gate-phone-error" style="display:none;"></div>
       <button class="primary-button" id="gate-phone-send" disabled>Продолжить</button>
       <p style="font-size:12px;color:#767676;margin-top:10px;">Нажимая «Продолжить», вы соглашаетесь с <a href="/privacy-policy.html" style="color:inherit;">политикой конфиденциальности</a> и даёте согласие на <a href="/personal-data-policy.html" style="color:inherit;">обработку персональных данных</a>.</p>
-      ${TELEGRAM_LINK_TEMP_DISABLED ? `<div class="composer-field-inline" style="margin-top:14px;"><p class="order-meta">Привязка Telegram временно недоступна — скоро вернём.</p></div>` : `<div class="composer-field-inline" style="margin-top:14px;">
-        <p class="order-meta">Необязательно: Telegram — вход по коду из бота и уведомления о заказах</p>
-        <button class="secondary-button" type="button" style="box-sizing:border-box;" data-action="request-telegram-code" ${limit.canRequest ? '' : 'disabled'}>Открыть бота @${escapeHtml(TELEGRAM_BOT_USERNAME)}</button>
-        ${hint ? `<p class="order-meta" style="margin-top:6px;">${escapeHtml(hint)}</p>` : ''}
-        ${
-          limit.hasRequested
-            ? `
-        <label style="margin-top:6px;">Код из бота</label>
-        <input type="text" id="telegram-link-code" inputmode="numeric" placeholder="0000" />
-        <button class="primary-button" data-action="submit-telegram-code">Подтвердить</button>`
-            : ''
-        }
-      </div>`}
+      <button class="secondary-button" type="button" style="box-sizing:border-box;margin-top:12px;" data-action="${state.screen === 'home' ? 'close-login-popup' : 'go-home'}">← Назад к чату</button>
     </div>
   `;
 }
@@ -12356,6 +12355,7 @@ function renderMain() {
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
+    ${loginPopupOpen && !currentUser() && !passwordStepState ? renderLoginPopup() : ''}
     ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
     ${editNameState ? renderEditNameOverlay(editNameState) : ''}
     ${editDeviceModelState ? renderEditDeviceModelOverlay(editDeviceModelState) : ''}
@@ -14592,7 +14592,10 @@ async function handleAction(action, value) {
       return go('home');
     case 'go-orders': return go('orders');
     case 'go-notifications': return go('notifications');
-    case 'go-profile': return go('profile');
+    case 'go-profile':
+      if (state.screen === 'home' && isSupabaseConfigured() && !currentUser()) { loginPopupOpen = true; return render(); }
+      return go('profile');
+    case 'close-login-popup': loginPopupOpen = false; return render();
     case 'go-master-panel': return go('masterPanel');
     case 'go-master-wizard': return openMasterWizard();
     case 'mw-change-phone': profilePhoneEditOpen = true; state.infoOverlay = 'phone'; return render();
