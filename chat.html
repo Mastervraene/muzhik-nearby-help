@@ -430,7 +430,7 @@ body.embed .chat-screen { padding-top:6px; }
     return { full: full, point: point };
   }
   var addrAsk = false, rememberAddr = false;
-  function askedAddress(t) { return /адрес|улиц|где (вам|вы|нужно|находится|вас)|куда (приехать|подъехать)/i.test(t || '') && /\?/.test(t || ''); }
+  function askedAddress(t) { return /адрес|улиц|где (вам|вы|нужно|находится|вас)|куда (приехать|подъехать)/i.test(t || '') && (/\?/.test(t || '') || /укажите|напишите|подскажите|назовите|сообщите|пришлите|отправьте/i.test(t || '')); }
   function mapBtn(bubble) {
     if (savedAddr && savedAddr.address && !locAddr) {
       var sb = document.createElement('button'); sb.type = 'button'; sb.className = 'pay-btn'; sb.textContent = '✅ Тот же адрес: ' + savedAddr.address;
