@@ -523,6 +523,24 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ch-msg small { display:block; font-size:10px; opacity:.7; margin-bottom:2px; }
 .ch-input { display:flex; gap:8px; } .ch-input textarea { flex:1; min-height:44px; font:inherit; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:10px; }
 .ch-input button, .ch-act button { font:inherit; font-size:13px; padding:8px 14px; border:0; border-radius:10px; background:#2563eb; color:#fff; cursor:pointer; }
+.mc-card{border:1px solid #e2e8f0;border-radius:22px;padding:10px 12px;background:#fff;box-shadow:0 2px 6px rgba(15,23,42,.06),0 10px 24px rgba(15,23,42,.08)}
+.mc-ta{width:100%;border:0;outline:0;resize:none;font:inherit;font-size:16px;line-height:1.35;min-height:24px;max-height:160px;background:transparent;padding:0;display:block;box-sizing:border-box}
+.mc-ph{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.mc-ph:empty{display:none}
+.mc-ph div{position:relative;width:52px;height:52px;border-radius:10px;overflow:hidden;background:#e2e8f0}.mc-ph img{width:100%;height:100%;object-fit:cover}.mc-ph div.up{opacity:.5}
+.mc-ph button{position:absolute;top:1px;right:1px;width:18px;height:18px;border:0;border-radius:50%;background:rgba(15,23,42,.7);color:#fff;font-size:12px;line-height:1;padding:0}
+.mc-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.mc-ib,.mc-send{border:0;border-radius:50%;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;flex:none;cursor:pointer}
+.mc-ib{background:#f1f5f9;color:#64748b}.mc-ib.on{background:#2563eb;color:#fff}
+.mc-send{background:#cbd5e1;color:#fff}.mc-send.on{background:#2563eb}
+.mc-ib svg,.mc-send svg{width:18px;height:18px}
+.mc-corr{flex:1;border:0;border-radius:999px;padding:9px 12px;background:#2563eb;color:#fff;font:inherit;font-size:15px;font-weight:600;cursor:pointer}
+.mc-ov{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:300;display:flex;align-items:flex-end;justify-content:center}
+.mc-sheet{background:#fff;width:100%;max-width:560px;border-radius:22px 22px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom));max-height:90vh;overflow-y:auto;box-sizing:border-box}
+.mc-sheet h3{margin:0 0 10px;font-size:17px}.mc-sheet label{display:block;font-size:12px;color:#64748b;margin:10px 0 4px}
+.mc-sheet select,.mc-sheet input,.mc-sheet textarea{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;font:inherit;font-size:16px;background:#fff}
+.mc-sheet .r{display:flex;gap:8px;margin-top:8px}.mc-sheet .r button{flex:1;border:0;border-radius:12px;padding:12px;font:inherit;font-size:15px;font-weight:600;background:#2563eb;color:#fff;cursor:pointer}
+.mc-sheet .r button.sec{background:#f1f5f9;color:#0f172a}.mc-sheet button:disabled{opacity:.5}
+
 .ch-price { margin-top:10px; display:flex; flex-direction:column; gap:6px; font-size:13px; } .ch-price select, .ch-price input, .ch-price textarea { font:inherit; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:10px; width:100%; box-sizing:border-box; } .ch-act { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; } .ch-act button.sec { background:#eee; color:#333; }
 .ch-ov { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; align-items:center; justify-content:center; padding:16px; }
 .ch-ov > div { background:#fff; border-radius:14px; padding:16px; width:100%; max-width:340px; font-size:14px; }
@@ -6712,6 +6730,79 @@ async function loadData(opts) {
 let pricingData = { prices: [], instructions: [] };
 let pricingLoaded = false;
 
+/* Окно ввода модератора: фото, «Коррекция», отправка. opts: base, key, send(text,urls), price(amount,orderId,note), back(note,amount,orderId) */
+function mcMount(host, opts) {
+  var photos = [], drafts = [];
+  var IC_CAM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="3"/></svg>';
+  var IC_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+  host.innerHTML = '<div class="mc-card"><textarea class="mc-ta" rows="1" maxlength="2000" placeholder="Ответ клиенту"></textarea><div class="mc-ph"></div><input type="file" accept="image/*" multiple style="display:none"><div class="mc-row"><button type="button" class="mc-ib" aria-label="Фото">' + IC_CAM + '</button><button type="button" class="mc-corr">Коррекция</button><button type="button" class="mc-send" aria-label="Отправить">' + IC_UP + '</button></div></div>';
+  var ta = host.querySelector('.mc-ta'), ph = host.querySelector('.mc-ph'), fi = host.querySelector('input[type=file]');
+  var cam = host.querySelector('.mc-ib'), corr = host.querySelector('.mc-corr'), snd = host.querySelector('.mc-send');
+  function esc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function grade() { snd.classList.toggle('on', Boolean(ta.value.trim()) || photos.some(function (p) { return p.url; })); cam.classList.toggle('on', photos.length > 0); }
+  function grow() { ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
+  function renderPh() {
+    ph.innerHTML = '';
+    photos.forEach(function (p, i) { var d = document.createElement('div'); if (p.up) d.className = 'up'; d.innerHTML = '<img src="' + esc(p.preview) + '">'; var x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.onclick = function () { photos.splice(i, 1); renderPh(); grade(); }; d.appendChild(x); ph.appendChild(d); });
+    grade();
+  }
+  function shrink(file) {
+    return new Promise(function (res) {
+      var u = URL.createObjectURL(file), im = new Image();
+      im.onload = function () { var k = Math.min(1, 1280 / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(u); c.toBlob(function (b) { res(b || file); }, 'image/jpeg', 0.82); };
+      im.onerror = function () { URL.revokeObjectURL(u); res(file); };
+      im.src = u;
+    });
+  }
+  cam.onclick = function () { fi.click(); };
+  fi.onchange = function () {
+    Array.prototype.slice.call(fi.files).filter(function (f) { return f.type && f.type.indexOf('image/') === 0; }).slice(0, 5 - photos.length).forEach(async function (f) {
+      var p = { up: true, preview: URL.createObjectURL(f) }; photos.push(p); renderPh();
+      try {
+        var blob = await shrink(f), path = 'mod-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg';
+        var r = await fetch(opts.base + '/storage/v1/object/order-attachments/' + path, { method: 'POST', headers: { apikey: opts.key, Authorization: 'Bearer ' + opts.key, 'Content-Type': 'image/jpeg' }, body: blob });
+        if (!r.ok) throw new Error('upload');
+        p.url = opts.base + '/storage/v1/object/public/order-attachments/' + path; p.up = false;
+      } catch (e) { photos.splice(photos.indexOf(p), 1); alert('Не удалось загрузить фото'); }
+      renderPh();
+    });
+    fi.value = '';
+  };
+  ta.oninput = function () { grow(); grade(); };
+  ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) doSend(); });
+  async function doSend() {
+    var t = ta.value.trim();
+    if (photos.some(function (p) { return p.up; })) { alert('Фото ещё загружается'); return; }
+    var urls = photos.filter(function (p) { return p.url; }).map(function (p) { return p.url; });
+    if (!t && !urls.length) return;
+    snd.disabled = true;
+    try { await opts.send(t, urls); ta.value = ''; photos = []; renderPh(); grow(); } catch (e) { alert('Не отправилось: ' + e.message); }
+    snd.disabled = false; grade();
+  }
+  snd.onclick = doSend;
+  corr.onclick = function () {
+    var ov = document.createElement('div'); ov.className = 'mc-ov';
+    ov.innerHTML = '<div class="mc-sheet"><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
+    document.body.appendChild(ov);
+    var sel = ov.querySelector('.o');
+    sel.innerHTML = drafts.map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '<option value="">Без заказа — цена для ассистента</option>';
+    function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: sel.value || undefined, note: ov.querySelector('.n').value.trim() }; }
+    ov.querySelector('.x').onclick = function () { ov.remove(); };
+    ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+    ov.querySelector('.p').onclick = async function () {
+      var v = vals(); if (!(v.amt > 0 && v.amt < 100000)) { alert('Введите сумму от 1 до 99 999 ₽'); return; }
+      this.disabled = true;
+      try { await opts.price(v.amt, v.oid, v.note); ov.remove(); } catch (e) { alert('Не получилось: ' + e.message); this.disabled = false; }
+    };
+    ov.querySelector('.b').onclick = async function () {
+      var v = vals(); if (!confirm('Вернуть чат ассистенту?')) return;
+      this.disabled = true;
+      try { await opts.back(v.note, v.amt > 0 ? v.amt : 0, v.oid); ov.remove(); } catch (e) { alert('Не получилось: ' + e.message); this.disabled = false; }
+    };
+  };
+  return { setDrafts: function (d) { drafts = d || []; } };
+}
+
 async function callMod(action, extra) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/chat-actions`, {
     method: 'POST', headers: sbHeaders(),
@@ -6968,7 +7059,8 @@ function chMsgHtml(m) {
   const cls = sys ? 'sys' : (m.role === 'admin' ? 'admin' : m.role === 'assistant' ? 'assistant' : 'user');
   const who = sys ? '' : (m.role === 'admin' ? 'Администратор' : m.role === 'assistant' ? 'ИИ' : 'Клиент');
   const pay = m.draft && m.draft.type === 'pay_request' ? '<br>💳 Запрос оплаты: ' + chEsc(m.draft.amount) + ' ₽' : '';
-  return '<div class="ch-msg ' + cls + '">' + (who ? '<small>' + who + ' · ' + chTime(m.at) + '</small>' : '') + chEsc(m.text) + pay + '</div>';
+  const ph = (m.draft && m.draft.photos || []).map((u) => '<a href="' + chEsc(u) + '" target="_blank" rel="noopener"><img src="' + chEsc(u) + '" style="max-width:100%;max-height:180px;border-radius:8px;display:block;margin-top:4px"></a>').join('');
+  return '<div class="ch-msg ' + cls + '">' + (who ? '<small>' + who + ' · ' + chTime(m.at) + '</small>' : '') + (ph && m.text === '📷 Фото' ? '' : chEsc(m.text)) + ph + pay + '</div>';
 }
 async function openChat(uid, silent) {
   const el = document.getElementById('chats-body');
@@ -7001,29 +7093,23 @@ function renderChatCtl(d) {
   const drafts = (d.orders || []).filter((o) => o.status === 'draft');
   const dsig = drafts.map((o) => o.id).join(',');
   if (ctl.dataset.k === key) {
-    const sel = document.getElementById('ch-ord');
-    if (sel && sel.dataset.s !== dsig) fillChatOrders(drafts, dsig);
+    if (chatComposer) chatComposer.setDrafts(chatDraftOpts(drafts));
     return;
   }
   ctl.dataset.k = key;
   if (d.mine) {
-    ctl.innerHTML = '<div class="ch-input"><textarea id="ch-text" placeholder="Ответ клиенту"></textarea><button id="ch-send" type="button">Отправить</button></div>' +
-      '<div class="ch-price"><b>Новая цена</b><select id="ch-ord"></select><div class="ch-input"><input id="ch-amt" type="number" min="1" placeholder="Сумма, ₽"><button id="ch-setp" type="button">Зафиксировать</button></div>' +
-      '<b>Указание ассистенту (клиент не видит)</b><textarea id="ch-note" rows="2" placeholder="Что уточнить у клиента или что делать дальше"></textarea></div>' +
-      '<div class="ch-act"><button id="ch-ai" type="button" class="sec">Вернуть ассистенту</button></div>';
-    fillChatOrders(drafts, dsig);
-    document.getElementById('ch-send').onclick = sendChatMsg;
-    document.getElementById('ch-setp').onclick = setChatPrice;
-    document.getElementById('ch-ai').onclick = async () => {
-      if (!confirm('Вернуть чат ассистенту?')) return;
-      try {
-        const amt = Math.round(Number(document.getElementById('ch-amt').value));
-        const note = document.getElementById('ch-note').value;
-        if (amt > 0) await callMod('mod_set_price', { clientId: chatOpenId, amount: amt, orderId: document.getElementById('ch-ord').value || undefined });
-        await callMod('mod_back', { clientId: chatOpenId, note }); chatOpenId = null; loadChats(); renderChatList(); refreshChatsBadge(); }
-      catch (e) { alert('Не получилось: ' + e.message); }
-    };
-    document.getElementById('ch-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChatMsg(); });
+    ctl.innerHTML = '';
+    chatComposer = mcMount(ctl, {
+      base: SUPABASE_URL, key: SUPABASE_ANON_KEY,
+      send: async (t, urls) => { await callMod('mod_send', { clientId: chatOpenId, text: t, photos: urls }); await openChat(chatOpenId, true); },
+      price: async (amt, oid, note) => { await callMod('mod_set_price', { clientId: chatOpenId, amount: amt, orderId: oid, note }); await openChat(chatOpenId, true); },
+      back: async (note, amt, oid) => {
+        if (amt > 0) await callMod('mod_set_price', { clientId: chatOpenId, amount: amt, orderId: oid });
+        await callMod('mod_back', { clientId: chatOpenId, note });
+        chatOpenId = null; loadChats(); renderChatList(); refreshChatsBadge();
+      },
+    });
+    chatComposer.setDrafts(chatDraftOpts(drafts));
   } else if (d.claimedBy) {
     ctl.innerHTML = '<p class="count-hint">Этот чат ведёт ' + chEsc(d.claimedBy) + '. Если он отключится, чат можно будет забрать.</p>';
   } else {
@@ -7034,6 +7120,8 @@ function renderChatCtl(d) {
     };
   }
 }
+let chatComposer = null;
+function chatDraftOpts(drafts) { return drafts.map((o) => ({ id: o.id, label: 'Заказ ' + (o.number ? 'T-' + o.number : '') + ' — ' + (o.title || '') + (o.price ? ' (' + o.price + ' ₽)' : '') })); }
 function fillChatOrders(drafts, dsig) {
   const sel = document.getElementById('ch-ord'); if (!sel) return;
   const v = sel.value; sel.dataset.s = dsig;

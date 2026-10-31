@@ -714,6 +714,7 @@ body.embed .chat-screen { padding-top:6px; }
   }
   function adminBubble(m) {
     var d = add('admin', ''); d.innerHTML = esc(m.text).replace(/\n/g, '<br>');
+    if (m.photos && m.photos.length) { d.innerHTML = (m.text && m.text !== '📷 Фото' ? esc(m.text) + '<br>' : '') + m.photos.map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" style="max-width:100%;max-height:220px;border-radius:12px;margin-top:4px;display:block"></a>'; }).join(''); }
     if (m.pay) {
       var b = document.createElement('button'); b.type = 'button'; b.className = 'pay-btn'; b.textContent = 'Оплатить ' + m.pay.amount + ' ₽';
       b.onclick = function () { payFromChat(m.pay); };
@@ -748,7 +749,7 @@ body.embed .chat-screen { padding-top:6px; }
     (d.messages || []).forEach(function (r) {
       adminCursor = Math.max(adminCursor, r.id);
       if (r.draft && r.draft.type === 'sys') { add('sys', r.text); return; }
-      if (r.draft && r.draft.type === 'back') nudge = '[Система] Администратор передал диалог обратно ассистенту. ' + factsOf() + noteOf(r);
+      if (r.draft && r.draft.type === 'back') nudge = '[Система] Администратор передал диалог обратно ассистенту. Продолжи диалог с целью оформить заказ. ' + factsOf() + noteOf(r);
       if (r.draft && r.draft.type === 'price_set') {
         var amt = r.draft.amount;
         if (draft && draft.category) {
@@ -762,6 +763,7 @@ body.embed .chat-screen { padding-top:6px; }
         return;
       }
       var m = { role: 'admin', text: r.text };
+      if (r.draft && r.draft.type === 'photos') m.photos = r.draft.photos;
       if (r.draft && r.draft.type === 'pay_request') m.pay = { orderId: r.draft.orderId, number: r.draft.number, amount: r.draft.amount };
       messages.push(m); adminBubble(m); waitNoted = false;
     });
