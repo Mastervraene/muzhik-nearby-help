@@ -12391,6 +12391,9 @@ function syncChatHost() {
   chatHostEl.style.width = r.width + 'px';
   chatHostEl.style.height = r.height + 'px';
 }
+// Возврат с банка кнопкой «назад»: iOS поднимает страницу из кеша в «замороженном»
+// виде (сбитая высота, чат в состоянии «Переходим к оплате…») — перезагружаем.
+window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
 window.addEventListener('message', (e) => {
   if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
   if (e.data.t === 'muzhik-paid') {
