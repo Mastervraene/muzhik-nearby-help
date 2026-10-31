@@ -402,7 +402,18 @@ body.embed .chat-screen { padding-top:6px; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
   function toBottom() { log.scrollTop = log.scrollHeight; }
   function add(cls, text) { log.classList.remove('empty'); var d = document.createElement('div'); d.className = 'bubble ' + cls; d.textContent = text; log.appendChild(d); toBottom(); return d; }
-  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos, convId: convId, order: order, adminCursor: adminCursor, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() })); }
+  var srvT = null, srvCleared = false;
+  function srvSave() {
+    var S = getSess(); if (!S || S.guest) return;
+    clearTimeout(srvT);
+    srvT = setTimeout(function () {
+      if (order) { if (!srvCleared) { srvCleared = true; act({ action: 'draft_clear', userId: S.uid, sessionToken: S.tok }); } return; }
+      if (!draft) return;
+      srvCleared = false;
+      act({ action: 'draft_save', userId: S.uid, sessionToken: S.tok, state: { messages: messages.slice(-30), draft: draft, photos: orderPhotos, convId: convId, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() } });
+    }, 1500);
+  }
+  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos, convId: convId, order: order, adminCursor: adminCursor, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() })); srvSave(); }
   function grade() { send.classList.toggle('grade-3', Boolean(ta.value.trim())); }
   function grow() { if (!ta.value) { ta.style.height = ''; return; } ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
 
@@ -935,6 +946,12 @@ body.embed .chat-screen { padding-top:6px; }
     if (o) { title = (o.order && o.order.title) || (o.draft && o.draft.title) || 'без названия'; price = (o.order && o.order.price) || (o.draft && o.draft.price) || ''; }
     else {
       var S = getSess(); if (!S || S.guest) return;
+      var ds = await act({ action: 'draft_load', userId: S.uid, sessionToken: S.tok });
+      if (messages.length || order || draft) return;
+      if (ds && ds.ok && ds.state && ds.state.draft) { o = ds.state; title = (o.draft && o.draft.title) || 'без названия'; price = (o.draft && o.draft.price) || ''; }
+    }
+    if (!o) {
+      var S = getSess(); if (!S || S.guest) return;
       var d = await act({ action: 'my_drafts', userId: S.uid, sessionToken: S.tok });
       var dis = dismissedIds();
       srv = d && d.ok && (d.orders || []).filter(function (x) { return dis.indexOf(x.id) === -1; })[0];
@@ -955,7 +972,7 @@ body.embed .chat-screen { padding-top:6px; }
         order = { id: srv.id, number: srv.number, price: srv.amount, part: '', stage: 'unpaid', title: srv.title, sign: srv.sign || null }; save(); renderDraft(); payModal();
       }
     };
-    no.onclick = function () { c.remove(); if (!messages.length) log.classList.add('empty'); ls(PREV_KEY, null); if (srv) { var dd = dismissedIds(); dd.push(srv.id); ls(DISMISS_KEY, JSON.stringify(dd.slice(-30))); } };
+    no.onclick = function () { c.remove(); if (!messages.length) log.classList.add('empty'); ls(PREV_KEY, null); var S2 = getSess(); if (S2 && !S2.guest) act({ action: 'draft_clear', userId: S2.uid, sessionToken: S2.tok }); if (srv) { var dd = dismissedIds(); dd.push(srv.id); ls(DISMISS_KEY, JSON.stringify(dd.slice(-30))); } };
     c.appendChild(document.createElement('br')); c.appendChild(go); c.appendChild(no); toBottom();
   }
   document.getElementById('reset').onclick = function () { startNewChat(); };

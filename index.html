@@ -12250,6 +12250,9 @@ let pendingMasterIntent = false;
 try { if (localStorage.getItem('mnr_intent_master') === '1') pendingMasterIntent = true; } catch (e) { /* ignore */ }
 
 function render() {
+  try { return renderMain(); } finally { try { syncChatHost(); } catch (_e) {} }
+}
+function renderMain() {
   if (pendingMasterIntent && !state.booting && state.screen !== 'boot') {
     const u = typeof currentUser === 'function' ? currentUser() : null;
     if (u) {
