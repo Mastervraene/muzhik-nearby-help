@@ -56,6 +56,15 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .draft-more div { margin:3px 0; color:var(--gray-500); } .draft-more div b { color:var(--gray-900); font-weight:500; }
 .draft-btn { flex:none; padding:10px 16px; border:0; border-radius:999px; background:var(--gray-300); color:#fff; font-size:14px; font-weight:600; font-family:inherit; }
 .draft-btn.on { background:var(--accent); cursor:pointer; }
+.draft-chip { flex:1; min-width:0; height:36px; margin:0 2px; padding:0 12px; border:1px solid var(--gray-200); border-radius:999px; background:var(--gray-0); color:var(--gray-900); font-size:13px; font-weight:600; font-family:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+.draft-chip.on { background:var(--accent); border-color:transparent; color:#fff; }
+.composer-actions > .composer-tools:last-child { margin-left:0; }
+.sheet-ov { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-end; background:rgba(18,18,18,.4); }
+.sheet { width:100%; max-height:80vh; overflow-y:auto; background:var(--gray-0); border-radius:24px 24px 0 0; padding:10px 18px 24px; box-shadow:0 -6px 24px rgba(15,23,42,.2); animation:pop .22s ease-out both; }
+.sheet-handle { width:40px; height:4px; border-radius:2px; background:var(--gray-300); margin:0 auto 12px; }
+.sheet .draft-more { display:block; max-height:none; font-size:14px; margin:10px 0 14px; }
+.sheet .draft-more div { margin:6px 0; }
+.draft-big { width:100%; padding:14px 16px; font-size:16px; margin-top:8px; }
 .ph-row { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 0; }
 .ph-row:empty { display:none; }
 .ph { position:relative; width:44px; height:44px; border-radius:10px; background:var(--gray-100); overflow:visible; }
@@ -317,6 +326,7 @@ body.embed .chat-screen { padding-top:6px; }
       <input type="file" id="file" accept="image/*" multiple style="display:none" />
       <div class="composer-actions">
         <div class="composer-tools"><button type="button" class="tool-button ico" id="plus" title="Приложить фото" aria-label="Приложить фото"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/><path d="M8 15.2v-4.4a1 1 0 0 1 1-1h.6l.7-1.1h3.4l.7 1.1h.6a1 1 0 0 1 1 1v4.4a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1z"/><circle cx="12" cy="12.6" r="1.7"/></svg></button><button type="button" class="tool-button ico" id="loc" title="Указать местоположение" aria-label="Указать местоположение"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20c-3.6-3.3-6-6.2-6-9.6a6 6 0 0 1 12 0c0 3.4-2.4 6.3-6 9.6z"/><circle cx="12" cy="10.4" r="2.3"/></svg></button></div>
+        <button type="button" class="draft-chip" id="draftchip" hidden style="display:none"></button>
         <div class="composer-tools">
           <button type="button" class="tool-button" id="mic" hidden style="display:none" title="Голос в тесте недоступен"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8.5" y1="22" x2="15.5" y2="22"/></svg></button>
           <button type="button" class="send-button" id="send" aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
@@ -353,31 +363,55 @@ body.embed .chat-screen { padding-top:6px; }
   function grade() { send.classList.toggle('grade-3', Boolean(ta.value.trim())); }
   function grow() { if (!ta.value) { ta.style.height = ''; return; } ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
 
+  function closeSheet() { var o = document.getElementById('draftsheet'); if (o) o.remove(); }
+  function openSheet() {
+    if (!draftEl || document.getElementById('draftsheet')) return;
+    var o = document.createElement('div'); o.id = 'draftsheet'; o.className = 'sheet-ov';
+    var sh = document.createElement('div'); sh.className = 'sheet';
+    var hd = document.createElement('div'); hd.className = 'sheet-handle';
+    sh.appendChild(hd); sh.appendChild(draftEl); o.appendChild(sh); document.body.appendChild(o);
+    o.addEventListener('click', function (e) { if (e.target === o) closeSheet(); });
+    var y0 = null, dy = 0;
+    sh.addEventListener('touchstart', function (e) { if (sh.scrollTop > 0 && e.target.closest('.draft-more')) { y0 = null; return; } y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
+    sh.addEventListener('touchmove', function (e) { if (y0 === null) return; dy = e.touches[0].clientY - y0; sh.style.transform = 'translateY(' + dy + 'px)'; sh.style.opacity = String(Math.max(.3, 1 - Math.abs(dy) / 300)); }, { passive: true });
+    sh.addEventListener('touchend', function () {
+      if (y0 === null) return; y0 = null;
+      if (Math.abs(dy) > 70) { closeSheet(); return; }
+      sh.style.transition = 'transform .2s, opacity .2s'; sh.style.transform = ''; sh.style.opacity = '';
+    });
+  }
+  function setChip(label, on) {
+    var c = document.getElementById('draftchip'); if (!c) return;
+    if (label === null) { c.hidden = true; c.style.display = 'none'; return; }
+    c.hidden = false; c.style.display = ''; c.textContent = label; c.classList.toggle('on', !!on);
+  }
   function renderDraft() {
-    if (draftEl) { draftEl.remove(); draftEl = null; }
+    closeSheet();
+    draftEl = null;
     if (order && (order.stage === 'unpaid' || order.stage === 'part_wait')) {
-      draftEl = document.createElement('div'); draftEl.className = 'draft-card';
-      draftEl.innerHTML = '<div class="draft-head"><div class="draft-title"><small>' + (order.stage === 'unpaid' ? 'Черновик · не оплачен' : 'Оплачен · ждём деталь') + '</small><span>Заказ ' + (order.number ? 'T-' + order.number : '') + '</span></div>' +
-        '<button type="button" class="draft-btn on">' + (order.stage === 'unpaid' ? 'Оплатить' : 'Деталь получена') + '</button></div>';
-      draftEl.querySelector('button').onclick = order.stage === 'unpaid' ? payModal : partReceived;
-      log.parentNode.insertBefore(draftEl, document.querySelector('.composer-card')); toBottom();
+      draftEl = document.createElement('div'); draftEl.className = 'draft-body';
+      draftEl.innerHTML = '<div class="draft-head"><div class="draft-title"><small>' + (order.stage === 'unpaid' ? 'Черновик · не оплачен' : 'Оплачен · ждём деталь') + '</small><span>Заказ ' + (order.number ? 'T-' + order.number : '') + '</span></div></div>' +
+        '<button type="button" class="draft-btn on draft-big">' + (order.stage === 'unpaid' ? 'Оплатить' : 'Деталь получена') + '</button>';
+      var h = order.stage === 'unpaid' ? payModal : partReceived;
+      draftEl.querySelector('button').onclick = function () { closeSheet(); h(); };
+      setChip(order.stage === 'unpaid' ? 'Оплатить' : 'Деталь получена', true);
       return;
     }
-    if (!draft) return;
+    if (!draft) { setChip(null); return; }
     log.classList.remove('empty');
-    draftEl = document.createElement('div'); draftEl.className = 'draft-card';
-    draftEl.innerHTML = '<div class="draft-head"><div class="draft-title"><small>Черновик заказа · подробнее ▾</small><span>' + esc(draft.title || '—') + '</span></div>' +
-      '<button type="button" class="draft-btn ' + (draft.ready ? 'on' : '') + '">Создать заказ</button></div>' +
+    draftEl = document.createElement('div'); draftEl.className = 'draft-body';
+    draftEl.innerHTML = '<div class="draft-head"><div class="draft-title"><small>Черновик заказа</small><span style="white-space:normal">' + esc(draft.title || '—') + '</span></div></div>' +
       '<div class="draft-more">' +
       '<div>Категория: <b>' + esc(CAT[draft.category] || 'Другое') + '</b></div>' +
       '<div>Описание: <b>' + esc(draft.description || '—') + '</b></div>' +
       '<div>Адрес: <b>' + esc(draft.address || '—') + '</b></div>' +
       '<div>Деталь: <b>' + esc({ none: 'не нужна', have: 'уже есть', need: 'нужно купить' }[draft.part] || '—') + '</b></div>' +
-      '<div>Цена за работу: <b>' + (draft.price ? esc(draft.price) + ' ₽' : '—') + '</b></div></div>';
-    draftEl.querySelector('.draft-title').onclick = function () { draftEl.classList.toggle('open'); };
-    log.parentNode.insertBefore(draftEl, document.querySelector('.composer-card')); toBottom();
-    draftEl.querySelector('button').onclick = createTestOrder;
+      '<div>Цена за работу: <b>' + (draft.price ? esc(draft.price) + ' ₽' : '—') + '</b></div></div>' +
+      '<button type="button" class="draft-btn draft-big ' + (draft.ready ? 'on' : '') + '">Создать заказ</button>';
+    draftEl.querySelector('button').onclick = function () { closeSheet(); createTestOrder(); };
+    setChip(draft.ready ? 'Создать заказ' : 'Черновик' + (draft.price ? ' · ' + draft.price + ' ₽' : ''), draft.ready);
   }
+  var chipEl = document.getElementById('draftchip'); if (chipEl) chipEl.onclick = openSheet;
 
   async function geocode(addr) {
     try {
@@ -789,7 +823,7 @@ body.embed .chat-screen { padding-top:6px; }
   }
 
   function resetChat() {
-    messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; order = null; adminCursor = 0; waitNoted = false; locAddr = ''; locPoint = null; locSent = false; syncIcons(); var rs = getSess(); if (rs) act({ action: 'thread_reset', userId: rs.uid, sessionToken: rs.tok }); newConv(); renderPhotos(); ls(HIST_KEY, null);
+    closeSheet(); setChip(null); messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; order = null; adminCursor = 0; waitNoted = false; locAddr = ''; locPoint = null; locSent = false; syncIcons(); var rs = getSess(); if (rs) act({ action: 'thread_reset', userId: rs.uid, sessionToken: rs.tok }); newConv(); renderPhotos(); ls(HIST_KEY, null);
     document.querySelectorAll('.chat-screen .bubble,.chat-screen .draft-card').forEach(function (n) { n.remove(); });
     log.classList.add('empty'); ta.value = ''; grow(); grade();
   }
