@@ -713,7 +713,7 @@ body.embed .chat-screen { padding-top:6px; }
     });
   }
   function adminBubble(m) {
-    var d = add('admin', ''); d.innerHTML = '<small>Администратор</small>' + esc(m.text).replace(/\n/g, '<br>');
+    var d = add('admin', ''); d.innerHTML = esc(m.text).replace(/\n/g, '<br>');
     if (m.pay) {
       var b = document.createElement('button'); b.type = 'button'; b.className = 'pay-btn'; b.textContent = 'Оплатить ' + m.pay.amount + ' ₽';
       b.onclick = function () { payFromChat(m.pay); };
@@ -1041,7 +1041,14 @@ body.embed .chat-screen { padding-top:6px; }
   send.addEventListener('click', submit);
   ta.addEventListener('input', function () { grow(); grade(); });
   ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
-  restore(); grade(); setInterval(pollAdmin, 15000);
+  restore(); grade();
+  (function schedulePoll() {
+    setTimeout(async function () {
+      try { if (document.visibilityState === 'visible') await pollAdmin(); } catch (e) {}
+      schedulePoll();
+    }, waitNoted ? 3000 : 7000);
+  })();
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') pollAdmin(); });
   loadSavedAddr(); notifyLogin();
   if (!messages.length) offerPrevious();
   checkPaid();
