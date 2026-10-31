@@ -9664,7 +9664,10 @@ function renderTopbarNoUser() {
   `;
 }
 
+// Главный экран — чат с ассистентом (chat.html во фрейме поверх пустого слота). Старая форма доступна по ?classic=1 и мастерам.
+const CLASSIC_HOME = /[?&]classic=1(&|$)/.test(location.search);
 function renderHome() {
+  if (!CLASSIC_HOME && !state.specialistMode) return `<div class="screen home-screen" id="chat-slot"></div>`;
   const user = currentUser();
   if (!composerAddressValue.trim() && user?.district) composerAddressValue = user.district;
 
@@ -12263,7 +12266,7 @@ function render() {
   // .order-tip-active) — класс на <body>, а не инлайн-стиль внутри шапки,
   // чтобы работать с обычным затемнением (.onboarding-overlay) без вырезов
   // в самом затемняющем слое: просто обычный z-index-стекинг поверх него.
-  document.body.classList.toggle('order-tip-active', state.infoOverlay === 'order-created');
+  document.body.classList.toggle('order-tip-active', state.infoOverlay === 'order-created' || state.infoOverlay === 'order-paid');
   const app = document.getElementById('app');
   const prevScreenEl = app.querySelector('.screen');
   const preserveScroll = Boolean(prevScreenEl) && lastRenderedScreen === state.screen;
@@ -12314,7 +12317,7 @@ function render() {
         <div class="section-title">Вход по номеру телефона</div>
         <div class="chat-thread">${renderPhoneGate()}</div>
       </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
+      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'order-paid' ? renderOrderCreatedTipOverlay('paid') : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
       ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
@@ -12346,7 +12349,7 @@ function render() {
     ${state.screen === 'masterWizard' ? '' : renderTopbar()}
     ${content}
     ${state.toast ? `<div class="toast">${escapeHtml(state.toast)}</div>` : ''}
-    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
+    ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'order-paid' ? renderOrderCreatedTipOverlay('paid') : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
     ${renderPhotoViewerOverlay()}
     ${renderStoriesOverlay()}
     ${mapPickerOpenFor ? renderMapPickerOverlay() : ''}
@@ -12362,7 +12365,43 @@ function render() {
   }
 
   wireEvents();
+  syncChatHost();
 }
+
+let chatHostEl = null;
+// Фрейм с чатом живёт вне #app (иначе перерисовка сбрасывала бы его) и накрывает слот главного экрана.
+function syncChatHost() {
+  const slot = document.getElementById('chat-slot');
+  if (!slot) { if (chatHostEl) chatHostEl.style.display = 'none'; return; }
+  if (!chatHostEl) {
+    chatHostEl = document.createElement('iframe');
+    chatHostEl.id = 'chat-host';
+    chatHostEl.title = 'Помощник';
+    chatHostEl.src = '/chat.html?embed=1';
+    chatHostEl.setAttribute('allow', 'geolocation');
+    chatHostEl.style.cssText = 'position:fixed;border:0;z-index:1;background:#fff;';
+    document.body.appendChild(chatHostEl);
+    window.addEventListener('resize', syncChatHost);
+    window.addEventListener('orientationchange', syncChatHost);
+  }
+  const r = slot.getBoundingClientRect();
+  chatHostEl.style.display = 'block';
+  chatHostEl.style.left = r.left + 'px';
+  chatHostEl.style.top = r.top + 'px';
+  chatHostEl.style.width = r.width + 'px';
+  chatHostEl.style.height = r.height + 'px';
+}
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
+  if (e.data.t === 'muzhik-paid') {
+    state.infoOverlay = 'order-paid';
+    orderTipDontShowChecked = false;
+    avatarMenuOpen = true;
+    render();
+  } else if (e.data.t === 'muzhik-logged-in') {
+    if (!currentUser()) setTimeout(() => location.reload(), 800);
+  }
+});
 
 let pendingAttachments = [];
 
@@ -12965,20 +13004,21 @@ function renderTelegramOverlay() {
 // подсказка у аватарки теперь сама это объясняет; карточка сдвинута
 // пониже (.order-tip-card margin-top), чтобы раскрытое меню аккаунта её
 // не перекрывало.
-function renderOrderCreatedTipOverlay() {
+function renderOrderCreatedTipOverlay(kind) {
   const user = currentUser();
   if (!user) return '';
+  const paid = kind === 'paid';
   return `
     <div class="order-tip-hint-wrap" aria-hidden="true">
-      <div class="order-tip-hint"><span>Заказ и статус — тут</span></div>
+      <div class="order-tip-hint"><span>${paid ? 'Ваш заказ — тут' : 'Заказ и статус — тут'}</span></div>
     </div>
     <div class="onboarding-overlay order-tip-overlay" data-action="dismiss-onboarding"></div>
     <div class="order-tip-card-layer">
       <div class="onboarding-card order-tip-card" onclick="event.stopPropagation()">
         <div class="onboarding-body" style="padding-top: 28px;">
           <button type="button" class="onboarding-close" data-action="dismiss-onboarding" aria-label="Закрыть" style="position:absolute; top:14px; right:14px;">✕</button>
-          <h2>Заявка отправлена</h2>
-          <p>Заказ проверяется — обычно это быстро, мастера увидят его сразу после одобрения.</p>
+          <h2>${paid ? 'Оплата прошла успешно' : 'Заявка отправлена'}</h2>
+          <p>${paid ? 'Начинаем поиск мастера рядом с вами. Статус заказа появится в профиле: меню справа вверху, пункт «Заказы».' : 'Заказ проверяется — обычно это быстро, мастера увидят его сразу после одобрения.'}</p>
           ${renderTelegramLinkPrompt('сразу получать уведомления о статусе этого заказа')}
           <label style="display:flex; align-items:center; gap:8px; margin:14px 0 2px; font-size:13px; color:var(--gray-600, var(--gray-500)); cursor:pointer;">
             <input type="checkbox" data-action="toggle-order-tip-dont-show" ${orderTipDontShowChecked ? 'checked' : ''} style="width:17px; height:17px; flex-shrink:0; accent-color:var(--accent); margin:0;" />
