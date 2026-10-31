@@ -544,7 +544,7 @@ body.embed .chat-screen { padding-top:6px; }
       var d = await act({ action: 'order_make_payable', userId: S.uid, sessionToken: S.tok, orderId: order.id, sig: sg.sig, price: sg.price, category: sg.category, title: sg.title, convId: sg.convId });
       if (!d || !d.ok) { order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось подготовить оплату, попробуйте ещё раз.'); return; }
       if (!d.auto) {
-        order.stage = 'moderation'; save(); renderDraft(); notifyLogin();
+        order.stage = 'moderation'; save(); renderDraft(); notifyLogin(); toParent({ t: 'muzhik-created' });
         busy = false;
         startNewChat('Заказ отправлен администратору на проверку. Как только он подтвердит стоимость, мы пришлём уведомление с кнопкой оплаты. Если нужна ещё помощь, опишите новую задачу.');
         return;

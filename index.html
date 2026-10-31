@@ -10216,7 +10216,7 @@ function orderCardHtml(order, { viewer }) {
           ? `<p class="order-card-more-hint">Нажмите, чтобы смотреть подробней</p>`
           : typeof order.finalPrice === 'number'
           ? `<div class="order-meta"><span>Итого: ${order.finalPrice} ₽</span></div>`
-          : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
+          : viewer === 'customer' ? '' : `<div class="order-meta"><span>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</span></div>`
       }
       ${viewer === 'worker' ? workerCardFactsHtml(order) : (formatEstimatedTime(order.estimatedMinutes) ? `<div class="order-meta"><span>⏱ Займёт примерно ${escapeHtml(formatEstimatedTime(order.estimatedMinutes))}</span></div>` : '')}
       ${
@@ -11151,7 +11151,7 @@ function renderOrderDetail() {
           isCustomer
             ? order.isPrecedent
               ? ''
-              : `<p>Ориентир: ${order.estimate.min}–${order.estimate.max} ₽</p>`
+              : ''
             : renderWorkerPayoutBlock(order)
         }
         ${
@@ -12395,6 +12395,11 @@ window.addEventListener('message', (e) => {
   if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
   if (e.data.t === 'muzhik-paid') {
     state.infoOverlay = 'order-paid';
+    orderTipDontShowChecked = false;
+    avatarMenuOpen = true;
+    render();
+  } else if (e.data.t === 'muzhik-created') {
+    state.infoOverlay = 'order-created';
     orderTipDontShowChecked = false;
     avatarMenuOpen = true;
     render();
