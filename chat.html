@@ -795,10 +795,30 @@ body.embed .chat-screen { padding-top:6px; }
     var next = d && d.ready ? 'Заявка готова: скажи клиенту, что нужно нажать «Создать заказ» (оплата будет на следующем шаге, сам к оплате не переходи). ' : 'Спроси только то, чего ещё не хватает для заявки. ';
     return known + 'Имя и время визита до оплаты не спрашивай. ' + next + 'Клиент не должен остаться без понятного следующего шага.';
   }
+  var holdStart = 0, holdShown = false;
+  function isNightMsk() { var h = new Date(Date.now() + (new Date().getTimezoneOffset() + 180) * 60000).getHours(); return h >= 22 || h < 8; }
+  function holdNotice(night) {
+    var w = document.createElement('div'); w.id = 'holdbox'; w.className = 'bubble sys'; w.style.cssText = 'display:flex;flex-direction:column;gap:8px;align-items:center;';
+    var t = document.createElement('span'); t.textContent = night ? 'Наши мужики соблюдают режим и с 22:00 до 08:00 не работают. Мы постараемся кого-нибудь найти, но лучше продолжить утром.' : 'Похоже, все наши мужики заняты делами. Пожалуйста, ожидайте.'; w.appendChild(t);
+    var bt = document.createElement('button'); bt.type = 'button'; bt.textContent = 'Продолжить с ассистентом';
+    bt.style.cssText = 'border:0;border-radius:999px;padding:9px 16px;background:#2563eb;color:#fff;font:inherit;font-weight:600;cursor:pointer;';
+    bt.onclick = async function () {
+      var S = getSess(); if (!S) return; bt.disabled = true;
+      var r = await act({ action: 'client_resume', userId: S.uid, sessionToken: S.tok });
+      if (r && r.ok) { w.remove(); holdStart = 0; holdShown = false; autoTurn('[Система] Клиент решил продолжить с ассистентом, не дожидаясь администратора. ' + factsOf()); }
+      else { bt.disabled = false; if (r && r.error === 'admin_connected') w.remove(); }
+    };
+    w.appendChild(bt); log.appendChild(w); toBottom();
+  }
   async function pollAdmin() {
     var S = getSess(); if (!S || document.hidden || !convId) return;
     var d = await act({ action: 'poll', userId: S.uid, sessionToken: S.tok, afterId: adminCursor, convId: convId });
     if (!d || !d.ok) return;
+    if (d.awaiting && !d.claimed) {
+      if (!holdStart) holdStart = Date.now();
+      var nightNow = isNightMsk();
+      if (!holdShown && (nightNow || Date.now() - holdStart >= 60000)) { holdShown = true; holdNotice(nightNow); }
+    } else { holdStart = 0; holdShown = false; var hb0 = document.getElementById('holdbox'); if (hb0) hb0.remove(); }
     var nudge = '';
     (d.messages || []).forEach(function (r) {
       adminCursor = Math.max(adminCursor, r.id);
