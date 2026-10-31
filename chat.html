@@ -539,11 +539,14 @@ body.embed .chat-screen { padding-top:6px; }
   async function livePay() {
     var S = getSess(); if (!S || !order || busy) return;
     busy = true;
+    // Форма банка открывается в отдельном окне, чтобы сайт под ней не ломался (окно открываем сразу, пока есть «касание»)
+    var payWin = null; try { payWin = window.open('', '_blank'); } catch (e) { payWin = null; }
     try {
       var sg = order.sign || {};
       var d = await act({ action: 'order_make_payable', userId: S.uid, sessionToken: S.tok, orderId: order.id, sig: sg.sig, price: sg.price, category: sg.category, title: sg.title, convId: sg.convId });
-      if (!d || !d.ok) { order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось подготовить оплату, попробуйте ещё раз.'); return; }
+      if (!d || !d.ok) { try { if (payWin) payWin.close(); } catch (e) {} order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось подготовить оплату, попробуйте ещё раз.'); return; }
       if (!d.auto) {
+        try { if (payWin) payWin.close(); } catch (e) {}
         order.stage = 'moderation'; save(); renderDraft(); notifyLogin(); toParent({ t: 'muzhik-created' });
         busy = false;
         startNewChat('Заказ отправлен администратору на проверку. Как только он подтвердит стоимость, мы пришлём уведомление с кнопкой оплаты. Если нужна ещё помощь, опишите новую задачу.');
@@ -552,11 +555,18 @@ body.embed .chat-screen { padding-top:6px; }
       order.price = d.amount; order.stage = 'paying'; save(); renderDraft();
       add('sys', 'Переходим к оплате…');
       var pr = await fnCall('create-payment', { orderId: order.id, sessionToken: S.tok });
-      if (!pr || !pr.ok || !pr.paymentUrl) { order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось открыть форму оплаты. Нажмите «Оплатить» ещё раз.'); return; }
-      goTop(pr.paymentUrl);
+      if (!pr || !pr.ok || !pr.paymentUrl) { try { if (payWin) payWin.close(); } catch (e) {} order.stage = 'unpaid'; save(); renderDraft(); add('sys', 'Не получилось открыть форму оплаты. Нажмите «Оплатить» ещё раз.'); return; }
+      if (payWin) {
+        try { payWin.location.href = pr.paymentUrl; } catch (e) { goTop(pr.paymentUrl); return; }
+        add('sys', 'Форма оплаты открыта в отдельном окне. Когда закончите, закройте её и вернитесь сюда: мы сами проверим оплату.');
+        paySeen = false;
+      } else { goTop(pr.paymentUrl); }
     } finally { busy = false; }
   }
   // После возврата с формы банка: проверяем, дошла ли оплата (банк подтверждает на сервер чуть позже).
+  var paySeen = true;
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && order && order.stage === 'paying' && !paySeen && !busy) { paySeen = true; checkPaid(); } });
+  window.addEventListener('focus', function () { if (order && order.stage === 'paying' && !paySeen && !busy) { paySeen = true; checkPaid(); } });
   async function checkPaid() {
     if (!order || order.stage !== 'paying') return;
     var S = getSess(); if (!S) return;
@@ -792,6 +802,7 @@ body.embed .chat-screen { padding-top:6px; }
     archiveUnfinished();
     resetChat();
     if (note) add('sys', note);
+    if (!messages.length) log.classList.add('empty');
     offerPrevious();
   }
   function paintMessages() {
@@ -816,6 +827,7 @@ body.embed .chat-screen { padding-top:6px; }
     var c = add('ai', 'У вас есть незавершённый заказ: ' + title + (price ? ' · ' + price + ' ₽' : '') + '. Продолжим?');
     var go = document.createElement('button'); go.type = 'button'; go.className = 'sub-btn'; go.style.background = 'var(--accent)'; go.style.color = '#fff'; go.textContent = 'Продолжить';
     var no = document.createElement('button'); no.type = 'button'; no.className = 'sub-btn'; no.textContent = 'Не нужно';
+    log.classList.add('empty');
     go.onclick = function () {
       c.remove();
       if (o) {
@@ -826,7 +838,7 @@ body.embed .chat-screen { padding-top:6px; }
         order = { id: srv.id, number: srv.number, price: srv.amount, part: '', stage: 'unpaid', title: srv.title, sign: srv.sign || null }; save(); renderDraft(); payModal();
       }
     };
-    no.onclick = function () { c.remove(); ls(PREV_KEY, null); if (srv) { var dd = dismissedIds(); dd.push(srv.id); ls(DISMISS_KEY, JSON.stringify(dd.slice(-30))); } };
+    no.onclick = function () { c.remove(); if (!messages.length) log.classList.add('empty'); ls(PREV_KEY, null); if (srv) { var dd = dismissedIds(); dd.push(srv.id); ls(DISMISS_KEY, JSON.stringify(dd.slice(-30))); } };
     c.appendChild(document.createElement('br')); c.appendChild(go); c.appendChild(no); toBottom();
   }
   document.getElementById('reset').onclick = function () { startNewChat(); };
