@@ -888,8 +888,9 @@ body.embed .chat-screen { padding-top:6px; }
     try { var ps = await act({ action: 'price_sign', userId: S.uid, sessionToken: S.tok, convId: convId, category: draft.category, title: draft.title || '' }); if (ps && ps.ok && ps.price) { draft.price = ps.price; draft.sig = ps.sig; } } catch (e) {}
     var signInfo = { sig: draft.sig || '', price: draft.price || 0, category: draft.category, title: draft.title || '', convId: convId };
     var price = draft.price || 500;
+    var wish = String(draft.wishes || '').trim(); if (/^(нет|не надо|без пожеланий|-)\.?$/i.test(wish)) wish = '';
     var o = {
-      title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: '',
+      title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description + (wish ? '\n\nПожелания клиента: ' + wish : ''), desiredOutcome: wish,
       scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: orderPhotos, hasVoiceTranscript: false, voiceTranscript: '',
       exactLocation: loc || { lat: 0, lng: 0 }, district: A.full, houseNumberPublic: '', fullAddress: A.full,
       desiredDate: '', timeWindow: '', urgency: 'normal', customerBudget: null,
