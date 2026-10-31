@@ -228,6 +228,8 @@ async function send(){
 }
 async function back(){
   if(!confirm('Вернуть чат ассистенту? Он пропадёт из списка.'))return;
+  var amt=Math.round(Number((document.getElementById('amt')||{}).value));
+  if(amt>0){var pr=await act('mod_set_price',{clientId:cur,amount:amt,orderId:(document.getElementById('ord')||{}).value||undefined});if(!pr||!pr.ok)return toast('Цена не зафиксировалась, чат не возвращён');}
   var r=await act('mod_back',{clientId:cur,note:(document.getElementById('note')||{}).value||''});
   if(r&&r.ok){toast('Передано ассистенту');showList();}else toast('Не получилось');
 }

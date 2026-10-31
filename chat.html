@@ -727,7 +727,19 @@ body.embed .chat-screen { padding-top:6px; }
     if (order.stage === 'paid' || order.stage === 'part_wait' || order.stage === 'part_ready' || order.stage === 'done') { add('sys', 'Этот заказ уже оплачен.'); return; }
     save(); payModal();
   }
-  function noteOf(r) { var n = r.draft && r.draft.note; return n ? ' Указание администратора, выполни его: ' + n : ''; }
+  function noteOf(r) { var n = r.draft && r.draft.note; return n ? ' Указание администратора (выполни его, не нарушая остальных правил): ' + n : ''; }
+  function factsOf() {
+    var d = draft, f = [];
+    if (d) {
+      if (d.title) f.push('работа: ' + d.title);
+      if (d.description) f.push('описание: ' + d.description);
+      if (d.address) f.push('адрес: ' + d.address);
+      if (d.price) f.push('цена: ' + d.price + ' ₽');
+    }
+    var known = f.length ? 'Уже известно по черновику: ' + f.join('; ') + '. Всё это НЕ спрашивай заново. ' : '';
+    var next = d && d.ready ? 'Заявка готова: скажи клиенту, что нужно нажать «Создать заказ» (оплата будет на следующем шаге, сам к оплате не переходи). ' : 'Спроси только то, чего ещё не хватает для заявки. ';
+    return known + 'Имя и время визита до оплаты не спрашивай. ' + next + 'Клиент не должен остаться без понятного следующего шага.';
+  }
   async function pollAdmin() {
     var S = getSess(); if (!S || document.hidden || !convId) return;
     var d = await act({ action: 'poll', userId: S.uid, sessionToken: S.tok, afterId: adminCursor, convId: convId });
@@ -736,8 +748,18 @@ body.embed .chat-screen { padding-top:6px; }
     (d.messages || []).forEach(function (r) {
       adminCursor = Math.max(adminCursor, r.id);
       if (r.draft && r.draft.type === 'sys') { add('sys', r.text); return; }
-      if (r.draft && r.draft.type === 'back') nudge = '[Система] Администратор передал диалог обратно ассистенту. Продолжи по заказу: коротко скажи клиенту, на каком шаге он сейчас и что именно ему нужно сделать дальше (уточнить недостающее, проверить черновик и нажать «Создать заказ», оплатить и т. д.). Клиент не должен остаться без понятного следующего шага.' + noteOf(r);
-      if (r.draft && r.draft.type === 'price_set') nudge = '[Система] Администратор назначил стоимость работ: ' + r.draft.amount + ' ₽. Используй именно эту цену. Скажи клиенту, что цена согласована, и что ему нужно сделать дальше (проверить описание и нажать «Создать заказ»). Если не хватает данных для заказа, спроси только недостающее.' + noteOf(r);
+      if (r.draft && r.draft.type === 'back') nudge = '[Система] Администратор передал диалог обратно ассистенту. ' + factsOf() + noteOf(r);
+      if (r.draft && r.draft.type === 'price_set') {
+        var amt = r.draft.amount;
+        if (draft && draft.category) {
+          act({ action: 'price_sign', userId: S.uid, sessionToken: S.tok, convId: convId, category: draft.category, title: draft.title }).then(function (p) {
+            if (p && p.ok && p.price && draft) { draft.price = p.price; draft.sig = p.sig; save(); renderDraft(); add('sys', 'Стоимость работ обновлена: ' + p.price + ' ₽.'); }
+          });
+          if (r.draft.note) nudge = '[Система] Администратор назначил стоимость работ ' + amt + ' ₽ (в черновике она уже обновлена). ' + factsOf() + noteOf(r);
+          return;
+        }
+        nudge = '[Система] Администратор назначил стоимость работ ' + amt + ' ₽. Используй именно эту цену. ' + factsOf() + noteOf(r);
+      }
       var m = { role: 'admin', text: r.text };
       if (r.draft && r.draft.type === 'pay_request') m.pay = { orderId: r.draft.orderId, number: r.draft.number, amount: r.draft.amount };
       messages.push(m); adminBubble(m); waitNoted = false;
@@ -1004,7 +1026,8 @@ body.embed .chat-screen { padding-top:6px; }
         fail(err === 'rate_limited' ? 'Лимит сообщений на сегодня исчерпан.' : err === 'unauthorized' ? (S.guest ? 'Сессия обновилась — попробуйте ещё раз.' : 'Сессия устарела — войдите на сайте заново.') : 'Не получилось ответить.', t, mine, retry && !!mine && !(err === 'unauthorized' && !S.guest));
         messages.pop();
       } else {
-        if (data.waitingAdmin) {
+        if (data.waitingAdmin && data.adminActive) { waitNoted = false; }
+        else if (data.waitingAdmin) {
           if (!waitNoted) { add('sys', 'Сообщение передано администратору — ответ появится здесь. ' + (data.note || '')); waitNoted = true; }
         } else {
           waitNoted = false;

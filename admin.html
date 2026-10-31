@@ -523,7 +523,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .ch-msg small { display:block; font-size:10px; opacity:.7; margin-bottom:2px; }
 .ch-input { display:flex; gap:8px; } .ch-input textarea { flex:1; min-height:44px; font:inherit; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:10px; }
 .ch-input button, .ch-act button { font:inherit; font-size:13px; padding:8px 14px; border:0; border-radius:10px; background:#2563eb; color:#fff; cursor:pointer; }
-.ch-act { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; } .ch-act button.sec { background:#eee; color:#333; }
+.ch-price { margin-top:10px; display:flex; flex-direction:column; gap:6px; font-size:13px; } .ch-price select, .ch-price input, .ch-price textarea { font:inherit; font-size:14px; padding:8px; border:1px solid #ccc; border-radius:10px; width:100%; box-sizing:border-box; } .ch-act { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; } .ch-act button.sec { background:#eee; color:#333; }
 .ch-ov { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; align-items:center; justify-content:center; padding:16px; }
 .ch-ov > div { background:#fff; border-radius:14px; padding:16px; width:100%; max-width:340px; font-size:14px; }
 .ch-ov select, .ch-ov input { width:100%; box-sizing:border-box; margin:6px 0 10px; padding:9px; border:1px solid #ccc; border-radius:8px; font:inherit; }
@@ -6712,6 +6712,16 @@ async function loadData(opts) {
 let pricingData = { prices: [], instructions: [] };
 let pricingLoaded = false;
 
+async function callMod(action, extra) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/chat-actions`, {
+    method: 'POST', headers: sbHeaders(),
+    body: JSON.stringify(Object.assign({ action, adminToken: adminSessionToken }, extra || {})),
+  });
+  let data; try { data = await res.json(); } catch { data = null; }
+  if (!data) throw new Error(`HTTP ${res.status}`);
+  if (!data.ok) { const e = new Error(data.error === 'unauthorized' ? 'сессия истекла — войдите заново' : (data.detail || data.error || `HTTP ${res.status}`)); e.code = data.error; e.by = data.by; throw e; }
+  return data;
+}
 async function callAdminPricing(action, extra) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-pricing`, {
     method: 'POST',
@@ -6954,7 +6964,7 @@ async function showAllChats() {
   } catch (e) { el.innerHTML += '<p class="count-hint">Ошибка: ' + chEsc(e.message) + '</p>'; }
 }
 function chMsgHtml(m) {
-  const sys = m.role === 'user' && String(m.text).startsWith('[Система]');
+  const sys = (m.role === 'user' && String(m.text).startsWith('[Система]')) || (m.draft && m.draft.type === 'sys');
   const cls = sys ? 'sys' : (m.role === 'admin' ? 'admin' : m.role === 'assistant' ? 'assistant' : 'user');
   const who = sys ? '' : (m.role === 'admin' ? 'Администратор' : m.role === 'assistant' ? 'ИИ' : 'Клиент');
   const pay = m.draft && m.draft.type === 'pay_request' ? '<br>💳 Запрос оплаты: ' + chEsc(m.draft.amount) + ' ₽' : '';
@@ -6963,21 +6973,15 @@ function chMsgHtml(m) {
 async function openChat(uid, silent) {
   const el = document.getElementById('chats-body');
   try {
-    const d = await callAdminPricing('get_thread', { userId: uid });
+    const d = await callMod('mod_get', { clientId: uid });
     const first = chatOpenId !== uid || !document.getElementById('ch-msgs');
     chatOpenId = uid; chatThread = d;
     if (first) {
-      el.innerHTML = '<div class="ch-bar"><button id="ch-back" type="button">← Назад</button><b id="ch-title"></b><span id="ch-mode"></span></div><div class="ch-msgs" id="ch-msgs"></div>' +
-        '<div class="ch-input"><textarea id="ch-text" placeholder="Ответ клиенту"></textarea><button id="ch-send" type="button">Отправить</button></div>' +
-        '<div class="ch-act"><button id="ch-pay" type="button">💳 Отправить на оплату</button><button id="ch-ai" type="button" class="sec">Вернуть ассистенту</button></div><div id="ch-orders" class="count-hint" style="margin-top:10px"></div>';
+      el.innerHTML = '<div class="ch-bar"><button id="ch-back" type="button">← Назад</button><b id="ch-title"></b><span id="ch-mode"></span></div><div class="ch-msgs" id="ch-msgs"></div><div id="ch-ctl"></div><div id="ch-orders" class="count-hint"></div>';
       document.getElementById('ch-back').onclick = () => { chatOpenId = null; loadChats(); renderChatList(); refreshChatsBadge(); };
-      document.getElementById('ch-send').onclick = sendChatMsg;
-      document.getElementById('ch-pay').onclick = openPayRequest;
-      document.getElementById('ch-ai').onclick = async () => { if (!confirm('Вернуть клиента к ИИ-ассистенту?')) return; await callAdminPricing('back_to_ai', { userId: chatOpenId }); openChat(chatOpenId, true); };
-      document.getElementById('ch-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChatMsg(); });
     }
     document.getElementById('ch-title').textContent = (d.userName || 'Гость') + (d.phone ? ' · ' + d.phone : '');
-    document.getElementById('ch-mode').innerHTML = '<span class="ch-chip' + (d.awaiting ? ' await' : '') + '">' + (d.awaiting ? 'ждёт ответа' : d.mode === 'human' ? 'человек' : 'ИИ') + '</span>';
+    document.getElementById('ch-mode').innerHTML = '<span class="ch-chip' + (d.awaiting ? ' await' : '') + '">' + (d.mine ? 'вы ведёте чат' : d.claimedBy ? 'ведёт ' + chEsc(d.claimedBy) : d.awaiting ? 'ждёт ответа' : d.mode === 'human' ? 'человек' : 'ИИ') + '</span>';
     const lastId = d.messages.length ? d.messages[d.messages.length - 1].id : 0;
     if (first || lastId !== chatLastMsgId) {
       const box = document.getElementById('ch-msgs');
@@ -6986,14 +6990,69 @@ async function openChat(uid, silent) {
       if (atBottom) box.scrollTop = box.scrollHeight;
       chatLastMsgId = lastId;
     }
-    document.getElementById('ch-orders').innerHTML = 'Заказы клиента: ' + (d.orders.length ? d.orders.map((o) => (o.number ? 'T-' + chEsc(o.number) : '№') + ' ' + chEsc(o.title || '') + ' — ' + chEsc(o.status) + (o.price != null ? ', ' + chEsc(o.price) + ' ₽' : '')).join(' · ') : 'нет');
+    renderChatCtl(d);
+    document.getElementById('ch-orders').innerHTML = 'Заказы клиента: ' + (d.orders.length ? d.orders.map((o) => (o.number ? 'T-' + chEsc(o.number) : '№') + ' ' + chEsc(o.title || '') + ' — ' + chEsc(o.status) + (o.price != null ? ' · ' + chEsc(o.price) + ' ₽' : '')).join('; ') : 'нет');
     refreshChatsBadge();
   } catch (e) { if (!silent) alert('Не открылось: ' + e.message); }
+}
+function renderChatCtl(d) {
+  const ctl = document.getElementById('ch-ctl'); if (!ctl) return;
+  const key = d.mine ? 'm' : (d.claimedBy ? 'o:' + d.claimedBy : 'f');
+  const drafts = (d.orders || []).filter((o) => o.status === 'draft');
+  const dsig = drafts.map((o) => o.id).join(',');
+  if (ctl.dataset.k === key) {
+    const sel = document.getElementById('ch-ord');
+    if (sel && sel.dataset.s !== dsig) fillChatOrders(drafts, dsig);
+    return;
+  }
+  ctl.dataset.k = key;
+  if (d.mine) {
+    ctl.innerHTML = '<div class="ch-input"><textarea id="ch-text" placeholder="Ответ клиенту"></textarea><button id="ch-send" type="button">Отправить</button></div>' +
+      '<div class="ch-price"><b>Новая цена</b><select id="ch-ord"></select><div class="ch-input"><input id="ch-amt" type="number" min="1" placeholder="Сумма, ₽"><button id="ch-setp" type="button">Зафиксировать</button></div>' +
+      '<b>Указание ассистенту (клиент не видит)</b><textarea id="ch-note" rows="2" placeholder="Что уточнить у клиента или что делать дальше"></textarea></div>' +
+      '<div class="ch-act"><button id="ch-ai" type="button" class="sec">Вернуть ассистенту</button></div>';
+    fillChatOrders(drafts, dsig);
+    document.getElementById('ch-send').onclick = sendChatMsg;
+    document.getElementById('ch-setp').onclick = setChatPrice;
+    document.getElementById('ch-ai').onclick = async () => {
+      if (!confirm('Вернуть чат ассистенту?')) return;
+      try {
+        const amt = Math.round(Number(document.getElementById('ch-amt').value));
+        const note = document.getElementById('ch-note').value;
+        if (amt > 0) await callMod('mod_set_price', { clientId: chatOpenId, amount: amt, orderId: document.getElementById('ch-ord').value || undefined });
+        await callMod('mod_back', { clientId: chatOpenId, note }); chatOpenId = null; loadChats(); renderChatList(); refreshChatsBadge(); }
+      catch (e) { alert('Не получилось: ' + e.message); }
+    };
+    document.getElementById('ch-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChatMsg(); });
+  } else if (d.claimedBy) {
+    ctl.innerHTML = '<p class="count-hint">Этот чат ведёт ' + chEsc(d.claimedBy) + '. Если он отключится, чат можно будет забрать.</p>';
+  } else {
+    ctl.innerHTML = '<div class="ch-act"><button id="ch-claim" type="button">Подключиться к чату</button></div>';
+    document.getElementById('ch-claim').onclick = async () => {
+      try { await callMod('mod_claim', { clientId: chatOpenId }); } catch (e) { alert(e.code === 'taken' ? 'Уже подключился ' + (e.by || 'другой администратор') : 'Не получилось: ' + e.message); }
+      openChat(chatOpenId, true);
+    };
+  }
+}
+function fillChatOrders(drafts, dsig) {
+  const sel = document.getElementById('ch-ord'); if (!sel) return;
+  const v = sel.value; sel.dataset.s = dsig;
+  sel.innerHTML = drafts.map((o) => '<option value="' + chEsc(o.id) + '">Заказ ' + (o.number ? 'T-' + chEsc(o.number) : '') + ' — ' + chEsc(o.title || '') + (o.price ? ' (' + chEsc(o.price) + ' ₽)' : '') + '</option>').join('') + '<option value="">Без заказа — цена для ассистента</option>';
+  if (v) sel.value = v;
+}
+async function setChatPrice() {
+  const amount = Math.round(Number(document.getElementById('ch-amt').value));
+  if (!(amount > 0 && amount < 100000)) { alert('Введите сумму от 1 до 99 999 ₽'); return; }
+  try {
+    await callMod('mod_set_price', { clientId: chatOpenId, amount, orderId: document.getElementById('ch-ord').value || undefined, note: document.getElementById('ch-note').value });
+    document.getElementById('ch-amt').value = ''; document.getElementById('ch-note').value = '';
+    await openChat(chatOpenId, true);
+  } catch (e) { alert(e.code === 'order_not_draft' ? 'Заказ уже не черновик' : e.code === 'not_mine' ? 'Чат ведёт другой администратор' : 'Не получилось: ' + e.message); }
 }
 async function sendChatMsg() {
   const ta = document.getElementById('ch-text'); const text = ta.value.trim(); if (!text) return;
   ta.disabled = true;
-  try { await callAdminPricing('send', { userId: chatOpenId, text }); ta.value = ''; await openChat(chatOpenId, true); }
+  try { await callMod('mod_send', { clientId: chatOpenId, text }); ta.value = ''; await openChat(chatOpenId, true); }
   catch (e) { alert('Не отправилось: ' + e.message); }
   ta.disabled = false; ta.focus();
 }
