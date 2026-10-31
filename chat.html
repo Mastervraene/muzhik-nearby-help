@@ -727,17 +727,23 @@ body.embed .chat-screen { padding-top:6px; }
     if (order.stage === 'paid' || order.stage === 'part_wait' || order.stage === 'part_ready' || order.stage === 'done') { add('sys', 'Этот заказ уже оплачен.'); return; }
     save(); payModal();
   }
+  function noteOf(r) { var n = r.draft && r.draft.note; return n ? ' Указание администратора, выполни его: ' + n : ''; }
   async function pollAdmin() {
     var S = getSess(); if (!S || document.hidden || !convId) return;
     var d = await act({ action: 'poll', userId: S.uid, sessionToken: S.tok, afterId: adminCursor, convId: convId });
     if (!d || !d.ok) return;
+    var nudge = '';
     (d.messages || []).forEach(function (r) {
       adminCursor = Math.max(adminCursor, r.id);
+      if (r.draft && r.draft.type === 'sys') { add('sys', r.text); return; }
+      if (r.draft && r.draft.type === 'back') nudge = '[Система] Администратор передал диалог обратно ассистенту. Продолжи по заказу: коротко скажи клиенту, на каком шаге он сейчас и что именно ему нужно сделать дальше (уточнить недостающее, проверить черновик и нажать «Создать заказ», оплатить и т. д.). Клиент не должен остаться без понятного следующего шага.' + noteOf(r);
+      if (r.draft && r.draft.type === 'price_set') nudge = '[Система] Администратор назначил стоимость работ: ' + r.draft.amount + ' ₽. Используй именно эту цену. Скажи клиенту, что цена согласована, и что ему нужно сделать дальше (проверить описание и нажать «Создать заказ»). Если не хватает данных для заказа, спроси только недостающее.' + noteOf(r);
       var m = { role: 'admin', text: r.text };
       if (r.draft && r.draft.type === 'pay_request') m.pay = { orderId: r.draft.orderId, number: r.draft.number, amount: r.draft.amount };
       messages.push(m); adminBubble(m); waitNoted = false;
     });
     if ((d.messages || []).length) { save(); syncWait(); }
+    if (nudge) autoTurn(nudge);
   }
   function paidBanner() {
     if (EMBED) { toParent({ t: 'muzhik-paid' }); return; }

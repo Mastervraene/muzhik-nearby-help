@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Чаты">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/chats.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<title>Чаты — модератор</title>
+<style>
+:root{--ac:#2563eb;--g0:#f8fafc;--g1:#f1f5f9;--g2:#e2e8f0;--g5:#64748b;--g9:#0f172a;--ok:#16a34a;--okbg:#dcfce7;--warn:#b45309}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--g0);color:var(--g9);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;-webkit-tap-highlight-color:transparent}
+body{display:flex;justify-content:center}
+#app{width:100%;max-width:560px;height:100dvh;display:flex;flex-direction:column;background:#fff;position:relative;overflow:hidden}
+header{display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;border-bottom:1px solid var(--g2);background:#fff}
+header h1{font-size:17px;margin:0;flex:1}
+header .sub{font-size:12px;color:var(--g5);font-weight:400;display:block}
+.btn{border:0;border-radius:12px;padding:10px 14px;font-size:15px;font-weight:600;background:var(--ac);color:#fff;cursor:pointer}
+.btn.sec{background:var(--g1);color:var(--g9)}.btn.warn{background:#fee2e2;color:#b91c1c}.btn:disabled{opacity:.45}
+.ib{border:0;background:var(--g1);border-radius:50%;width:38px;height:38px;font-size:18px;cursor:pointer}
+.view{flex:1;min-height:0;display:flex;flex-direction:column}
+.list{flex:1;overflow-y:auto}
+.row{padding:12px 14px;border-bottom:1px solid var(--g1);cursor:pointer;display:flex;gap:10px;align-items:flex-start}
+.row:active{background:var(--g1)}
+.dot{width:10px;height:10px;border-radius:50%;background:#ef4444;margin-top:6px;flex:none}.dot.mine{background:var(--ok)}.dot.other{background:#94a3b8}
+.row b{font-size:15px}.row small{color:var(--g5);font-size:12px;margin-left:6px}
+.row p{margin:2px 0 0;color:var(--g5);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:440px}
+.tag{font-size:11px;border-radius:8px;padding:1px 7px;background:var(--g1);color:var(--g5);margin-left:6px}.tag.mine{background:var(--okbg);color:var(--ok)}
+.empty{padding:40px 20px;text-align:center;color:var(--g5)}
+.log{flex:1;min-height:0;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--g0)}
+.b{max-width:84%;padding:8px 12px;border-radius:16px;font-size:15px;line-height:1.35;white-space:pre-wrap;word-wrap:break-word}
+.b.user{align-self:flex-start;background:#fff;border:1px solid var(--g2)}
+.b.assistant{align-self:flex-end;background:var(--g1)}
+.b.admin{align-self:flex-end;background:var(--okbg)}
+.b.sys{align-self:center;background:none;color:var(--g5);font-size:12.5px;text-align:center}
+.who{font-size:11px;color:var(--g5);margin:6px 4px 0}
+.bar{border-top:1px solid var(--g2);padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#fff}
+.bar .r{display:flex;gap:8px}
+.bar textarea{flex:1;border:1px solid var(--g2);border-radius:14px;padding:10px 12px;font:inherit;font-size:16px;resize:none;max-height:120px}
+.bar .tools{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.info{padding:10px 14px;font-size:14px;background:#fffbeb;color:var(--warn);border-top:1px solid var(--g2)}
+.price{display:none;border-top:1px solid var(--g2);padding:10px 12px;background:var(--g0)}
+.price.on{display:block}.price label{font-size:12px;color:var(--g5);display:block;margin-bottom:4px}
+.price .r{display:flex;gap:8px;margin-bottom:8px}
+.price textarea{width:100%;border:1px solid var(--g2);border-radius:12px;padding:10px 12px;font:inherit;font-size:16px;resize:none;margin-bottom:2px}.price input,.price select{flex:1;min-width:0;border:1px solid var(--g2);border-radius:12px;padding:10px 12px;font-size:16px;background:#fff}
+.login{padding:40px 24px;display:flex;flex-direction:column;gap:12px;margin:auto 0}
+.login input{border:1px solid var(--g2);border-radius:12px;padding:13px;font-size:17px}
+.err{color:#b91c1c;font-size:14px;min-height:18px}
+#toast{position:absolute;left:50%;bottom:90px;transform:translateX(-50%);background:#0f172a;color:#fff;padding:9px 14px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.on{opacity:1}
+</style></head><body>
+<div id="app"></div><div id="toast"></div>
+<script>
+(function(){
+var URL_BASE='https://youyvbqdxuigvjciklfk.supabase.co';
+var ANON='sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
+var KEY='muzhik_mod_v1';
+var app=document.getElementById('app');
+var S=null,me='',threads=[],seen={},cur=null,curData=null,lastMsgId=0,timers={},sound=true,first=true;
+try{S=JSON.parse(localStorage.getItem(KEY)||'null');}catch(e){}
+function save(){try{if(S)localStorage.setItem(KEY,JSON.stringify(S));else localStorage.removeItem(KEY);}catch(e){}}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function toast(t){var el=document.getElementById('toast');el.textContent=t;el.className='on';setTimeout(function(){el.className='';},2200);}
+async function post(fn,body){
+  var r=await fetch(URL_BASE+'/functions/v1/'+fn,{method:'POST',headers:{'Content-Type':'application/json',apikey:ANON,Authorization:'Bearer '+ANON},body:JSON.stringify(body)});
+  return r.json().catch(function(){return null;});
+}
+function act(a,extra){return post('chat-actions',Object.assign({action:a,userId:S&&S.uid,sessionToken:S&&S.tok},extra||{}));}
+function stopTimers(){Object.keys(timers).forEach(function(k){clearInterval(timers[k]);});timers={};}
+function ago(iso){if(!iso)return '';var s=(Date.now()-new Date(iso).getTime())/1000;if(s<60)return 'сейчас';if(s<3600)return Math.floor(s/60)+' мин';if(s<86400)return Math.floor(s/3600)+' ч';return Math.floor(s/86400)+' д';}
+
+/* ---------- вход ---------- */
+function showLogin(err){
+  stopTimers();
+  app.innerHTML='<div class="login"><h1 style="margin:0">Чаты модератора</h1><div style="color:var(--g5)">Войдите по номеру телефона и паролю от аккаунта</div><input id="ph" type="tel" inputmode="tel" placeholder="+7 900 000 00 00" autocomplete="username"><input id="pw" type="password" placeholder="Пароль" autocomplete="current-password"><div class="err" id="er">'+esc(err||'')+'</div><button class="btn" id="go">Войти</button></div>';
+  var go=document.getElementById('go');
+  async function doLogin(){
+    var d=document.getElementById('ph').value.replace(/\D/g,'');if(d.length===10)d='7'+d;if(d.length===11&&d[0]==='8')d='7'+d.slice(1);
+    var pw=document.getElementById('pw').value;var er=document.getElementById('er');
+    if(d.length!==11||!pw){er.textContent='Введите номер и пароль';return;}
+    go.disabled=true;er.textContent='';
+    var r=await post('login-with-password',{phone:d,password:pw});
+    go.disabled=false;
+    var uid=r&&(r.userId||r.user_id||(r.user&&r.user.id));
+    if(!r||!r.ok||!r.token||!uid){er.textContent=(r&&r.error==='invalid_credentials')?'Неверный номер или пароль':'Не удалось войти';return;}
+    S={uid:uid,tok:r.token};
+    var t=await act('mod_list');
+    if(!t||!t.ok){S=null;er.textContent='У этого аккаунта нет доступа модератора';return;}
+    save();showList();
+  }
+  go.onclick=doLogin;document.getElementById('pw').onkeydown=function(e){if(e.key==='Enter')doLogin();};
+}
+function logout(){S=null;save();cur=null;showLogin();}
+
+/* ---------- уведомления ---------- */
+function beep(){
+  if(!sound)return;
+  try{var c=new (window.AudioContext||window.webkitAudioContext)();[0,.18].forEach(function(t,i){var o=c.createOscillator(),g=c.createGain();o.frequency.value=i?1100:800;g.gain.value=.15;o.connect(g);g.connect(c.destination);o.start(c.currentTime+t);o.stop(c.currentTime+t+.14);});}catch(e){}
+  try{navigator.vibrate&&navigator.vibrate([200,100,200]);}catch(e){}
+}
+function notify(n){
+  beep();
+  try{if('Notification' in window&&Notification.permission==='granted'&&document.hidden)new Notification('Нужен администратор',{body:n.userName||n.phone||'Новый чат',tag:'mod-'+n.userId});}catch(e){}
+}
+function updateTitle(){var n=threads.filter(function(t){return t.awaiting&&!t.claimedBy;}).length;document.title=(n?'('+n+') ':'')+'Чаты — модератор';try{navigator.setAppBadge&&(n?navigator.setAppBadge(n):navigator.clearAppBadge());}catch(e){}}
+
+/* ---------- список ---------- */
+async function loadList(){
+  var d=await act('mod_list');
+  if(!d)return;
+  if(!d.ok){if(d.error==='forbidden'||d.error==='unauthorized'||d.error==='bad_session'||d.error==='invalid_session')return logout();return;}
+  me=d.me||'';threads=d.threads||[];
+  threads.forEach(function(t){
+    var need=t.awaiting&&!t.claimedBy;
+    if(need&&!seen[t.userId]&&!first)notify(t);
+    seen[t.userId]=need?1:0;
+    if(!need)seen[t.userId]=0;
+  });
+  first=false;updateTitle();
+  if(!cur)renderList();
+}
+function renderList(){
+  var el=document.getElementById('list');if(!el)return;
+  if(!threads.length){el.innerHTML='<div class="empty">Сейчас нет чатов, где нужен администратор.<br>Новые появятся здесь сами.</div>';return;}
+  var order=threads.slice().sort(function(a,b){var ra=a.mine?0:(a.claimedBy?2:1),rb=b.mine?0:(b.claimedBy?2:1);return ra-rb||String(b.lastAt).localeCompare(String(a.lastAt));});
+  el.innerHTML=order.map(function(t){
+    var cls=t.mine?'mine':(t.claimedBy?'other':'');
+    var tag=t.mine?'<span class="tag mine">ваш</span>':(t.claimedBy?'<span class="tag">ведёт '+esc(t.claimedBy)+'</span>':'');
+    return '<div class="row" data-u="'+esc(t.userId)+'"><span class="dot '+cls+'"></span><div style="min-width:0"><b>'+esc(t.userName||t.phone||'Клиент')+'</b>'+tag+'<small>'+ago(t.lastAt)+'</small><p>'+esc((t.lastRole==='user'?'':'↳ ')+(t.lastText||''))+'</p></div></div>';
+  }).join('');
+  [].forEach.call(el.querySelectorAll('.row'),function(r){r.onclick=function(){openChat(r.getAttribute('data-u'));};});
+}
+function showList(){
+  stopTimers();cur=null;curData=null;
+  app.innerHTML='<header><h1>Нужен администратор<span class="sub" id="sub"></span></h1><button class="ib" id="snd" title="Звук">'+(sound?'🔔':'🔕')+'</button><button class="ib" id="nt" title="Уведомления">📣</button><button class="ib" id="out" title="Выйти">⎋</button></header><div class="view"><div class="list" id="list"></div></div>';
+  document.getElementById('sub').textContent=me?'Вы: '+me:'';
+  document.getElementById('snd').onclick=function(){sound=!sound;this.textContent=sound?'🔔':'🔕';if(sound)beep();};
+  document.getElementById('nt').onclick=function(){if(!('Notification' in window))return toast('Браузер не поддерживает уведомления');Notification.requestPermission().then(function(p){toast(p==='granted'?'Уведомления включены':'Уведомления запрещены');});};
+  document.getElementById('out').onclick=function(){if(confirm('Выйти из аккаунта?'))logout();};
+  renderList();loadList();
+  timers.list=setInterval(function(){if(!document.hidden)loadList();},4000);
+}
+
+/* ---------- чат ---------- */
+async function openChat(uid){
+  stopTimers();cur=uid;curData=null;lastMsgId=0;
+  var t=threads.filter(function(x){return x.userId===uid;})[0]||{};
+  app.innerHTML='<header><button class="ib" id="bk">←</button><h1 id="ttl">'+esc(t.userName||t.phone||'Клиент')+'<span class="sub" id="csub"></span></h1></header>'+
+  '<div class="view"><div class="log" id="log"></div><div id="info"></div>'+
+  '<div class="price" id="price"><label>Указание ассистенту (клиент не видит)</label><textarea id="note" rows="2" placeholder="Что уточнить у клиента или что делать дальше"></textarea><label style="margin-top:8px">Новая цена для клиента, ₽</label><div class="r"><select id="ord"></select></div><div class="r"><input id="amt" type="number" inputmode="numeric" placeholder="Сумма, ₽"><button class="btn" id="setp">Зафиксировать</button></div></div>'+
+  '<div class="bar" id="bar"></div></div>';
+  document.getElementById('bk').onclick=function(){showList();};
+  await refreshChat(true);
+  timers.chat=setInterval(function(){if(!document.hidden)refreshChat(false);},3000);
+}
+function renderMsgs(d,force){
+  var log=document.getElementById('log');if(!log)return;
+  var ms=(d.messages||[]).filter(function(m){return !/^\[Система\]/.test(m.text||'');});
+  var lastId=ms.length?ms[ms.length-1].id:0;
+  if(!force&&lastId===lastMsgId)return;
+  var atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;lastMsgId=lastId;
+  log.innerHTML=ms.map(function(m){
+    var dt=m.draft||{};
+    if(dt.type==='sys')return '<div class="b sys">'+esc(m.text)+'</div>';
+    if(m.role==='user'){var tx=String(m.text||'').replace(/\s*\[клиент указал адрес[^\]]*\]/,'');return '<div class="b user">'+esc(tx)+'</div>';}
+    return '<div class="b '+(m.role==='admin'?'admin':'assistant')+'">'+esc(m.text)+'</div>';
+  }).join('')||'<div class="empty">Сообщений нет</div>';
+  if(force||atBottom)log.scrollTop=log.scrollHeight;
+}
+function renderBar(d){
+  var bar=document.getElementById('bar'),info=document.getElementById('info'),price=document.getElementById('price');if(!bar)return;
+  var csub=document.getElementById('csub');
+  if(csub)csub.textContent=(d.phone||'')+(d.mine?' · ваш чат':(d.claimedBy?' · ведёт '+d.claimedBy:''));
+  var key=(d.mine?'m':(d.claimedBy?'o':'f'));
+  if(bar.getAttribute('data-k')===key){fillOrders(d);return;}
+  bar.setAttribute('data-k',key);
+  if(d.mine){
+    info.innerHTML='';price.classList.add('on');
+    bar.innerHTML='<div class="tools"><button class="btn sec" id="bkai">Вернуть ассистенту</button></div><div class="r"><textarea id="tx" rows="1" placeholder="Сообщение клиенту"></textarea><button class="btn" id="sd">➤</button></div>';
+    var tx=document.getElementById('tx');
+    tx.oninput=function(){tx.style.height='auto';tx.style.height=Math.min(120,tx.scrollHeight)+'px';};
+    document.getElementById('sd').onclick=send;
+    document.getElementById('bkai').onclick=back;
+    fillOrders(d,true);
+  }else if(d.claimedBy){
+    price.classList.remove('on');info.innerHTML='<div class="info">Этот чат ведёт '+esc(d.claimedBy)+'. Если он отключится, чат можно будет забрать.</div>';
+    bar.innerHTML='';
+  }else{
+    price.classList.remove('on');info.innerHTML='';
+    bar.innerHTML='<button class="btn" id="cl" style="width:100%">Подключиться к чату</button>';
+    document.getElementById('cl').onclick=claim;
+  }
+}
+function fillOrders(d,force){
+  var sel=document.getElementById('ord');if(!sel)return;
+  var drafts=(d.orders||[]).filter(function(o){return o.status==='draft';});
+  var sig=drafts.map(function(o){return o.id;}).join(',');
+  if(!force&&sel.getAttribute('data-s')===sig)return;
+  sel.setAttribute('data-s',sig);var v=sel.value;
+  sel.innerHTML=drafts.map(function(o){return '<option value="'+esc(o.id)+'">Заказ №'+esc(o.number)+' — '+esc(o.title||'')+(o.price?' ('+o.price+' ₽)':'')+'</option>';}).join('')+'<option value="">Без заказа — цена для ассистента</option>';
+  if(v)sel.value=v;
+}
+async function refreshChat(force){
+  var uid=cur;if(!uid)return;
+  var d=await act('mod_get',{clientId:uid});
+  if(uid!==cur||!d)return;
+  if(!d.ok){if(d.error==='forbidden'||d.error==='invalid_session'||d.error==='bad_session')logout();return;}
+  curData=d;renderMsgs(d,force);renderBar(d);
+}
+async function claim(){
+  var b=document.getElementById('cl');if(b)b.disabled=true;
+  var r=await act('mod_claim',{clientId:cur});
+  if(r&&!r.ok&&r.error==='taken')toast('Уже подключился '+(r.by||'другой администратор'));
+  else if(!r||!r.ok)toast('Не получилось подключиться');
+  document.getElementById('bar').removeAttribute('data-k');refreshChat(true);
+}
+async function send(){
+  var tx=document.getElementById('tx'),v=tx.value.trim();if(!v)return;
+  var sd=document.getElementById('sd');sd.disabled=true;
+  var r=await act('mod_send',{clientId:cur,text:v});sd.disabled=false;
+  if(r&&r.ok){tx.value='';tx.style.height='auto';refreshChat(true);}
+  else{toast(r&&r.error==='not_mine'?'Чат уже ведёт другой администратор':'Не отправилось');document.getElementById('bar').removeAttribute('data-k');refreshChat(true);}
+}
+async function back(){
+  if(!confirm('Вернуть чат ассистенту? Он пропадёт из списка.'))return;
+  var r=await act('mod_back',{clientId:cur,note:(document.getElementById('note')||{}).value||''});
+  if(r&&r.ok){toast('Передано ассистенту');showList();}else toast('Не получилось');
+}
+document.addEventListener('click',function(e){
+  if(e.target&&e.target.id==='setp'){setPrice();}
+});
+async function setPrice(){
+  var amt=Math.round(Number(document.getElementById('amt').value));
+  if(!(amt>0&&amt<100000))return toast('Введите сумму от 1 до 99 999 ₽');
+  var oid=document.getElementById('ord').value;
+  var b=document.getElementById('setp');b.disabled=true;
+  var r=await act('mod_set_price',{clientId:cur,amount:amt,orderId:oid||undefined,note:(document.getElementById('note')||{}).value||''});
+  b.disabled=false;
+  if(r&&r.ok){document.getElementById('amt').value='';document.getElementById('note').value='';toast('Цена зафиксирована: '+amt+' ₽');refreshChat(true);}
+  else toast({order_not_draft:'Заказ уже не черновик',not_mine:'Чат ведёт другой администратор',bad_amount:'Неверная сумма'}[r&&r.error]||'Не получилось');
+}
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&S){if(cur)refreshChat(false);else loadList();}});
+if(S&&S.uid&&S.tok){act('mod_list').then(function(d){if(d&&d.ok){me=d.me||'';showList();}else showLogin();});}else showLogin();
+})();
+</script></body></html>

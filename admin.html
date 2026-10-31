@@ -689,6 +689,38 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     </div>
   </div>
 
+  <div class="admin-modal-overlay" id="chats-sort-overlay" style="display:none;">
+    <div class="admin-modal-card" onclick="event.stopPropagation()">
+      <div class="admin-modal-head">
+        <h2 class="heading">Сортировка чатов</h2>
+        <button type="button" class="admin-modal-close" id="chats-sort-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="admin-modal-body">
+        <p class="form-section-label" style="margin-top:0;">Показывать (можно несколько; ничего не выбрано — все)</p>
+        <div class="toggle-pills" id="chats-sort-statuses"></div>
+        <div class="field-sm" style="margin-top:16px;">
+          <label>Порядок</label>
+          <select id="chats-sort-order">
+            <option value="new">Сначала новые</option>
+            <option value="old">Сначала старые</option>
+            <option value="await">Сначала ждущие ответа</option>
+            <option value="unread">Сначала непрочитанные</option>
+            <option value="name">По имени клиента</option>
+          </select>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:16px; font-size:13px; color:var(--gray-700); cursor:pointer;">
+          <input type="checkbox" id="chats-sort-all" />
+          Показывать все переписки, в том числе завершённые ИИ
+        </label>
+      </div>
+      <div class="admin-modal-actions">
+        <button type="button" class="btn-sm ghost" id="chats-sort-reset">Сбросить всё</button>
+        <button type="button" class="btn-sm ghost" id="chats-sort-refresh">Обновить</button>
+        <button type="button" class="btn-sm primary" id="chats-sort-done">Готово</button>
+      </div>
+    </div>
+  </div>
+
   <div class="admin-modal-overlay" id="orders-sort-overlay" style="display:none;" data-action="close-orders-sort">
     <div class="admin-modal-card" onclick="event.stopPropagation()">
       <div class="admin-modal-head">
@@ -6810,6 +6842,7 @@ async function loadPricing() {
 
 
 // ===== Вкладка «Чаты» =====
+let chatStatusFilters = new Set(), chatShowAll = false, chatOrder = 'new', chatConvs = [];
 let chatThreads = [], chatOpenId = null, chatFilter = 'all', chatSortAsc = false, chatPoll = null, chatThread = null, chatLastMsgId = 0;
 function chEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function chTime(iso) { return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
@@ -6834,24 +6867,68 @@ async function loadChats(silent) {
   try {
     const d = await callAdminPricing('list_threads');
     chatThreads = d.threads || [];
+    if (chatShowAll) { try { const d2 = await callAdminPricing('list_chats'); chatConvs = d2.chats || []; } catch (e) { /* список переписок не критичен */ } } else chatConvs = [];
     if (!chatOpenId) renderChatList();
   } catch (e) { if (!silent) el.innerHTML = '<p class="count-hint">Ошибка: ' + chEsc(e.message) + '</p>'; }
 }
+function chatMatches(t) {
+  if (!chatStatusFilters.size) return true;
+  const f = chatStatusFilters;
+  return (f.has('await') && t.awaiting) || (f.has('unread') && t.unread) || (f.has('read') && !t.unread) || (f.has('human') && t.mode === 'human') || (f.has('ai') && t.mode !== 'human');
+}
+function chatOrderCmp(a, b) {
+  const ta = new Date(a.lastAt || 0).getTime(), tb = new Date(b.lastAt || 0).getTime();
+  if (chatOrder === 'old') return ta - tb;
+  if (chatOrder === 'name') return String(a.userName || 'Я').localeCompare(String(b.userName || 'Я'), 'ru') || tb - ta;
+  if (chatOrder === 'await') return (Number(!!b.awaiting) - Number(!!a.awaiting)) || tb - ta;
+  if (chatOrder === 'unread') return (Number(!!b.unread) - Number(!!a.unread)) || tb - ta;
+  return tb - ta;
+}
+function chatSortActive() { return chatStatusFilters.size > 0 || chatShowAll || chatOrder !== 'new'; }
 function renderChatList() {
   const el = document.getElementById('chats-body');
-  let list = chatThreads.filter((t) => chatFilter === 'all' || (chatFilter === 'await' && t.awaiting) || (chatFilter === 'unread' && t.unread) || (chatFilter === 'read' && !t.unread));
-  list = list.slice().sort((a, b) => (chatSortAsc ? 1 : -1) * (new Date(a.lastAt) - new Date(b.lastAt)));
-  const opt = (v, t) => '<option value="' + v + '"' + (chatFilter === v ? ' selected' : '') + '>' + t + '</option>';
-  el.innerHTML = '<div class="ch-bar"><select id="ch-filter">' + opt('all', 'Все') + opt('await', 'Ждут ответа') + opt('unread', 'Не прочитано') + opt('read', 'Прочитано') + '</select>' +
-    '<button id="ch-sort" type="button">' + (chatSortAsc ? '↑ Старые сверху' : '↓ Новые сверху') + '</button><button id="ch-refresh" type="button">Обновить</button><button id="ch-all" type="button">Все переписки</button></div>' +
-    (list.length ? list.map((t) => '<div class="ch-row ' + (t.awaiting ? 'await' : t.unread ? 'unread' : '') + '" data-uid="' + chEsc(t.userId) + '"><span class="ch-dot"></span><div class="ch-main"><div class="ch-name">' + chEsc(t.userName || 'Гость') + (t.phone ? ' · ' + chEsc(t.phone) : '') +
-      (t.awaiting ? '<span class="ch-chip await">ждёт ответа</span>' : '') + '<span class="ch-chip">' + (t.mode === 'human' ? 'человек' : 'ИИ') + '</span></div><div class="ch-last">' + chEsc(t.lastText) + '</div></div><div class="ch-meta">' + chTime(t.lastAt) + '</div></div>').join('') : '<p class="count-hint">Чатов нет.</p>');
-  document.getElementById('ch-filter').onchange = (e) => { chatFilter = e.target.value; renderChatList(); };
-  document.getElementById('ch-sort').onclick = () => { chatSortAsc = !chatSortAsc; renderChatList(); };
-  document.getElementById('ch-refresh').onclick = () => loadChats();
-  document.getElementById('ch-all').onclick = showAllChats;
-  el.querySelectorAll('.ch-row').forEach((r) => { r.onclick = () => openChat(r.dataset.uid); });
+  const list = chatThreads.filter(chatMatches).slice().sort(chatOrderCmp);
+  const known = new Set(chatThreads.map((t) => t.userId));
+  const convs = chatShowAll && !chatStatusFilters.size ? chatConvs.filter((c) => !c.userId || !known.has(c.userId)).slice().sort(chatOrderCmp) : [];
+  const total = list.length + convs.length;
+  el.innerHTML = '<div class="ch-bar"><button type="button" class="sort-btn' + (chatSortActive() ? ' active' : '') + '" id="ch-sort-toggle" aria-label="Сортировка" title="Сортировка">' + ICON_SORT + '<span class="sort-btn-badge" style="' + (total ? '' : 'display:none;') + '">' + total + '</span></button></div>' +
+    (total ? list.map((t) => '<div class="ch-row ' + (t.awaiting ? 'await' : t.unread ? 'unread' : '') + '" data-uid="' + chEsc(t.userId) + '"><span class="ch-dot"></span><div class="ch-main"><div class="ch-name">' + chEsc(t.userName || 'Гость') + (t.phone ? ' · ' + chEsc(t.phone) : '') +
+      (t.awaiting ? '<span class="ch-chip await">ждёт ответа</span>' : '') + '<span class="ch-chip">' + (t.mode === 'human' ? 'человек' : 'ИИ') + '</span></div><div class="ch-last">' + chEsc(t.lastText) + '</div></div><div class="ch-meta">' + chTime(t.lastAt) + '</div></div>').join('') +
+      convs.map((c, i) => '<div class="ch-row conv" data-i="' + i + '" style="flex-wrap:wrap"><div class="ch-main"><div class="ch-name">' + chEsc(c.title || 'Без названия') + '<span class="ch-chip">' + chEsc(c.userName || 'Гость') + '</span><span class="ch-chip">завершён ИИ</span></div></div><div class="ch-meta">' + chTime(c.lastAt) + '</div><div class="ca-det" style="display:none;width:100%"></div></div>').join('') : '<p class="count-hint">Чатов нет.</p>');
+  document.getElementById('ch-sort-toggle').onclick = openChatSortModal;
+  el.querySelectorAll('.ch-row:not(.conv)').forEach((r) => { r.onclick = () => openChat(r.dataset.uid); });
+  el.querySelectorAll('.ch-row.conv').forEach((r) => { r.onclick = (ev) => {
+    if (ev.target.closest('.ca-det')) return;
+    const det = r.querySelector('.ca-det'); const c = convs[Number(r.dataset.i)];
+    if (det.style.display === 'none') {
+      det.innerHTML = (c.messages || []).map((m) => '<div class="ch-msg ' + (m.role === 'user' ? 'user' : m.role === 'admin' ? 'admin' : 'assistant') + '">' + chEsc(m.text) + '</div>').join('') +
+        (c.userId ? '<button type="button" class="ca-open" style="margin-top:8px">Открыть чат клиента</button>' : '');
+      det.style.display = '';
+      const ob = det.querySelector('.ca-open'); if (ob) ob.onclick = () => openChat(c.userId);
+    } else det.style.display = 'none';
+  }; });
 }
+function openChatSortModal() { document.getElementById('chats-sort-overlay').style.display = 'flex'; renderChatSortModal(); }
+function closeChatSortModal() { document.getElementById('chats-sort-overlay').style.display = 'none'; }
+function renderChatSortModal() {
+  const pills = [['await', 'Ждут ответа'], ['unread', 'Не прочитано'], ['read', 'Прочитано'], ['human', 'Ведёт человек'], ['ai', 'Ведёт ИИ']];
+  const cnt = (k) => chatThreads.filter((t) => (k === 'await' && t.awaiting) || (k === 'unread' && t.unread) || (k === 'read' && !t.unread) || (k === 'human' && t.mode === 'human') || (k === 'ai' && t.mode !== 'human')).length;
+  const box = document.getElementById('chats-sort-statuses');
+  box.innerHTML = pills.map(([k, t]) => '<button type="button" class="toggle-pill ' + (chatStatusFilters.has(k) ? 'active' : '') + '" data-k="' + k + '">' + t + '<span class="toggle-pill-count"> ' + cnt(k) + '</span></button>').join('');
+  box.querySelectorAll('[data-k]').forEach((b) => b.addEventListener('click', () => { chatStatusFilters.has(b.dataset.k) ? chatStatusFilters.delete(b.dataset.k) : chatStatusFilters.add(b.dataset.k); renderChatSortModal(); renderChatList(); }));
+  document.getElementById('chats-sort-all').checked = chatShowAll;
+  document.getElementById('chats-sort-order').value = chatOrder;
+}
+(function wireChatSort() {
+  const g = (id) => document.getElementById(id);
+  g('chats-sort-close').onclick = closeChatSortModal;
+  g('chats-sort-done').onclick = closeChatSortModal;
+  g('chats-sort-overlay').addEventListener('click', (e) => { if (e.target.id === 'chats-sort-overlay') closeChatSortModal(); });
+  g('chats-sort-reset').onclick = () => { chatStatusFilters.clear(); chatShowAll = false; chatOrder = 'new'; chatConvs = []; renderChatSortModal(); renderChatList(); };
+  g('chats-sort-all').onchange = async (e) => { chatShowAll = e.target.checked; await loadChats(true); renderChatList(); };
+  g('chats-sort-order').onchange = (e) => { chatOrder = e.target.value; renderChatList(); };
+  g('chats-sort-refresh').onclick = async () => { await loadChats(true); renderChatSortModal(); renderChatList(); };
+})();
 let chatAllView = false;
 async function showAllChats() {
   chatAllView = true;
