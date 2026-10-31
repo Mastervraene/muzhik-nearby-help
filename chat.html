@@ -759,6 +759,7 @@ body.embed .chat-screen { padding-top:6px; }
           return;
         }
         nudge = '[Система] Администратор назначил стоимость работ ' + amt + ' ₽. Используй именно эту цену. ' + factsOf() + noteOf(r);
+        return;
       }
       var m = { role: 'admin', text: r.text };
       if (r.draft && r.draft.type === 'pay_request') m.pay = { orderId: r.draft.orderId, number: r.draft.number, amount: r.draft.amount };
@@ -807,6 +808,7 @@ body.embed .chat-screen { padding-top:6px; }
     var btn = draftEl && draftEl.querySelector('button'); if (btn) { btn.textContent = 'Создаём…'; btn.classList.remove('on'); }
     var loc = A.point;
     var now = new Date().toISOString();
+    try { var ps = await act({ action: 'price_sign', userId: S.uid, sessionToken: S.tok, convId: convId, category: draft.category, title: draft.title || '' }); if (ps && ps.ok && ps.price) { draft.price = ps.price; draft.sig = ps.sig; } } catch (e) {}
     var signInfo = { sig: draft.sig || '', price: draft.price || 0, category: draft.category, title: draft.title || '', convId: convId };
     var price = draft.price || 500;
     var o = {
@@ -912,7 +914,7 @@ body.embed .chat-screen { padding-top:6px; }
   }
   document.getElementById('reset').onclick = function () { startNewChat(); };
   document.getElementById('newchat').onclick = function () { startNewChat(); };
-  function syncWait() { var w = document.getElementById('waitbar'); if (w) w.style.display = waitNoted ? 'block' : 'none'; }
+  function syncWait() { var w = document.getElementById('waitbar'); if (w) w.style.display = 'none'; }
   function renderPhotos() {
     var box = document.getElementById('photos'); box.innerHTML = '';
     photos.forEach(function (p, i) {
@@ -1026,16 +1028,13 @@ body.embed .chat-screen { padding-top:6px; }
         fail(err === 'rate_limited' ? 'Лимит сообщений на сегодня исчерпан.' : err === 'unauthorized' ? (S.guest ? 'Сессия обновилась — попробуйте ещё раз.' : 'Сессия устарела — войдите на сайте заново.') : 'Не получилось ответить.', t, mine, retry && !!mine && !(err === 'unauthorized' && !S.guest));
         messages.pop();
       } else {
-        if (data.waitingAdmin && data.adminActive) { waitNoted = false; }
-        else if (data.waitingAdmin) {
-          if (!waitNoted) { add('sys', 'Сообщение передано администратору — ответ появится здесь. ' + (data.note || '')); waitNoted = true; }
-        } else {
+        if (data.waitingAdmin) { waitNoted = false; } else {
           waitNoted = false;
           messages.push({ role: 'assistant', text: data.reply });
           var aiB = add('ai', data.reply);
           if (!locAddr && askedAddress(data.reply)) mapBtn(aiB);
           if (data.draft) { if (order) { handleOrderDraft(data.draft); } else { draft = data.draft; renderDraft(); } }
-          if (data.needsHuman) { add('sys', 'Диалог передан администратору. Он скоро подключится и ответит прямо здесь: оставайтесь на странице или вернитесь позже, мы пришлём уведомление. Можно писать дальше.'); waitNoted = true; }
+          if (data.needsHuman && !/администратор/i.test(data.reply || '')) add('sys', 'Зову администратора.');
         }
       }
     } catch (x) {
@@ -1062,7 +1061,7 @@ body.embed .chat-screen { padding-top:6px; }
       });
       var data = await res.json().catch(function () { return null; });
       if (!res.ok || !data || !data.ok) { add('sys', 'Не получилось позвать администратора — попробуйте ещё раз.'); }
-      else { messages.push({ role: 'assistant', text: data.reply }); add('ai', data.reply); waitNoted = true; save(); toBottom(); syncWait(); }
+      else { messages.push({ role: 'assistant', text: data.reply }); add('ai', data.reply); save(); toBottom(); syncWait(); }
     } catch (x) { add('sys', 'Нет связи.'); }
     btn.disabled = false; busy = false;
   }
