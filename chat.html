@@ -56,7 +56,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .draft-more div { margin:3px 0; color:var(--gray-500); } .draft-more div b { color:var(--gray-900); font-weight:500; }
 .draft-btn { flex:none; padding:10px 16px; border:0; border-radius:999px; background:var(--gray-300); color:#fff; font-size:14px; font-weight:600; font-family:inherit; }
 .draft-btn.on { background:var(--accent); cursor:pointer; }
-.draft-chip { flex:1; min-width:0; height:36px; margin:0 2px; padding:0 12px; border:1px solid var(--gray-200); border-radius:999px; background:var(--gray-0); color:var(--gray-900); font-size:13px; font-weight:600; font-family:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+.draft-chip { flex:1; min-width:0; height:clamp(26px, 7.5vw, 30px); line-height:1; margin:0 2px; padding:0 12px; border:1px solid var(--gray-200); border-radius:999px; background:var(--gray-0); color:var(--gray-900); font-size:13px; font-weight:600; font-family:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
 .draft-chip.on { background:var(--accent); border-color:transparent; color:#fff; }
 .composer-actions > .composer-tools:last-child { margin-left:0; }
 .sheet-ov { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-end; background:rgba(18,18,18,.4); }
@@ -432,8 +432,8 @@ body.embed .chat-screen { padding-top:6px; }
       return { lat: pos[1], lng: pos[0], text: String(meta.text || '').replace(/^Россия,\s*/, ''), precision: meta.precision, kind: meta.kind };
     } catch (e) { return null; }
   }
-  var EXTRAS_RE = /(?:подъезд|под\.|парадная|этаж|эт\.|кв\.?|квартира|домофон|код)[^,;]*/gi;
-  function addrExtras(s) { var m = String(s || '').match(EXTRAS_RE); return m ? m.map(function (x) { return x.trim(); }).join(', ') : ''; }
+  var EXTRAS_RE = /(?:^|[\s,;])(?:подъезд|под\.|парадная|этаж|эт\.|кв\.?|квартира|домофон|код)(?![а-яё])[^,;]*/gi;
+  function addrExtras(s) { var m = String(s || '').match(EXTRAS_RE); return m ? m.map(function (x) { return x.replace(/^[\s,;]+/, '').trim(); }).join(', ') : ''; }
   function addrBase(s) { return String(s || '').replace(EXTRAS_RE, '').replace(/[,;\s]+$/g, '').replace(/^[,;\s]+/g, '').replace(/,\s*,/g, ','); }
   function isHouse(g) { return Boolean(g) && g.kind === 'house' && (g.precision === 'exact' || g.precision === 'number'); }
   function confirmAddress(addr) {
@@ -817,7 +817,7 @@ body.embed .chat-screen { padding-top:6px; }
     if (raw) { try { var o = JSON.parse(raw); messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || ''; order = o.order || null; adminCursor = o.adminCursor || 0; locAddr = o.locAddr || ''; locSent = Boolean(o.locSent); locPoint = o.locPoint || null; } catch (e) {} }
     syncIcons();
     if (!convId) newConv();
-    messages.forEach(function (m) { if (m.role === 'admin') adminBubble(m); else add(m.role === 'user' ? 'me' : 'ai', m.text); });
+    messages.forEach(function (m) { if (m.role === 'admin') adminBubble(m); else if (m.role === 'user') { var pt = prettyUser(m.text); if (pt) add('me', pt); } else add('ai', m.text); });
     renderDraft();
     if (!messages.length) log.classList.add('empty');
   }
@@ -839,8 +839,15 @@ body.embed .chat-screen { padding-top:6px; }
     if (!messages.length) log.classList.add('empty');
     offerPrevious();
   }
+  function prettyUser(t) {
+    t = String(t || '');
+    if (/^\[Система\]/.test(t)) return '';
+    var m = t.match(/^\[клиент указал адрес(?: на карте)?: (.*?) — адрес не спрашивай\]/);
+    if (m) return '📍 ' + m[1];
+    return t;
+  }
   function paintMessages() {
-    messages.forEach(function (m) { if (m.role === 'admin') adminBubble(m); else add(m.role === 'user' ? 'me' : 'ai', m.text); });
+    messages.forEach(function (m) { if (m.role === 'admin') adminBubble(m); else if (m.role === 'user') { var pt = prettyUser(m.text); if (pt) add('me', pt); } else add('ai', m.text); });
   }
   function dismissedIds() { try { return JSON.parse(ls(DISMISS_KEY) || '[]'); } catch (e) { return []; } }
   // Предлагает продолжить прошлый незавершённый заказ (локальный черновик или неоплаченный заказ на сервере).
