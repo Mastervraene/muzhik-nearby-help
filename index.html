@@ -9667,7 +9667,7 @@ function renderTopbarNoUser() {
 // Главный экран — чат с ассистентом (chat.html во фрейме поверх пустого слота). Старая форма доступна по ?classic=1 и мастерам.
 const CLASSIC_HOME = /[?&]classic=1(&|$)/.test(location.search);
 function renderHome() {
-  if (!CLASSIC_HOME && !state.specialistMode) return `<div class="screen home-screen" id="chat-slot"></div>`;
+  if (!CLASSIC_HOME && !state.specialistMode) return `<div class="screen home-screen" style="padding:0 0 6px;overflow:hidden;"><div id="chat-slot" style="flex:1;min-height:0;"></div><p class="legal-footer" style="padding:0 12px;"><a href="/voprosy.html" style="color:inherit;">Вопросы и ответы</a> · <a href="/price-list.html" style="color:inherit;">Цены</a> · <a href="/about.html" style="color:inherit;">О сервисе и реквизиты</a> · <a href="/privacy-policy.html" style="color:inherit;">Конфиденциальность</a> · <a href="/personal-data-policy.html" style="color:inherit;">Персональные данные</a></p></div>`;
   const user = currentUser();
   if (!composerAddressValue.trim() && user?.district) composerAddressValue = user.district;
 
