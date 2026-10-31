@@ -338,6 +338,49 @@ body.embed .chat-screen { padding-top:6px; }
 </div>
 <script>
 (function () {
+/* Просмотр фото: на весь экран, листание влево-вправо, закрытие свайпом вверх/вниз */
+(function () {
+  if (window.mcLightbox) return;
+  var st = document.createElement('style');
+  st.textContent = '.lb-ov{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.94);touch-action:none;transition:background .15s}.lb-tr{position:absolute;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}.lb-tr::-webkit-scrollbar{display:none}.lb-sl{flex:0 0 100%;height:100%;scroll-snap-align:center;display:flex;align-items:center;justify-content:center}.lb-sl img{max-width:100%;max-height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none}.lb-x{position:absolute;top:calc(10px + env(safe-area-inset-top));right:12px;width:38px;height:38px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:22px;line-height:1;z-index:2}.lb-n{position:absolute;top:calc(18px + env(safe-area-inset-top));left:0;right:0;text-align:center;color:#fff;font:14px sans-serif;z-index:1;pointer-events:none}img[data-lb]{cursor:zoom-in}';
+  document.head.appendChild(st);
+  window.mcLightbox = function (urls, idx) {
+    var ov = document.createElement('div'); ov.className = 'lb-ov';
+    var tr = document.createElement('div'); tr.className = 'lb-tr';
+    urls.forEach(function (u) { var s = document.createElement('div'); s.className = 'lb-sl'; var im = document.createElement('img'); im.src = u; im.draggable = false; s.appendChild(im); tr.appendChild(s); });
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'lb-x'; x.textContent = '×';
+    var n = document.createElement('div'); n.className = 'lb-n';
+    ov.appendChild(tr); ov.appendChild(x); ov.appendChild(n); document.body.appendChild(ov);
+    function cnt() { var i = Math.round(tr.scrollLeft / (tr.clientWidth || 1)); n.textContent = urls.length > 1 ? (i + 1) + ' / ' + urls.length : ''; }
+    function close() { ov.remove(); document.removeEventListener('keydown', key); }
+    function key(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', key);
+    x.onclick = close;
+    tr.addEventListener('scroll', cnt);
+    tr.scrollLeft = idx * tr.clientWidth; cnt();
+    var sx = 0, sy = 0, dy = 0, drag = false, lock = '';
+    ov.addEventListener('touchstart', function (e) { if (e.touches.length !== 1) { drag = false; return; } sx = e.touches[0].clientX; sy = e.touches[0].clientY; dy = 0; drag = true; lock = ''; }, { passive: true });
+    ov.addEventListener('touchmove', function (e) {
+      if (!drag) return;
+      var mx = e.touches[0].clientX - sx, my = e.touches[0].clientY - sy;
+      if (!lock && (Math.abs(mx) > 8 || Math.abs(my) > 8)) lock = Math.abs(my) > Math.abs(mx) ? 'y' : 'x';
+      if (lock === 'y') { dy = my; tr.style.transform = 'translateY(' + dy + 'px)'; ov.style.background = 'rgba(0,0,0,' + Math.max(0.2, 0.94 - Math.abs(dy) / 500) + ')'; }
+    }, { passive: true });
+    ov.addEventListener('touchend', function () {
+      if (!drag) return; drag = false;
+      if (lock === 'y' && Math.abs(dy) > 90) { close(); return; }
+      tr.style.transform = ''; ov.style.background = '';
+    });
+    ov.addEventListener('click', function (e) { if (e.target === ov || e.target.className === 'lb-sl') close(); });
+  };
+  document.addEventListener('click', function (e) {
+    var t = e.target && e.target.closest && e.target.closest('img[data-lb]'); if (!t) return;
+    e.preventDefault();
+    var g = t.getAttribute('data-lb'), all = Array.prototype.slice.call(document.querySelectorAll('img[data-lb]')).filter(function (i) { return i.getAttribute('data-lb') === g; });
+    window.mcLightbox(all.map(function (i) { return i.getAttribute('data-full') || i.src; }), Math.max(0, all.indexOf(t)));
+  });
+})();
+
   var URL_BASE = 'https://youyvbqdxuigvjciklfk.supabase.co';
   var GEO_KEY = '4be0a4fc-08bd-4859-9145-ac737b71c49f';
   var ANON = 'sb_publishable__cxPZ5uk7YSUwqN3vsTY7Q_Nt-N0KLw';
@@ -346,7 +389,7 @@ body.embed .chat-screen { padding-top:6px; }
   var URG = { normal:'обычная', soon:'в ближайшие часы', now:'срочно' };
   var log = document.getElementById('log'), ta = document.getElementById('text'), send = document.getElementById('send');
   var messages = [], draft = null, busy = false, draftEl = null;
-  var photos = [], orderPhotos = [], MAX_PHOTOS = 5, convId = '', order = null, adminCursor = 0, waitNoted = false, locAddr = '', locSent = false, locPoint = null;
+  var sendPhotos = [], photos = [], orderPhotos = [], MAX_PHOTOS = 5, convId = '', order = null, adminCursor = 0, waitNoted = false, locAddr = '', locSent = false, locPoint = null;
   // Боевая оплата включена всегда; заглушка только по адресу chat.html?stub=1.
   var LIVE = !/[?&]stub=1(&|$)/.test(location.search);
   var EMBED = /[?&]embed=1(&|$)/.test(location.search);
@@ -714,7 +757,7 @@ body.embed .chat-screen { padding-top:6px; }
   }
   function adminBubble(m) {
     var d = add('admin', ''); d.innerHTML = esc(m.text).replace(/\n/g, '<br>');
-    if (m.photos && m.photos.length) { d.innerHTML = (m.text && m.text !== '📷 Фото' ? esc(m.text) + '<br>' : '') + m.photos.map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" style="max-width:100%;max-height:220px;border-radius:12px;margin-top:4px;display:block"></a>'; }).join(''); }
+    if (m.photos && m.photos.length) { var g = 'g' + Math.random().toString(36).slice(2, 8); d.innerHTML = (m.text && m.text !== '📷 Фото' ? esc(m.text) + '<br>' : '') + m.photos.map(function (u) { return '<img data-lb="' + g + '" src="' + esc(u) + '" style="max-width:100%;max-height:220px;border-radius:12px;margin-top:4px;display:block">'; }).join(''); }
     if (m.pay) {
       var b = document.createElement('button'); b.type = 'button'; b.className = 'pay-btn'; b.textContent = 'Оплатить ' + m.pay.amount + ' ₽';
       b.onclick = function () { payFromChat(m.pay); };
@@ -985,6 +1028,7 @@ body.embed .chat-screen { padding-top:6px; }
     d.appendChild(b); toBottom();
   }
 
+  function t0shown(x) { return String(x).replace(/\n📷 \d+/, ''); }
   async function submit(e) {
     if (e) e.preventDefault();
     var t = ta.value.trim();
@@ -1000,7 +1044,8 @@ body.embed .chat-screen { padding-top:6px; }
       photos = []; renderPhotos();
     }
     if (locAddr && !locSent) { t += ' [клиент указал адрес: ' + locAddr + ' — адрес не спрашивай]'; shown += '\n📍 ' + locAddr; locSent = true; }
-    messages.push({ role: 'user', text: t }); var mine = add('me', shown);
+    messages.push({ role: 'user', text: t }); sendPhotos = ready.map(function (p) { return p.url; }); var mine = add('me', shown);
+    if (ready.length) { var gm = 'g' + Date.now(); mine.textContent = t0shown(shown); ready.forEach(function (p) { var im = document.createElement('img'); im.src = p.url; im.setAttribute('data-lb', gm); im.style.cssText = 'display:block;max-width:100%;max-height:200px;border-radius:12px;margin-top:6px'; mine.appendChild(im); }); }
     await ask(t, mine);
   }
   async function autoTurn(text) {
@@ -1018,11 +1063,11 @@ body.embed .chat-screen { padding-top:6px; }
       var res = await fetch(URL_BASE + '/functions/v1/chat-order', {
         method: 'POST', signal: ctl.signal,
         headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON },
-        body: JSON.stringify({ userId: S.uid, sessionToken: S.tok, messages: messages.filter(function (m) { return m.role !== 'admin'; }), convId: convId || (newConv(), convId), category: draft && draft.category, state: stateFor(), guest: S.guest })
+        body: JSON.stringify({ userId: S.uid, sessionToken: S.tok, messages: messages.filter(function (m) { return m.role !== 'admin'; }), convId: convId || (newConv(), convId), category: draft && draft.category, state: stateFor(), guest: S.guest, photos: sendPhotos.slice() })
       });
       var data = await res.json().catch(function () { return null; });
       clearTimeout(tAbort); clearTimeout(tSlow);
-      wait.remove();
+      wait.remove(); if (data && data.ok) sendPhotos = [];
       if (!res.ok || !data || !data.ok) {
         var err = data && data.error;
         if (err === 'unauthorized' && S.guest) { ls(G_UID, null); ls(G_TOK, null); }

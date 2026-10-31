@@ -76,6 +76,49 @@ header .sub{font-size:12px;color:var(--g5);font-weight:400;display:block}
 <div id="app"></div><div id="toast"></div>
 <script>
 (function(){
+/* Просмотр фото: на весь экран, листание влево-вправо, закрытие свайпом вверх/вниз */
+(function () {
+  if (window.mcLightbox) return;
+  var st = document.createElement('style');
+  st.textContent = '.lb-ov{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.94);touch-action:none;transition:background .15s}.lb-tr{position:absolute;inset:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}.lb-tr::-webkit-scrollbar{display:none}.lb-sl{flex:0 0 100%;height:100%;scroll-snap-align:center;display:flex;align-items:center;justify-content:center}.lb-sl img{max-width:100%;max-height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none}.lb-x{position:absolute;top:calc(10px + env(safe-area-inset-top));right:12px;width:38px;height:38px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:22px;line-height:1;z-index:2}.lb-n{position:absolute;top:calc(18px + env(safe-area-inset-top));left:0;right:0;text-align:center;color:#fff;font:14px sans-serif;z-index:1;pointer-events:none}img[data-lb]{cursor:zoom-in}';
+  document.head.appendChild(st);
+  window.mcLightbox = function (urls, idx) {
+    var ov = document.createElement('div'); ov.className = 'lb-ov';
+    var tr = document.createElement('div'); tr.className = 'lb-tr';
+    urls.forEach(function (u) { var s = document.createElement('div'); s.className = 'lb-sl'; var im = document.createElement('img'); im.src = u; im.draggable = false; s.appendChild(im); tr.appendChild(s); });
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'lb-x'; x.textContent = '×';
+    var n = document.createElement('div'); n.className = 'lb-n';
+    ov.appendChild(tr); ov.appendChild(x); ov.appendChild(n); document.body.appendChild(ov);
+    function cnt() { var i = Math.round(tr.scrollLeft / (tr.clientWidth || 1)); n.textContent = urls.length > 1 ? (i + 1) + ' / ' + urls.length : ''; }
+    function close() { ov.remove(); document.removeEventListener('keydown', key); }
+    function key(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', key);
+    x.onclick = close;
+    tr.addEventListener('scroll', cnt);
+    tr.scrollLeft = idx * tr.clientWidth; cnt();
+    var sx = 0, sy = 0, dy = 0, drag = false, lock = '';
+    ov.addEventListener('touchstart', function (e) { if (e.touches.length !== 1) { drag = false; return; } sx = e.touches[0].clientX; sy = e.touches[0].clientY; dy = 0; drag = true; lock = ''; }, { passive: true });
+    ov.addEventListener('touchmove', function (e) {
+      if (!drag) return;
+      var mx = e.touches[0].clientX - sx, my = e.touches[0].clientY - sy;
+      if (!lock && (Math.abs(mx) > 8 || Math.abs(my) > 8)) lock = Math.abs(my) > Math.abs(mx) ? 'y' : 'x';
+      if (lock === 'y') { dy = my; tr.style.transform = 'translateY(' + dy + 'px)'; ov.style.background = 'rgba(0,0,0,' + Math.max(0.2, 0.94 - Math.abs(dy) / 500) + ')'; }
+    }, { passive: true });
+    ov.addEventListener('touchend', function () {
+      if (!drag) return; drag = false;
+      if (lock === 'y' && Math.abs(dy) > 90) { close(); return; }
+      tr.style.transform = ''; ov.style.background = '';
+    });
+    ov.addEventListener('click', function (e) { if (e.target === ov || e.target.className === 'lb-sl') close(); });
+  };
+  document.addEventListener('click', function (e) {
+    var t = e.target && e.target.closest && e.target.closest('img[data-lb]'); if (!t) return;
+    e.preventDefault();
+    var g = t.getAttribute('data-lb'), all = Array.prototype.slice.call(document.querySelectorAll('img[data-lb]')).filter(function (i) { return i.getAttribute('data-lb') === g; });
+    window.mcLightbox(all.map(function (i) { return i.getAttribute('data-full') || i.src; }), Math.max(0, all.indexOf(t)));
+  });
+})();
+
 /* Окно ввода модератора: фото, «Коррекция», отправка. opts: base, key, send(text,urls), price(amount,orderId,note), back(note,amount,orderId) */
 function mcMount(host, opts) {
   var photos = [], drafts = [];
@@ -128,11 +171,30 @@ function mcMount(host, opts) {
   snd.onclick = doSend;
   corr.onclick = function () {
     var ov = document.createElement('div'); ov.className = 'mc-ov';
-    ov.innerHTML = '<div class="mc-sheet"><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
+    ov.innerHTML = '<div class="mc-sheet"><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
     document.body.appendChild(ov);
     var sel = ov.querySelector('.o');
     sel.innerHTML = drafts.map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '<option value="">Без заказа — цена для ассистента</option>';
     function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: sel.value || undefined, note: ov.querySelector('.n').value.trim() }; }
+    var af = ov.querySelector('.af'), as = ov.querySelector('.as'), ap = ov.querySelector('.ap');
+    ap.onclick = function () { af.click(); };
+    af.onchange = async function () {
+      var files = Array.prototype.slice.call(af.files).filter(function (f) { return f.type && f.type.indexOf('image/') === 0; }).slice(0, 10); af.value = '';
+      if (!files.length) return;
+      ap.disabled = true; as.textContent = 'Загружаем…';
+      try {
+        var urls = [];
+        for (var i = 0; i < files.length; i++) {
+          var blob = await shrink(files[i]), path = 'mod-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg';
+          var r = await fetch(opts.base + '/storage/v1/object/order-attachments/' + path, { method: 'POST', headers: { apikey: opts.key, Authorization: 'Bearer ' + opts.key, 'Content-Type': 'image/jpeg' }, body: blob });
+          if (!r.ok) throw new Error('не удалось загрузить фото');
+          urls.push(opts.base + '/storage/v1/object/public/order-attachments/' + path);
+        }
+        var n = await opts.attach(urls, sel.value || undefined);
+        as.textContent = 'Добавлено к заказу' + (n ? ' ' + n : '') + ': ' + urls.length + ' фото';
+      } catch (e) { as.textContent = ''; alert(e.message === 'no_order' ? 'У клиента пока нет заказа — прикреплять некуда' : 'Не получилось: ' + e.message); }
+      ap.disabled = false;
+    };
     ov.querySelector('.x').onclick = function () { ov.remove(); };
     ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
     ov.querySelector('.p').onclick = async function () {
@@ -259,8 +321,8 @@ function renderMsgs(d,force){
   log.innerHTML=ms.map(function(m){
     var dt=m.draft||{};
     if(dt.type==='sys')return '<div class="b sys">'+esc(m.text)+'</div>';
-    if(m.role==='user'){var tx=String(m.text||'').replace(/\s*\[клиент указал адрес[^\]]*\]/,'');return '<div class="b user">'+esc(tx)+'</div>';}
-    var ph=(dt.photos||[]).map(function(u){return '<a href="'+esc(u)+'" target="_blank" rel="noopener"><img src="'+esc(u)+'" style="max-width:100%;max-height:180px;border-radius:10px;display:block;margin-top:4px"></a>';}).join('');
+    if(m.role==='user'){var tx=String(m.text||'').replace(/\s*\[клиент указал адрес[^\]]*\]/,'').replace(/\s*\[клиент приложил фото[^\]]*\]/,'');var up=(dt.photos||[]).map(function(u){return '<img data-lb="m'+m.id+'" src="'+esc(u)+'" style="max-width:100%;max-height:180px;border-radius:10px;display:block;margin-top:4px">';}).join('');return '<div class="b user">'+esc(tx)+up+'</div>';}
+    var ph=(dt.photos||[]).map(function(u){return '<img data-lb="m'+m.id+'" src="'+esc(u)+'" style="max-width:100%;max-height:180px;border-radius:10px;display:block;margin-top:4px">';}).join('');
     return '<div class="b '+(m.role==='admin'?'admin':'assistant')+'">'+(ph&&m.text==='📷 Фото'?'':esc(m.text))+ph+'</div>';
   }).join('')||'<div class="empty">Сообщений нет</div>';
   if(force||atBottom)log.scrollTop=log.scrollHeight;
@@ -277,6 +339,7 @@ function renderBar(d){
     bar.innerHTML='';
     composer=mcMount(bar,{base:URL_BASE,key:ANON,
       send:async function(t,urls){var r=await act('mod_send',{clientId:cur,text:t,photos:urls});if(!r||!r.ok)throw new Error(r&&r.error==='not_mine'?'чат уже ведёт другой администратор':'ошибка');refreshChat(true);},
+      attach:async function(urls,oid){var r=await act('mod_attach',{clientId:cur,photos:urls,orderId:oid});if(!r||!r.ok)throw new Error(r&&r.error==='no_order'?'no_order':'ошибка');return r.number?'№'+r.number:'';},
       price:async function(amt,oid,note){var r=await act('mod_set_price',{clientId:cur,amount:amt,orderId:oid,note:note});if(!r||!r.ok)throw new Error({order_not_draft:'заказ уже не черновик',not_mine:'чат ведёт другой администратор',bad_amount:'неверная сумма'}[r&&r.error]||'ошибка');toast('Цена зафиксирована: '+amt+' ₽');refreshChat(true);},
       back:async function(note,amt,oid){if(amt>0){var pr=await act('mod_set_price',{clientId:cur,amount:amt,orderId:oid});if(!pr||!pr.ok)throw new Error('цена не зафиксировалась, чат не возвращён');}var r=await act('mod_back',{clientId:cur,note:note});if(!r||!r.ok)throw new Error('ошибка');toast('Передано ассистенту');showList();}});
     composer.setDrafts(draftOpts(d));
