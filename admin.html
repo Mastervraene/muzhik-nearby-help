@@ -1438,6 +1438,7 @@ function dbOrderToOrder(row) {
     title: row.title,
     categoryId: row.category_id,
     description: row.description || '',
+    desiredOutcome: row.desired_outcome || '',
     attachments: row.attachments || [],
     exactLocation: { lat: row.exact_lat, lng: row.exact_lng },
     district: row.district || '',
@@ -3760,6 +3761,10 @@ function orderFormHtml(o) {
         <label>Описание</label>
         <textarea id="f-desc-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;">${escapeHtml(o.description || o.title || '')}</textarea>
       </div>
+      <div class="field-sm">
+        <label>Пожелания клиента</label>
+        <textarea id="f-wish-${o.id}" class="auto-textarea" style="resize:none;overflow:hidden;">${escapeHtml(o.desiredOutcome || '')}</textarea>
+      </div>
       <div class="grid-2">
         <div class="field-sm">
           <label>Категория</label>
@@ -3947,6 +3952,7 @@ function wireOrderForm(o) {
       desired_date: document.getElementById(`f-date-${o.id}`).value.trim() || null,
       time_window: document.getElementById(`f-window-${o.id}`).value.trim(),
       description: descriptionValue,
+      desired_outcome: (document.getElementById(`f-wish-${o.id}`) ? document.getElementById(`f-wish-${o.id}`).value.trim() : (o.desiredOutcome || '')),
       search_radius_km: Number(document.getElementById(`f-radius-${o.id}`).value || 3),
       estimate: {
         min: Number(document.getElementById(`f-est-min-${o.id}`).value || 0),

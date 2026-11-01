@@ -890,7 +890,7 @@ body.embed .chat-screen { padding-top:6px; }
     var price = draft.price || 500;
     var wish = String(draft.wishes || '').trim(); if (/^(нет|не надо|без пожеланий|-)\.?$/i.test(wish)) wish = '';
     var o = {
-      title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description + (wish ? '\n\nПожелания клиента: ' + wish : ''), desiredOutcome: wish,
+      title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: wish,
       scope: { quantity: 1, demolitionNeeded: false, accessDifficulty: 'easy' }, attachments: orderPhotos, hasVoiceTranscript: false, voiceTranscript: '',
       exactLocation: loc || { lat: 0, lng: 0 }, district: A.full, houseNumberPublic: '', fullAddress: A.full,
       desiredDate: '', timeWindow: '', urgency: 'normal', customerBudget: null,
