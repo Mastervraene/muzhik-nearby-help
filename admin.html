@@ -7248,7 +7248,8 @@ function openPayRequest() {
 }
 
 // ===== Вкладка «ИИ» =====
-let aiChats = [], aiLoaded = false, aiOpen = {};
+let aiChats = [], aiLoaded = false, aiOpen = {}, aiPage = 0, aiTotal = 0, aiInstr = [];
+const AI_PER = 100;
 const AI_PROVIDER_NAMES = { gigachat: 'GigaChat', yandex: 'YandexGPT' };
 async function loadAiProvider() {
   const el = document.getElementById('ai-provider'); if (!el) return;
@@ -7277,13 +7278,17 @@ function renderAiProvider(primary, order) {
   };
 }
 function aiEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-async function loadAi() {
+async function loadAi(page) {
+  if (typeof page === 'number') aiPage = page;
   loadAiProvider();
   const el = document.getElementById('ai-body');
   try {
-    const d = await callAdminPricing('list_chats');
+    const d = await callAdminPricing('list_chats', { offset: aiPage * AI_PER, per: AI_PER });
     aiChats = d.chats || [];
+    aiTotal = d.total != null ? d.total : aiChats.length;
+    if (!aiChats.length && aiPage > 0 && aiTotal) { aiPage = Math.max(0, Math.ceil(aiTotal / AI_PER) - 1); return loadAi(); }
     aiLoaded = true;
+    try { const dp = await callAdminPricing('list'); aiInstr = dp.instructions || []; } catch (e2) { /* инструкции не критичны для списка чатов */ }
     renderAi();
   } catch (e) { el.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
 }
@@ -7317,16 +7322,36 @@ function aiRerenderRow(key) {
   old.outerHTML = aiRowHtml(c, km);
   aiBadge();
 }
+function aiInstrHtml() {
+  const rows = (aiInstr || []).filter((r) => r && String(r.body || '').trim());
+  if (!rows.length) return '';
+  return '<details class="ai-instr" style="margin-bottom:12px;border:1px solid #ddd;border-radius:8px;padding:8px 12px;background:#fafafa"><summary style="cursor:pointer;font-weight:600">Инструкции ассистента (' + rows.length + ')</summary>' +
+    '<p class="count-hint" style="margin:6px 0">Только просмотр. Править можно во вкладке «Прайс-лист».</p>' +
+    rows.map((r) => '<details style="margin:6px 0"><summary style="cursor:pointer">' + aiEsc(r.title || r.key) + ' <span style="color:#888;font-size:12px">(' + aiEsc(r.key) + ')</span></summary><pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;margin:6px 0">' + aiEsc(r.body) + '</pre></details>').join('') + '</details>';
+}
+function aiPagerHtml() {
+  const pages = Math.max(1, Math.ceil(aiTotal / AI_PER));
+  if (pages <= 1) return '';
+  const btn = (p, label, cur, dis) => '<button type="button" class="btn" data-pg="' + p + '"' + (dis ? ' disabled' : '') + ' style="' + (cur ? 'font-weight:700;background:#222;color:#fff;' : '') + 'min-width:36px;margin:2px">' + label + '</button>';
+  let h = '<div class="ai-pager" style="margin:10px 0;display:flex;flex-wrap:wrap;align-items:center;gap:2px">' + btn(aiPage - 1, '←', false, aiPage === 0);
+  const from = Math.max(0, aiPage - 3), to = Math.min(pages - 1, aiPage + 3);
+  if (from > 0) h += btn(0, '1', false, false) + (from > 1 ? '<span style="padding:0 4px">…</span>' : '');
+  for (let p = from; p <= to; p++) h += btn(p, String(p + 1), p === aiPage, false);
+  if (to < pages - 1) h += (to < pages - 2 ? '<span style="padding:0 4px">…</span>' : '') + btn(pages - 1, String(pages), false, false);
+  h += btn(aiPage + 1, '→', false, aiPage >= pages - 1) + '<span style="margin-left:8px;font-size:12px;color:#666">Переписок: ' + aiTotal + '</span></div>';
+  return h;
+}
 function renderAi() {
   const el = document.getElementById('ai-body');
   aiBadge();
-  if (!aiChats.length) { el.innerHTML = '<p class="count-hint">Переписок пока нет.</p>'; return; }
   const keepComments = {};
   el.querySelectorAll('textarea[data-key]').forEach((t) => { keepComments[t.dataset.key] = t.value; });
-  el.innerHTML = '<p class="count-hint">Сверху новые. Красная полоса — не просмотрено; ✅/❌ — оценка. Нажмите на название, чтобы раскрыть.</p>' +
-    '<button class="btn" id="ai-refresh" style="margin-bottom:10px">Обновить</button>' +
-    aiChats.map((c) => aiRowHtml(c, keepComments)).join('');
-  document.getElementById('ai-refresh').onclick = loadAi;
+  if (!aiChats.length) { el.innerHTML = aiInstrHtml() + '<p class="count-hint">Переписок пока нет.</p>'; return; }
+  el.innerHTML = aiInstrHtml() + '<p class="count-hint">Сверху новые. Красная полоса — не просмотрено; ✅/❌ — оценка. Нажмите на название, чтобы раскрыть.</p>' +
+    '<button class="btn" id="ai-refresh" style="margin-bottom:10px">Обновить</button>' + aiPagerHtml() +
+    aiChats.map((c) => aiRowHtml(c, keepComments)).join('') + aiPagerHtml();
+  document.getElementById('ai-refresh').onclick = () => loadAi();
+  el.querySelectorAll('[data-pg]').forEach((b) => { b.onclick = () => { loadAi(Number(b.dataset.pg)); window.scrollTo({ top: 0 }); }; });
 }
 async function aiSet(key, patch, row) {
   const c = aiChats.find((x) => x.key === key); if (!c) return;
