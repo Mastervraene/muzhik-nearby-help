@@ -7297,6 +7297,16 @@ function aiBadge() {
   const b = document.getElementById('ai-badge');
   if (b) { b.textContent = n; b.style.display = n ? '' : 'none'; }
 }
+// Тестовые переписки Claude: новые помечены невидимым символом в начале первого сообщения,
+// более ранние — по типовым первым фразам тестовых сценариев.
+const AI_TEST_FIRST = /^(болтается розетка|ну там кароче|нужно повесить телевизор|течёт кран на кухне|надо поменять личинку|хочу чтобы поклеили обои|нужно повесить карниз|сломалась полёта|повесить полку|надо заменить унитаз)/i;
+function aiIsClaudeTest(c) {
+  const first = (c.messages || []).find((m) => m.role === 'user');
+  if (!first) return false;
+  const t = String(first.text || '');
+  if (t.charAt(0) === '\u200b') return true;
+  return AI_TEST_FIRST.test(t.trim());
+}
 function aiRowHtml(c, keepComments) {
       const r = c.review || {};
       const cls = [r.seen ? 'seen' : 'unseen', r.verdict || '', r.done ? 'done' : '', aiOpen[c.key] ? 'open' : ''].join(' ').replace('unseen', 'unseen');
@@ -7306,8 +7316,9 @@ function aiRowHtml(c, keepComments) {
       const dr = c.draft ? ('<div style="font-size:12px;color:#666;margin-top:4px">Черновик: ' + aiEsc(c.draft.title || '') + (c.draft.address ? ' · ' + aiEsc(c.draft.address) : '') + '</div>') : '';
       const msgs = !aiOpen[c.key] ? '' : (c.messages || []).map((m) => '<div class="ai-msg ' + (m.role === 'user' ? 'user' : 'assistant') + '">' + aiEsc(m.text) + '</div>').join('');
       const cm = (keepComments && keepComments[c.key] != null) ? keepComments[c.key] : (r.comment || '');
-      return '<div class="ai-row ' + cls + '" data-key="' + aiEsc(c.key) + '">' +
-        '<div class="ai-head" data-act="toggle"><div class="ai-title">' + aiEsc(c.title || 'Без названия') + '</div>' +
+      const isT = aiIsClaudeTest(c);
+      return '<div class="ai-row ' + cls + '" data-key="' + aiEsc(c.key) + '"' + (isT ? ' style="border-left:5px solid #1e6fe0;background:#eef5ff"' : '') + '>' +
+        '<div class="ai-head" data-act="toggle"><div class="ai-title">' + (isT ? '<span style="background:#1e6fe0;color:#fff;border-radius:4px;padding:1px 6px;font-size:11px;margin-right:6px">тест Claude</span>' : '') + aiEsc(c.title || 'Без названия') + '</div>' +
         '<span class="ai-meta">' + aiEsc(c.userName || '') + ' · ' + when + '</span>' +
         '<div class="ai-btns ai-ind"><span class="' + (r.verdict === 'good' ? 'on' : '') + '">✅</span><span class="' + (r.verdict === 'bad' ? 'on' : '') + '">❌</span></div></div>' +
         '<div class="ai-det">' + msgs + '<div class="ai-order">' + orderHtml + dr + '</div>' +
