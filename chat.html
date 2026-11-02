@@ -191,6 +191,10 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .composer-textarea::placeholder {
   color: var(--gray-400);
 }
+.composer-textarea.ph-fade::placeholder {
+  opacity: 0;
+  transition: opacity 1s linear;
+}
 .composer-chip {
   border: none;
   background: var(--gray-100);
@@ -1167,7 +1171,42 @@ body.embed .chat-screen { padding-top:6px; }
   if (!messages.length) offerPrevious();
   checkPaid();
   (function () { var rs = getSess(); if (rs && !rs.guest) mergeGuest(rs); })();
+  // Подсказки-примеры в поле ввода: печатаются посимвольно, последняя секунда затухают (5 с на фразу).
+  (function () {
+    var PH = ['Заменить розетку', 'Повесить телевизор на стену', 'Течёт кран на кухне', 'Собрать шкаф', 'Повесить карниз', 'Заменить смеситель', 'Заменить личинку замка', 'Окно дует, нужно отрегулировать', 'Повесить люстру', 'Прочистить засор в раковине'];
+    var TOTAL = 5000, FADE = 1000, HOLD = 400, idx = 0, timer = null, run = 0;
+    var still = false;
+    try { still = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+    function clearT() { if (timer) { clearTimeout(timer); clearInterval(timer); timer = null; } }
+    function stop() { run++; clearT(); ta.classList.remove('ph-fade'); ta.placeholder = ''; }
+    function canRun() { return !ta.value && document.activeElement !== ta && !messages.length && !busy; }
+    function play() {
+      clearT(); var my = ++run;
+      if (!canRun()) { timer = setTimeout(function () { if (my === run) play(); }, 1000); return; }
+      var txt = PH[idx % PH.length]; idx++;
+      ta.classList.remove('ph-fade'); ta.placeholder = '';
+      if (still) { ta.placeholder = txt; timer = setTimeout(function () { if (my === run) play(); }, TOTAL); return; }
+      var typeMs = 1000, step = Math.max(15, Math.floor(typeMs / txt.length)), i = 0;
+      timer = setInterval(function () {
+        if (my !== run) { clearInterval(timer); return; }
+        i++; ta.placeholder = txt.slice(0, i);
+        if (i >= txt.length) {
+          clearInterval(timer);
+          timer = setTimeout(function () {
+            if (my !== run) return;
+            ta.classList.add('ph-fade');
+            timer = setTimeout(function () { if (my === run) play(); }, FADE);
+          }, Math.max(0, TOTAL - FADE - step * txt.length));
+        }
+      }, step);
+    }
+    ta.addEventListener('focus', stop);
+    ta.addEventListener('blur', function () { if (!ta.value) setTimeout(play, 300); });
+    ta.addEventListener('input', function () { if (ta.value) stop(); });
+    play();
+  })();
 })();
+
 </script>
 </body>
 </html>
