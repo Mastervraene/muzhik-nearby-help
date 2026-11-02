@@ -171,8 +171,23 @@ function mcMount(host, opts) {
   snd.onclick = doSend;
   corr.onclick = function () {
     var ov = document.createElement('div'); ov.className = 'mc-ov';
-    ov.innerHTML = '<div class="mc-sheet"><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
+    ov.innerHTML = '<div class="mc-sheet"><div class="mc-grab" style="width:40px;height:5px;border-radius:3px;background:#cbd5e1;margin:0 auto 12px;padding:8px 0;background-clip:content-box"></div><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
     document.body.appendChild(ov);
+    var sheet = ov.querySelector('.mc-sheet');
+    (function () {
+      var sy = 0, dy = 0, on = false, head = false;
+      sheet.addEventListener('touchstart', function (e) { if (e.touches.length !== 1) return; sy = e.touches[0].clientY; dy = 0; on = true; head = !!(e.target.closest && e.target.closest('.mc-grab, h3')); }, { passive: true });
+      sheet.addEventListener('touchmove', function (e) {
+        if (!on) return; dy = e.touches[0].clientY - sy;
+        var ok = head ? Math.abs(dy) > 6 : (dy > 6 && sheet.scrollTop <= 0);
+        if (ok) { sheet.style.transition = 'none'; sheet.style.transform = 'translateY(' + dy + 'px)'; ov.style.background = 'rgba(15,23,42,' + Math.max(0.1, 0.45 - Math.abs(dy) / 600) + ')'; }
+      }, { passive: true });
+      sheet.addEventListener('touchend', function () {
+        if (!on) return; on = false;
+        if (Math.abs(dy) > 80 && sheet.style.transform) { ov.remove(); return; }
+        sheet.style.transition = 'transform .15s'; sheet.style.transform = ''; ov.style.background = '';
+      });
+    })();
     var sel = ov.querySelector('.o');
     sel.innerHTML = drafts.map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '<option value="">Без заказа — цена для ассистента</option>';
     function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: sel.value || undefined, note: ov.querySelector('.n').value.trim() }; }
@@ -285,13 +300,21 @@ function renderList(){
   el.innerHTML=order.map(function(t){
     var cls=t.mine?'mine':(t.claimedBy?'other':'');
     var tag=t.mine?'<span class="tag mine">ваш</span>':(t.claimedBy?'<span class="tag">ведёт '+esc(t.claimedBy)+'</span>':'');
-    return '<div class="row" data-u="'+esc(t.userId)+'"><span class="dot '+cls+'"></span><div style="min-width:0"><b>'+esc(t.userName||t.phone||'Клиент')+'</b>'+tag+'<small>'+ago(t.lastAt)+'</small><p>'+esc((t.lastRole==='user'?'':'↳ ')+(t.lastText||''))+'</p></div></div>';
+    return '<div class="row" data-u="'+esc(t.userId)+'"><span class="dot '+cls+'"></span><div style="min-width:0"><b>'+esc(t.userName||t.phone||'Клиент')+'</b>'+tag+'<small>'+ago(t.lastAt)+'</small><p>'+esc((t.lastRole==='user'?'':'↳ ')+(t.lastText||''))+'</p></div><button type="button" class="dx" data-x="'+esc(t.userId)+'" title="Убрать из списка" style="margin-left:auto;border:0;background:#eef1f5;color:#64748b;border-radius:50%;width:32px;height:32px;font-size:15px;flex:none">✕</button></div>';
   }).join('');
   [].forEach.call(el.querySelectorAll('.row'),function(r){r.onclick=function(){openChat(r.getAttribute('data-u'));};});
+  [].forEach.call(el.querySelectorAll('.dx'),function(b){b.onclick=async function(e){e.stopPropagation();var r=await act('mod_dismiss',{scope:'ids',userIds:[b.getAttribute('data-x')]});if(r&&r.ok){toast('Убрано из списка');loadList();}else toast('Не получилось');};});
+}
+async function bulkDismiss(scope,q){
+  if(!confirm(q))return;
+  var r=await act('mod_dismiss',{scope:scope});
+  if(r&&r.ok){toast(r.n?('Убрано: '+r.n):'Нечего убирать');loadList();}else toast('Не получилось');
 }
 function showList(){
   stopTimers();cur=null;curData=null;
-  app.innerHTML='<header><h1>Нужен администратор<span class="sub" id="sub"></span></h1><button class="ib" id="snd" title="Звук">'+(sound?'🔔':'🔕')+'</button><button class="ib" id="nt" title="Уведомления">📣</button><button class="ib" id="out" title="Выйти">⎋</button></header><div class="view"><div class="list" id="list"></div></div>';
+  app.innerHTML='<header><h1>Нужен администратор<span class="sub" id="sub"></span></h1><button class="ib" id="snd" title="Звук">'+(sound?'🔔':'🔕')+'</button><button class="ib" id="nt" title="Уведомления">📣</button><button class="ib" id="out" title="Выйти">⎋</button></header><div class="view"><div id="dtools" style="display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid #e5e8ee"><button type="button" id="dt" style="flex:1;border:0;background:#eef1f5;color:#334155;border-radius:10px;padding:9px 6px;font-size:14px">🧹 Убрать тесты</button><button type="button" id="dold" style="flex:1;border:0;background:#eef1f5;color:#334155;border-radius:10px;padding:9px 6px;font-size:14px">Убрать старые (&gt;1 дня)</button></div><div class="list" id="list"></div></div>';
+  document.getElementById('dt').onclick=function(){bulkDismiss('tests','Убрать все тестовые чаты из списка?');};
+  document.getElementById('dold').onclick=function(){bulkDismiss('old','Убрать из списка чаты, где нужен администратор, но клиент молчит больше суток?');};
   document.getElementById('sub').textContent=me?'Вы: '+me:'';
   document.getElementById('snd').onclick=function(){sound=!sound;this.textContent=sound?'🔔':'🔕';if(sound)beep();};
   document.getElementById('nt').onclick=function(){if(!('Notification' in window))return toast('Браузер не поддерживает уведомления');Notification.requestPermission().then(function(p){toast(p==='granted'?'Уведомления включены':'Уведомления запрещены');});};
@@ -320,7 +343,7 @@ function renderMsgs(d,force){
   var atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;lastMsgId=lastId;
   log.innerHTML=ms.map(function(m){
     var dt=m.draft||{};
-    if(dt.type==='sys')return '<div class="b sys">'+esc(m.text)+'</div>';
+    if(dt.type==='sys'||dt.type==='attach')return '<div class="b sys">'+esc(m.text)+'</div>';
     if(m.role==='user'){var tx=String(m.text||'').replace(/\s*\[клиент указал адрес[^\]]*\]/,'').replace(/\s*\[клиент приложил фото[^\]]*\]/,'');var up=(dt.photos||[]).map(function(u){return '<img data-lb="m'+m.id+'" src="'+esc(u)+'" style="max-width:100%;max-height:180px;border-radius:10px;display:block;margin-top:4px">';}).join('');return '<div class="b user">'+esc(tx)+up+'</div>';}
     var ph=(dt.photos||[]).map(function(u){return '<img data-lb="m'+m.id+'" src="'+esc(u)+'" style="max-width:100%;max-height:180px;border-radius:10px;display:block;margin-top:4px">';}).join('');
     return '<div class="b '+(m.role==='admin'?'admin':'assistant')+'">'+(ph&&m.text==='📷 Фото'?'':esc(m.text))+ph+'</div>';
