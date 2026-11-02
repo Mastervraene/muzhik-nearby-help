@@ -1111,6 +1111,7 @@ body.embed .chat-screen { padding-top:6px; }
   async function ask(t, mine) {
     var S = await ensureSession();
     if (!S) { fail('Не получилось начать диалог.', t, mine, !!mine); messages.pop(); busy = false; return; }
+    if (mine && messages.filter(function (m) { return m.role === 'user'; }).length === 1) add('sys', 'Диалог ведёт ИИ ассистент, он может ошибаться.\nПри необходимости позовите администратора.');
     var wait = add('ai typing', ''); wait.innerHTML = '<i></i><i></i><i></i>';
     var ctl = new AbortController(), tAbort = setTimeout(function () { ctl.abort(); }, 70000);
     var tSlow = setTimeout(function () { add('sys', 'Ассистент отвечает дольше обычного. Подождите ещё немного: если не ответит, мы позовём администратора.'); }, 25000);
