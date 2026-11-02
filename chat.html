@@ -1190,7 +1190,7 @@ body.embed .chat-screen { padding-top:6px; }
     var g = document.getElementById('ph-ghost');
     if (!g) return;
     var still = false;
-    try { still = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+    // Режим «уменьшить движение» на iPhone не учитываем: эффект мягкий, а в этом режиме он иначе пропадает.
     try { var cs = window.getComputedStyle(ta); g.style.fontSize = cs.fontSize; g.style.fontFamily = cs.fontFamily; } catch (e) {}
     function clearT() { if (timer) { clearTimeout(timer); clearInterval(timer); timer = null; } }
     function hide() { g.style.transition = 'none'; g.style.opacity = '0'; g.textContent = ''; }
