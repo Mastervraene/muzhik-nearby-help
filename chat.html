@@ -164,6 +164,7 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
   border-radius: var(--radius);
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06), 0 16px 36px rgba(15, 23, 42, 0.1);
   padding: 10px 12px;
+  position: relative;
 }
 .legal-footer {
   margin: 6px 4px 0;
@@ -191,9 +192,19 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .composer-textarea::placeholder {
   color: var(--gray-400);
 }
-.composer-textarea.ph-fade::placeholder {
+#ph-ghost {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 10px;
+  height: 24px;
+  line-height: 24px;
+  color: var(--gray-400);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0;
-  transition: opacity 1s linear;
 }
 .composer-chip {
   border: none;
@@ -325,6 +336,7 @@ body.embed .chat-screen { padding-top:6px; }
     </div>
     <div style="text-align:center;margin:0 0 6px;"><div id="waitbar">Ждём администратора. Он скоро подключится и ответит прямо здесь. Можно писать дальше: сообщения не потеряются.</div><button type="button" id="calladm" style="background:none;border:0;color:var(--gray-500);font-size:13px;text-decoration:underline;cursor:pointer;padding:4px 8px;">Позвать администратора</button><button type="button" id="newchat" style="background:none;border:0;color:var(--gray-500);font-size:13px;text-decoration:underline;cursor:pointer;padding:4px 8px;">Новый чат</button></div>
     <div class="composer-card">
+      <div id="ph-ghost" aria-hidden="true"></div>
       <textarea id="text" class="composer-textarea" rows="1" maxlength="1000" aria-label="Опишите проблему или задачу"></textarea>
       <div class="ph-row" id="photos"></div>
       <input type="file" id="file" accept="image/*" multiple style="display:none" />
@@ -1171,35 +1183,42 @@ body.embed .chat-screen { padding-top:6px; }
   if (!messages.length) offerPrevious();
   checkPaid();
   (function () { var rs = getSess(); if (rs && !rs.guest) mergeGuest(rs); })();
-  // Подсказки-примеры в поле ввода: печатаются посимвольно, последняя секунда затухают (5 с на фразу).
+  // Подсказки-примеры в поле ввода: 10 с на фразу: набор 2 с, показ 6 с, затухание 2 с.
   (function () {
     var PH = ['Заменить розетку', 'Повесить телевизор на стену', 'Течёт кран на кухне', 'Собрать шкаф', 'Повесить карниз', 'Заменить смеситель', 'Заменить личинку замка', 'Окно дует, нужно отрегулировать', 'Повесить люстру', 'Прочистить засор в раковине'];
-    var TOTAL = 5000, FADE = 1000, HOLD = 400, idx = 0, timer = null, run = 0;
+    var TOTAL = 10000, TYPE = 2000, FADE = 2000, idx = 0, timer = null, run = 0;
+    var g = document.getElementById('ph-ghost');
+    if (!g) return;
     var still = false;
     try { still = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+    try { var cs = window.getComputedStyle(ta); g.style.fontSize = cs.fontSize; g.style.fontFamily = cs.fontFamily; } catch (e) {}
     function clearT() { if (timer) { clearTimeout(timer); clearInterval(timer); timer = null; } }
-    function stop() { run++; clearT(); ta.classList.remove('ph-fade'); ta.placeholder = ''; }
+    function hide() { g.style.transition = 'none'; g.style.opacity = '0'; g.textContent = ''; }
+    function stop() { run++; clearT(); hide(); }
     function canRun() { return !ta.value && document.activeElement !== ta && !messages.length && !busy; }
     function play() {
       clearT(); var my = ++run;
-      if (!canRun()) { timer = setTimeout(function () { if (my === run) play(); }, 1000); return; }
+      if (!canRun()) { hide(); timer = setTimeout(function () { if (my === run) play(); }, 1000); return; }
       var txt = PH[idx % PH.length]; idx++;
-      ta.classList.remove('ph-fade'); ta.placeholder = '';
-      if (still) { ta.placeholder = txt; timer = setTimeout(function () { if (my === run) play(); }, TOTAL); return; }
-      var typeMs = 1000, step = Math.max(15, Math.floor(typeMs / txt.length)), i = 0;
+      g.style.transition = 'none'; g.style.opacity = '1'; g.textContent = '';
+      if (still) { g.textContent = txt; timer = setTimeout(function () { if (my === run) play(); }, TOTAL); return; }
+      var step = Math.max(20, Math.floor(TYPE / txt.length)), i = 0, t0 = Date.now();
       timer = setInterval(function () {
         if (my !== run) { clearInterval(timer); return; }
-        i++; ta.placeholder = txt.slice(0, i);
+        i++; g.textContent = txt.slice(0, i);
         if (i >= txt.length) {
           clearInterval(timer);
           timer = setTimeout(function () {
             if (my !== run) return;
-            ta.classList.add('ph-fade');
+            void g.offsetWidth;
+            g.style.transition = 'opacity ' + (FADE / 1000) + 's linear';
+            g.style.opacity = '0';
             timer = setTimeout(function () { if (my === run) play(); }, FADE);
-          }, Math.max(0, TOTAL - FADE - step * txt.length));
+          }, Math.max(0, TOTAL - FADE - (Date.now() - t0)));
         }
       }, step);
     }
+    ta.placeholder = '';
     ta.addEventListener('focus', stop);
     ta.addEventListener('blur', function () { if (!ta.value) setTimeout(play, 300); });
     ta.addEventListener('input', function () { if (ta.value) stop(); });
