@@ -96,7 +96,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* Вкладка «Прайс-лист» */
 .pr-cat { margin: 0 0 26px; }
 .pr-cat h3 { margin: 0 0 8px; font-size: 16px; }
-.pr-row { display: grid; grid-template-columns: 46% 54px 44px minmax(0, 1fr); gap: 6px; margin-bottom: 6px; align-items: center; }
+.pr-row { display: grid; grid-template-columns: 46% 54px 44px minmax(0, 1fr) 30px; gap: 6px; margin-bottom: 6px; align-items: center; }
+.pr-drag { width: 30px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 20px; line-height: 1; color: #888; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 8px; }
+.pr-drag:active { background: #eee; }
+.pr-row.dragging { background: #fff8dc; box-shadow: 0 4px 14px rgba(0,0,0,.2); position: relative; z-index: 5; }
 .pr-row input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--gray-200, #ddd); border-radius: 10px; font-size: 14px; font-family: inherit; background: #fff; }
 .pr-row input:focus, .pr-row textarea:focus { outline: none; border-color: var(--accent); }
 .pr-row textarea.pr-name { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--gray-200, #ddd); border-radius: 10px; font-size: 14px; line-height: 1.25; font-family: inherit; background: #fff; resize: none; overflow: hidden; display: block; min-height: 36px; }
@@ -6955,6 +6958,7 @@ function pricingRowHtml(it) {
     <input type="number" class="pr-price" min="0" step="50" placeholder="₽" value="${v(it && it.price)}" />
     <input type="number" class="pr-min" min="0" step="5" placeholder="мин" value="${v(it && it.minutes)}" />
     <span class="pr-nh${normHourText(it && it.price, it && it.minutes).low ? ' low' : ''}">${normHourText(it && it.price, it && it.minutes).text}</span>
+    <span class="pr-drag" title="Потяните вверх или вниз, чтобы поменять порядок">${it && it.id ? '☰' : ''}</span>
   </div>`;
 }
 
@@ -6966,7 +6970,7 @@ function renderPricing() {
     const items = pricingData.prices.filter((p) => p.category === cat);
     return `<div class="pr-cat" data-cat="${cat}">
       <h3>${escapeHtml(CATEGORY_TITLES[cat])}</h3>
-      <div class="pr-head pr-row"><span>Работа</span><span style="padding-left:0;text-align:center">Цена</span><span style="padding-left:0;text-align:center">Мин</span><span title="Цена за работу без выезда, пересчитанная на 60 минут">₽ за час</span></div>
+      <div class="pr-head pr-row"><span>Работа</span><span style="padding-left:0;text-align:center">Цена</span><span style="padding-left:0;text-align:center">Мин</span><span title="Цена за работу без выезда, пересчитанная на 60 минут">₽ за час</span><span></span></div>
       <div class="pr-rows">${items.map(pricingRowHtml).join('')}${pricingRowHtml(null)}</div>
       <button type="button" class="btn-sm primary pr-save">Сохранить</button><span class="pr-status"></span>
     </div>`;
@@ -7001,6 +7005,23 @@ function renderPricing() {
       }
       const last = rows.lastElementChild;
       if (last && last.querySelector('.pr-name').value.trim()) rows.insertAdjacentHTML('beforeend', pricingRowHtml(null));
+    });
+    rows.addEventListener('pointerdown', (ev) => {
+      const h = ev.target.closest && ev.target.closest('.pr-drag');
+      if (!h || !h.textContent.trim()) return;
+      const row = h.closest('.pr-row'); ev.preventDefault();
+      try { h.setPointerCapture(ev.pointerId); } catch (_e) {}
+      row.classList.add('dragging');
+      const move = (e) => {
+        const all = [...rows.querySelectorAll('.pr-row')].filter((r) => r !== row && r.querySelector('.pr-drag').textContent.trim());
+        let before = null;
+        for (const r of all) { const b = r.getBoundingClientRect(); if (e.clientY < b.top + b.height / 2) { before = r; break; } }
+        if (before) { if (row.nextElementSibling !== before) rows.insertBefore(row, before); }
+        else { const tail = all.length ? all[all.length - 1].nextElementSibling : rows.firstElementChild; if (row.nextElementSibling !== tail) rows.insertBefore(row, tail); }
+        const st = box.querySelector('.pr-status'); st.style.color = '#b45309'; st.textContent = 'Порядок изменён — нажмите «Сохранить»';
+      };
+      const up = () => { row.classList.remove('dragging'); h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
+      h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
     });
     box.querySelector('.pr-save').addEventListener('click', async (ev) => {
       const btn = ev.currentTarget, status = box.querySelector('.pr-status');
