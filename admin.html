@@ -7423,10 +7423,26 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-/* ===== Сценарии: дерево Что → Что происходит → Уточнение → Что происходит → Позиция в прайсе ===== */
+/* ===== Сценарии: дерево блоков с назначением (если клиент / уточнение / комментарий ассистента / результат) ===== */
 let scenTree = [], scenPrices = [];
-const SC_PH = ['Что (например: розетка)', 'Что происходит', 'Уточнение', 'Что происходит'];
-const scNew = () => ({ t: '', item: null, kids: [] });
+const SC_T = {
+  a: { n: 'Клиент говорит / если', c: '#f1f1f1', ph: 'Запрос или ответ клиента (например: розетка искрит)' },
+  q: { n: 'Уточнение', c: '#e6f0ff', ph: 'Что спросить у клиента' },
+  c: { n: 'Комментарий ассистента', c: '#fff6d6', ph: 'Что и с какой аргументацией сказать клиенту' },
+  r: { n: 'Результат', c: '#e3f4e3', ph: 'Пояснение к позиции (необязательно)' },
+};
+const SC_NEXT = { a: 'q', q: 'a', c: 'r', r: 'c' };
+const scNew = (k) => ({ k: k || 'a', t: '', item: null, extra: false, kids: [] });
+function scFix(list, depth) {
+  (list || []).forEach((n) => {
+    if (!n.k) { // старый формат без назначения
+      n.k = depth === 2 ? 'q' : 'a';
+      if (n.item) { n.kids = (n.kids || []).concat([{ k: 'r', t: '', item: n.item, extra: false, kids: [] }]); n.item = null; }
+    }
+    n.kids = n.kids || []; scFix(n.kids, depth + 1);
+  });
+  return list;
+}
 function scLegacy(rows) {
   return (rows || []).map((r) => {
     const parts = [r.what, r.a, r.clar, r.b].filter(Boolean);
@@ -7440,8 +7456,8 @@ async function loadScen() {
   const box = document.getElementById('scen-body');
   try {
     const [r1, r2] = await Promise.all([callAdminPricing('get_scenarios'), callAdminPricing('list')]);
-    scenTree = r1.tree || scLegacy(r1.rows); scenPrices = r2.prices || [];
-    if (!scenTree.length) scenTree = [scNew()];
+    scenTree = scFix(r1.tree || scLegacy(r1.rows), 0); scenPrices = r2.prices || [];
+    if (!scenTree.length) scenTree = [scNew('a')];
     renderScen();
   } catch (e) { box.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
 }
@@ -7450,33 +7466,31 @@ function scGet(p) {
   ix.forEach((i) => { parent = arr; n = arr[i]; arr = n.kids; });
   return { n, parent, i: ix[ix.length - 1] };
 }
-function scPriceCell(n, p) {
+function scPrice(n) {
   const it = scenPrices.find((x) => x.id === n.item);
   const inner = it
-    ? '<div><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · ' + it.price + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить</button></div>'
-    : '<input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div>';
-  return '<div class="sc sp" data-p="' + p + '" style="background:#eef6ee">' + inner + '</div>';
+    ? '<div style="margin-top:4px"><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · ' + it.price + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить позицию</button></div>'
+    : '<div style="position:relative;margin-top:4px"><input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div></div>';
+  return inner + '<label class="count-hint" style="display:block;margin-top:3px"><input type="checkbox" data-act="extra"' + (n.extra ? ' checked' : '') + '> дополнительно, если подтвердится</label>';
 }
-function scHtml(n, path, depth) {
-  const p = path.join('.');
-  let h = '<div class="sn"><div class="sc" data-p="' + p + '"><textarea rows="2" placeholder="' + SC_PH[depth] + '">' + aiEsc(n.t) + '</textarea><div class="sb">' +
-    (depth < 3 ? '<button data-act="kid" title="Добавить ветку вправо">↳ ветка</button> ' : '') +
-    '<button data-act="sib" title="Ещё вариант на этом же уровне">＋ рядом</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
-  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i), depth + 1)).join('') + '</div>';
-  else h += scPriceCell(n, p);
+function scHtml(n, path) {
+  const p = path.join('.'), T = SC_T[n.k] || SC_T.a;
+  const opts = Object.keys(SC_T).map((k) => '<option value="' + k + '"' + (k === n.k ? ' selected' : '') + '>' + SC_T[k].n + '</option>').join('');
+  let h = '<div class="sn"><div class="sc" data-p="' + p + '" style="background:' + T.c + '"><select class="sk-t">' + opts + '</select>' +
+    '<textarea rows="2" placeholder="' + aiEsc(T.ph) + '">' + aiEsc(n.t) + '</textarea>' + (n.k === 'r' ? scPrice(n) : '') +
+    '<div class="sb"><button data-act="kid" title="Следующий шаг вправо">↳ ветка</button> <button data-act="sib" title="Другой вариант на этом уровне">＋ рядом</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
+  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i))).join('') + '</div>';
   return h + '</div>';
 }
 function renderScen() {
   const box = document.getElementById('scen-body');
-  const heads = ['Что', 'Что происходит', 'Уточнение', 'Что происходит', 'Позиция в прайсе'];
   box.innerHTML = '<style>#scen-body .sn{display:flex;align-items:center}#scen-body .sk{display:flex;flex-direction:column;border-left:2px solid #bbb;margin-left:4px;padding-left:4px}' +
-    '#scen-body .sc{width:210px;flex:none;margin:3px;padding:6px;border:1px solid #ccc;border-radius:8px;background:#fff;position:relative}#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px}' +
-    '#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:6px;right:6px;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
+    '#scen-body .sc{width:230px;flex:none;margin:3px;padding:6px;border:1px solid #ccc;border-radius:8px;position:relative}#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px;margin-top:4px}#scen-body .sk-t{width:100%;font-size:12px;font-weight:600}' +
+    '#scen-body .sb{margin-top:4px}#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
     '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}</style>' +
-    '<p class="count-hint">Пишите своими словами. «↳ ветка» — следующий шаг вправо, «＋ рядом» — другой вариант на том же уровне. В конце ветки выберите позицию прайса: начните вводить, а если такой нет — предложит создать. Цена и время берутся только из прайса.</p>' +
-    '<div style="overflow:auto;padding-bottom:160px"><div style="display:flex;font-weight:600;margin-left:3px">' + heads.map((t) => '<div style="width:224px;flex:none">' + t + '</div>').join('') + '</div>' +
-    scenTree.map((n, i) => '<div style="border-top:1px solid #ddd;padding:6px 0">' + scHtml(n, [i], 0) + '</div>').join('') + '</div>' +
-    '<p><button id="scen-add">+ Новое «Что»</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+    '<p class="count-hint">Каждый блок имеет назначение. «Клиент говорит / если» — условие ветки, «Уточнение» — вопрос клиенту, «Комментарий ассистента» — что и с каким обоснованием сказать, «Результат» — позиция прайса (можно несколько, в том числе «дополнительно, если подтвердится»). Цена и время берутся только из прайса.</p>' +
+    '<div style="overflow:auto;padding-bottom:160px">' + scenTree.map((n, i) => '<div style="border-top:1px solid #ddd;padding:6px 0">' + scHtml(n, [i]) + '</div>').join('') + '</div>' +
+    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
   const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
   box.oninput = (ev) => {
     const el = ev.target, c = el.closest('.sc'); if (!c) return;
@@ -7488,10 +7502,15 @@ function renderScen() {
     dd.innerHTML = m.map((x) => '<div data-id="' + x.id + '">' + aiEsc(x.name) + ' <span class="count-hint">' + aiEsc(x.category) + ' · ' + x.price + ' ₽</span></div>').join('') +
       (m.length ? '' : '<div data-newi="1">➕ Создать позицию «' + aiEsc(el.value.trim()) + '»</div>');
   };
+  box.onchange = (ev) => {
+    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    if (el.classList.contains('sk-t')) { const n = scGet(c.dataset.p).n; n.k = el.value; if (n.k !== 'r') n.item = null; renderScen(); }
+    else if (el.dataset.act === 'extra') scGet(c.dataset.p).n.extra = el.checked;
+  };
   box.onclick = async (ev) => {
     const el = ev.target, c = el.closest('.sc'); if (!c) return;
     const p = c.dataset.p, act = el.dataset.act;
-    if (el.dataset.id) { scGet(p).n.item = +el.dataset.id; return renderScen(); }
+    if (el.closest('[data-id]')) { scGet(p).n.item = +el.closest('[data-id]').dataset.id; return renderScen(); }
     if (el.closest('[data-newi]')) {
       const name = c.querySelector('.si').value.trim(), cats = [...new Set(scenPrices.map((x) => x.category))];
       c.querySelector('.sd').innerHTML = '';
@@ -7505,15 +7524,15 @@ function renderScen() {
       } catch (e) { msg('Ошибка: ' + e.message); }
       return;
     }
-    if (!act) return;
+    if (!act || act === 'extra') return;
     const g = scGet(p);
     if (act === 'clr') g.n.item = null;
-    if (act === 'kid') { g.n.item = null; g.n.kids.push(scNew()); }
-    if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew());
-    if (act === 'del') { g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew()); }
+    if (act === 'kid') g.n.kids.push(scNew(SC_NEXT[g.n.k]));
+    if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew(g.n.k));
+    if (act === 'del') { g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew('a')); }
     renderScen();
   };
-  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew()); renderScen(); };
+  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew('a')); renderScen(); };
   document.getElementById('scen-save').onclick = async () => {
     try { const r = await callAdminPricing('save_scenarios', { tree: scenTree }); msg('Сохранено: ' + r.count + ' начал'); }
     catch (e) { msg('Ошибка: ' + e.message); }
