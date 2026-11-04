@@ -171,7 +171,7 @@ function mcMount(host, opts) {
   snd.onclick = doSend;
   corr.onclick = function () {
     var ov = document.createElement('div'); ov.className = 'mc-ov';
-    ov.innerHTML = '<div class="mc-sheet"><div class="mc-grab" style="width:40px;height:5px;border-radius:3px;background:#cbd5e1;margin:0 auto 12px;padding:8px 0;background-clip:content-box"></div><h3>Коррекция</h3><label>Новая цена</label><select class="o"></select><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
+    ov.innerHTML = '<div class="mc-sheet"><div class="mc-grab" style="width:40px;height:5px;border-radius:3px;background:#cbd5e1;margin:0 auto 12px;padding:8px 0;background-clip:content-box"></div><h3>Коррекция</h3><label>Заказ</label><select class="o"></select><div class="nf" style="display:none"><label>Название заказа</label><input class="nt" maxlength="120" placeholder="Например: Подключить стиральную машину"><label>Описание</label><textarea class="nd" rows="3" placeholder="Что нужно сделать"></textarea><label>Адрес</label><input class="na" placeholder="Город, улица, дом, квартира"><label>Категория</label><select class="nc"><option value="other">Другое</option><option value="electrics">Электрика</option><option value="plumbing">Сантехника</option><option value="windows_doors">Окна и двери</option><option value="air_conditioning">Кондиционеры</option><option value="assembly">Сборка мебели</option><option value="minor_repair">Мелкий ремонт</option><option value="household_help">Уборка и бытовая помощь</option><option value="moving_help">Вынос и перемещение</option><option value="cars">Автомобили</option><option value="computers">Компьютеры</option></select><label>Пожелания клиента</label><input class="nw" placeholder="Время, детали (необязательно)"></div><label>Цена</label><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
     document.body.appendChild(ov);
     var sheet = ov.querySelector('.mc-sheet');
     (function () {
@@ -189,8 +189,11 @@ function mcMount(host, opts) {
       });
     })();
     var sel = ov.querySelector('.o');
-    sel.innerHTML = drafts.map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '<option value="">Без заказа — цена для ассистента</option>';
-    function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: sel.value || undefined, note: ov.querySelector('.n').value.trim() }; }
+    sel.innerHTML = drafts.map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join('') + '<option value="__new">➕ Новый заказ (заполнить вручную)</option><option value="">Без заказа — цена для ассистента</option>';
+    var newPhotos = [], pBtn = ov.querySelector('.p'), nf = ov.querySelector('.nf');
+    function modeUpd() { var isNew = sel.value === '__new'; nf.style.display = isNew ? '' : 'none'; pBtn.textContent = isNew ? 'Создать заказ и отправить клиенту' : 'Зафиксировать цену'; ov.querySelector('.ap').lastChild.textContent = isNew ? ' Фото к новому заказу' : ' Фото к заказу'; }
+    sel.onchange = modeUpd; if (!drafts.length) sel.value = '__new'; modeUpd();
+    function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: (sel.value && sel.value !== '__new') ? sel.value : undefined, note: ov.querySelector('.n').value.trim() }; }
     var af = ov.querySelector('.af'), as = ov.querySelector('.as'), ap = ov.querySelector('.ap');
     ap.onclick = function () { af.click(); };
     af.onchange = async function () {
@@ -205,6 +208,7 @@ function mcMount(host, opts) {
           if (!r.ok) throw new Error('не удалось загрузить фото');
           urls.push(opts.base + '/storage/v1/object/public/order-attachments/' + path);
         }
+        if (sel.value === '__new') { newPhotos = newPhotos.concat(urls).slice(0, 10); as.textContent = 'Фото для нового заказа: ' + newPhotos.length; ap.disabled = false; return; }
         var n = await opts.attach(urls, sel.value || undefined);
         as.textContent = 'Добавлено к заказу' + (n ? ' ' + n : '') + ': ' + urls.length + ' фото';
       } catch (e) { as.textContent = ''; alert(e.message === 'no_order' ? 'У клиента пока нет заказа — прикреплять некуда' : 'Не получилось: ' + e.message); }
@@ -213,6 +217,19 @@ function mcMount(host, opts) {
     ov.querySelector('.x').onclick = function () { ov.remove(); };
     ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
     ov.querySelector('.p').onclick = async function () {
+      if (sel.value === '__new') {
+        var f = { title: ov.querySelector('.nt').value.trim(), description: ov.querySelector('.nd').value.trim(), address: ov.querySelector('.na').value.trim(), category: ov.querySelector('.nc').value, wishes: ov.querySelector('.nw').value.trim(), price: Math.round(Number(ov.querySelector('.a').value)), note: ov.querySelector('.n').value.trim(), photos: newPhotos };
+        if (!f.title) { alert('Введите название заказа'); return; }
+        if (!f.description) { alert('Введите описание'); return; }
+        if (!f.address) { alert('Введите адрес'); return; }
+        if (!(f.price > 0 && f.price < 100000)) { alert('Введите цену от 1 до 99 999 ₽'); return; }
+        this.disabled = true; this.textContent = 'Создаём…';
+        try {
+          try { var gr = await fetch('https://geocode-maps.yandex.ru/1.x/?apikey=4be0a4fc-08bd-4859-9145-ac737b71c49f&geocode=' + encodeURIComponent(f.address) + '&format=json&results=1'); var gj = await gr.json(); var gp = gj.response.GeoObjectCollection.featureMember[0].GeoObject.Point.pos.split(' ').map(Number); f.lng = gp[0]; f.lat = gp[1]; } catch (ge) { /* адрес сохранится без координат */ }
+          await opts.create(f); ov.remove();
+        } catch (e) { alert('Не получилось: ' + e.message); this.disabled = false; this.textContent = 'Создать заказ и отправить клиенту'; }
+        return;
+      }
       var v = vals(); if (!(v.amt > 0 && v.amt < 100000)) { alert('Введите сумму от 1 до 99 999 ₽'); return; }
       this.disabled = true;
       try { await opts.price(v.amt, v.oid, v.note); ov.remove(); } catch (e) { alert('Не получилось: ' + e.message); this.disabled = false; }
@@ -362,6 +379,7 @@ function renderBar(d){
     bar.innerHTML='';
     composer=mcMount(bar,{base:URL_BASE,key:ANON,
       send:async function(t,urls){var r=await act('mod_send',{clientId:cur,text:t,photos:urls});if(!r||!r.ok)throw new Error(r&&r.error==='not_mine'?'чат уже ведёт другой администратор':'ошибка');refreshChat(true);},
+      create:async function(f){var r=await act('mod_create_order',Object.assign({clientId:cur},f));if(!r||!r.ok)throw new Error(r&&r.detail?r.detail:(r&&r.error==='not_mine'?'чат уже ведёт другой администратор':(r&&r.error)||'ошибка'));toast('Заказ №'+r.number+' создан, клиент получил кнопку оплаты');refreshChat(true);},
       attach:async function(urls,oid){var r=await act('mod_attach',{clientId:cur,photos:urls,orderId:oid});if(!r||!r.ok)throw new Error(r&&r.error==='no_order'?'no_order':'ошибка');return r.number?'№'+r.number:'';},
       price:async function(amt,oid,note){var r=await act('mod_set_price',{clientId:cur,amount:amt,orderId:oid,note:note});if(!r||!r.ok)throw new Error({order_not_draft:'заказ уже не черновик',not_mine:'чат ведёт другой администратор',bad_amount:'неверная сумма'}[r&&r.error]||'ошибка');toast('Цена зафиксирована: '+amt+' ₽');refreshChat(true);},
       back:async function(note,amt,oid){if(amt>0){var pr=await act('mod_set_price',{clientId:cur,amount:amt,orderId:oid});if(!pr||!pr.ok)throw new Error('цена не зафиксировалась, чат не возвращён');}var r=await act('mod_back',{clientId:cur,note:note});if(!r||!r.ok)throw new Error('ошибка');toast('Передано ассистенту');showList();}});
