@@ -7010,9 +7010,9 @@ function renderPricing() {
       const h = ev.target.closest && ev.target.closest('.pr-drag');
       if (!h || !h.textContent.trim()) return;
       const row = h.closest('.pr-row'); ev.preventDefault();
-      try { h.setPointerCapture(ev.pointerId); } catch (_e) {}
       row.classList.add('dragging');
       const move = (e) => {
+        e.preventDefault();
         const all = [...rows.querySelectorAll('.pr-row')].filter((r) => r !== row && r.querySelector('.pr-drag').textContent.trim());
         let before = null;
         for (const r of all) { const b = r.getBoundingClientRect(); if (e.clientY < b.top + b.height / 2) { before = r; break; } }
@@ -7020,8 +7020,8 @@ function renderPricing() {
         else { const tail = all.length ? all[all.length - 1].nextElementSibling : rows.firstElementChild; if (row.nextElementSibling !== tail) rows.insertBefore(row, tail); }
         const st = box.querySelector('.pr-status'); st.style.color = '#b45309'; st.textContent = 'Порядок изменён — нажмите «Сохранить»';
       };
-      const up = () => { row.classList.remove('dragging'); h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
-      h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+      const up = () => { row.classList.remove('dragging'); document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', up); };
+      document.addEventListener('pointermove', move, { passive: false }); document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up);
     });
     box.querySelector('.pr-save').addEventListener('click', async (ev) => {
       const btn = ev.currentTarget, status = box.querySelector('.pr-status');
