@@ -4844,7 +4844,7 @@ function isRefundAccepted(order) {
   return (order.timeline || []).some((t) => t && t.refundAccepted) || (order.refunds || []).length > 0;
 }
 /** Админ нажал «Принято к возврату» — действия заказчика над заказом заблокированы. */
-const LOCKED_CUSTOMER_ACTIONS = ['pay-order', 'cancel-order-ask', 'cancel-order-confirm', 'resume-order', 'pay-surcharge', 'confirm-completion', 'submit-clarification', 'decline-order', 'confirm-part-ready', 'confirm-part-purchased', 'confirm-part-purchased-with-question', 'edit-device-model'];
+const LOCKED_CUSTOMER_ACTIONS = ['extend-hourly', 'pay-order', 'cancel-order-ask', 'cancel-order-confirm', 'resume-order', 'pay-surcharge', 'confirm-completion', 'submit-clarification', 'decline-order', 'confirm-part-ready', 'confirm-part-purchased', 'confirm-part-purchased-with-question', 'edit-device-model'];
 function isCustomerLocked(order) {
   return Boolean(order) && order.customerId === state.currentUserId && isRefundAccepted(order);
 }
@@ -7450,6 +7450,42 @@ function paidSurchargeTotal(order) {
   return (((order.payment && order.payment.surcharges) || []).filter((x) => x.status === 'paid').reduce((a, x) => a + (Number(x.amount) || 0), 0));
 }
 
+function hourlyInfo(order) {
+  if (!order || !order.scope || !order.scope.hourly) return null;
+  const tl = Array.isArray(order.timeline) ? order.timeline : [];
+  let startAt = null;
+  tl.forEach((t) => { if (t && t.status === 'in_progress' && t.at) startAt = t.at; });
+  const ext = ((order.payment && order.payment.surcharges) || []).filter((x) => x.kind === 'extension' && x.status === 'paid').reduce((a, x) => a + (Number(x.minutes) || 0), 0);
+  const total = 60 + ext;
+  const start = startAt ? new Date(startAt).getTime() : null;
+  return { startAt: start, total, endAt: start ? start + total * 60000 : null, rate: Number(order.scope.rate) || 1700 };
+}
+/** «Муж на час»: время, оставшееся до конца оплаченного часа, и кнопки продления (для заказчика). */
+function hourlyBlockHtml(order, isCustomer) {
+  const h = hourlyInfo(order);
+  if (!h) return '';
+  if (order.status === 'assigned' || order.status === 'en_route') return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Муж на час</b> — ${h.rate} ₽/час, первый час оплачен. Отсчёт времени начнётся, когда мастер нажмёт «Начинаю работу».</p></div>`;
+  if (order.status !== 'in_progress' || !h.endAt) return '';
+  const left = Math.round((h.endAt - Date.now()) / 60000);
+  const endStr = new Date(h.endAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const info = left > 0 ? `Оплачено до ${endStr}, осталось около ${left} мин.` : `Оплаченное время закончилось в ${endStr}.`;
+  let btns = '';
+  if (isCustomer) {
+    const half = Math.round(h.rate / 2);
+    btns = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + [30, 60, 90, 120].map((m) => `<button type="button" class="primary-button" style="flex:1;min-width:120px;" data-action="extend-hourly" data-value="${order.id}:${m}">Продлить на ${m} мин · ${half * m / 30} ₽</button>`).join('') + '</div>';
+  }
+  return `<div class="field-card ${left <= 15 ? 'clarification-alert' : ''}" style="margin:8px 0;"><p class="order-meta"><b>Муж на час</b><br>${info}</p>${btns}</div>`;
+}
+async function extendHourly(orderId, minutes) {
+  const token = loadSessionToken();
+  if (!token) { showToast('Не получилось подтвердить вход — зайдите заново по номеру телефона'); return; }
+  try {
+    const r = await callSecureFn('chat-actions', { action: 'order_extend', userId: state.currentUserId, sessionToken: token, orderId, minutes });
+    if (r && r.paid) { showToast('Продлено на ' + minutes + ' мин (тестовый заказ)'); return window.location.reload(); }
+    if (r && r.surchargeId) return paySurcharge(orderId, r.surchargeId);
+    showToast('Не получилось продлить');
+  } catch (err) { showToast('Не получилось продлить — продлить можно, когда мастер уже начал работу'); }
+}
 async function paySurcharge(orderId, surchargeId) {
   const token = loadSessionToken();
   if (!token) { showToast('Не получилось подтвердить вход — зайдите заново по номеру телефона'); return; }
@@ -10871,7 +10907,7 @@ function renderOrderDetail() {
     // именно к этому шагу (см. renderOrderPhotoForm), чтобы фиксация
     // состояния «до» происходила до начала работы, а не постфактум.
     if (canTransition(order.status, 'in_progress')) {
-      actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">На месте, приступаю</button>`;
+      actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:in_progress">${order.scope && order.scope.hourly ? 'Начинаю работу (запуск отсчёта часа)' : 'На месте, приступаю'}</button>`;
     }
     if (canTransition(order.status, 'completed')) {
       actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
@@ -11219,6 +11255,7 @@ function renderOrderDetail() {
             .join('')
         }
         ${surchargeBlockHtml(order, isCustomer)}
+        ${hourlyBlockHtml(order, isCustomer)}
         ${isCustomer ? cashWarningHtml(order) : ''}
         ${(isCustomer || isAssignedWorker) ? myFeedbackBlockHtml(order) : ''}
         ${isCustomer && !['draft', 'collecting_details'].includes(order.status) ? `<button class="secondary-button" data-action="report-issue" data-value="${order.id}" style="box-sizing:border-box;margin:6px 0;">Сообщить о проблеме</button>` : ''}
@@ -15101,6 +15138,10 @@ async function handleAction(action, value) {
       showToast(wasStarted ? 'Вы отказались от заказа. Администратор проверит обстоятельства — оцените заказчика ниже.' : 'Вы отказались от заказа — он вернулся в поиск');
       if (!wasStarted) return go('orders');
       return render();
+    }
+    case 'extend-hourly': {
+      const [oid, mins] = value.split(':');
+      return extendHourly(oid, Number(mins));
     }
     case 'pay-surcharge': {
       const [oid, sid] = value.split(':');
