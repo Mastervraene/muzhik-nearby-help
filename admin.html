@@ -614,6 +614,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
     <button class="tab-btn" data-tab="accounting">Бухгалтерия</button>
     <button class="tab-btn" data-tab="pricing">Прайс-лист</button>
     <button class="tab-btn" data-tab="ai">ИИ<span id="ai-badge" style="display:none; margin-left:6px; background:#e04b4b; color:#fff; border-radius:10px; font-size:11px; line-height:1; padding:3px 6px; font-weight:700; vertical-align:middle;"></span></button>
+    <button class="tab-btn" data-tab="scen">Сценарии</button>
     <button class="tab-btn" data-tab="stats">Статистика</button>
   </div>
 
@@ -864,6 +865,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   <div class="tab-panel" id="panel-ai">
     <div id="ai-provider" style="margin:0 0 14px; padding:12px 14px; border:1px solid #ddd; border-radius:10px; background:#fafafa"><span class="count-hint">Загрузка ассистента…</span></div>
     <div id="ai-body"><p class="count-hint">Загрузка…</p></div>
+  </div>
+
+  <div class="tab-panel" id="panel-scen">
+    <div id="scen-body"><p class="count-hint">Загрузка…</p></div>
   </div>
 
   <div class="tab-panel" id="panel-pricing">
@@ -6832,7 +6837,7 @@ function mcMount(host, opts) {
   snd.onclick = doSend;
   corr.onclick = function () {
     var ov = document.createElement('div'); ov.className = 'mc-ov';
-    ov.innerHTML = '<div class="mc-sheet"><div class="mc-grab" style="width:40px;height:5px;border-radius:3px;background:#cbd5e1;margin:0 auto 12px;padding:8px 0;background-clip:content-box"></div><h3>Коррекция</h3><label>Заказ</label><select class="o"></select><div class="nf" style="display:none"><label>Название заказа</label><input class="nt" maxlength="120" placeholder="Например: Подключить стиральную машину"><label>Описание</label><textarea class="nd" rows="3" placeholder="Что нужно сделать"></textarea><label>Адрес</label><input class="na" placeholder="Город, улица, дом, квартира"><label>Категория</label><select class="nc"><option value="other">Другое</option><option value="electrics">Электрика</option><option value="plumbing">Сантехника</option><option value="windows_doors">Окна и двери</option><option value="air_conditioning">Кондиционеры</option><option value="assembly">Сборка мебели</option><option value="minor_repair">Мелкий ремонт</option><option value="household_help">Уборка и бытовая помощь</option><option value="moving_help">Вынос и перемещение</option><option value="cars">Автомобили</option><option value="computers">Компьютеры</option></select><label>Пожелания клиента</label><input class="nw" placeholder="Время, детали (необязательно)"></div><label>Цена</label><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
+    ov.innerHTML = '<div class="mc-sheet"><div class="mc-grab" style="width:40px;height:5px;border-radius:3px;background:#cbd5e1;margin:0 auto 12px;padding:8px 0;background-clip:content-box"></div><h3>Коррекция</h3><label>Заказ</label><select class="o"></select><div class="nf" style="display:none"><label>Услуга из прайса</label><select class="ns"><option value="">Другое (вручную)</option></select><label>Название заказа</label><input class="nt" maxlength="120" placeholder="Например: Подключить стиральную машину"><label>Описание</label><textarea class="nd" rows="3" placeholder="Что нужно сделать"></textarea><label>Адрес</label><input class="na" placeholder="Город, улица, дом, квартира"><label>Категория</label><select class="nc"><option value="other">Другое</option><option value="electrics">Электрика</option><option value="plumbing">Сантехника</option><option value="windows_doors">Окна и двери</option><option value="air_conditioning">Кондиционеры</option><option value="assembly">Сборка мебели</option><option value="minor_repair">Мелкий ремонт</option><option value="household_help">Уборка и бытовая помощь</option><option value="moving_help">Вынос и перемещение</option><option value="cars">Автомобили</option><option value="computers">Компьютеры</option></select><label>Пожелания клиента</label><input class="nw" placeholder="Время, детали (необязательно)"></div><label>Цена</label><input class="a" type="number" inputmode="numeric" min="1" placeholder="Сумма, ₽" style="margin-top:8px"><label>Указание ассистенту (клиент не видит)</label><textarea class="n" rows="3" placeholder="Что уточнить у клиента или что делать дальше"></textarea><div class="r"><button type="button" class="ap sec"><span class="ai">📷</span> Фото к заказу</button></div><input class="af" type="file" accept="image/*" multiple style="display:none"><div class="as" style="font-size:12px;color:#64748b;margin-top:4px;min-height:14px"></div><div class="r"><button type="button" class="p">Зафиксировать цену</button></div><div class="r"><button type="button" class="b sec">Вернуть ассистенту</button><button type="button" class="x sec">Закрыть</button></div></div>';
     document.body.appendChild(ov);
     var sheet = ov.querySelector('.mc-sheet');
     (function () {
@@ -6854,6 +6859,9 @@ function mcMount(host, opts) {
     var newPhotos = [], pBtn = ov.querySelector('.p'), nf = ov.querySelector('.nf');
     function modeUpd() { var isNew = sel.value === '__new'; nf.style.display = isNew ? '' : 'none'; pBtn.textContent = isNew ? 'Создать заказ и отправить клиенту' : 'Зафиксировать цену'; ov.querySelector('.ap').lastChild.textContent = isNew ? ' Фото к новому заказу' : ' Фото к заказу'; }
     sel.onchange = modeUpd; if (!drafts.length) sel.value = '__new'; modeUpd();
+    var priceRows = [], nsEl = ov.querySelector('.ns');
+    if (opts.prices) opts.prices().then(function (rows) { priceRows = rows || []; nsEl.innerHTML = '<option value="">Другое (вручную)</option>' + priceRows.map(function (r, i) { return '<option value="' + i + '">' + esc(r.name) + ' — ' + r.price + ' ₽</option>'; }).join(''); }).catch(function () { /* без списка прайса */ });
+    nsEl.onchange = function () { var r = priceRows[this.value]; if (!r) return; ov.querySelector('.nt').value = r.name; ov.querySelector('.nc').value = r.category; ov.querySelector('.a').value = Number(r.price) + 500; };
     function vals() { return { amt: Math.round(Number(ov.querySelector('.a').value)), oid: (sel.value && sel.value !== '__new') ? sel.value : undefined, note: ov.querySelector('.n').value.trim() }; }
     var af = ov.querySelector('.af'), as = ov.querySelector('.as'), ap = ov.querySelector('.ap');
     ap.onclick = function () { af.click(); };
@@ -6879,7 +6887,7 @@ function mcMount(host, opts) {
     ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
     ov.querySelector('.p').onclick = async function () {
       if (sel.value === '__new') {
-        var f = { title: ov.querySelector('.nt').value.trim(), description: ov.querySelector('.nd').value.trim(), address: ov.querySelector('.na').value.trim(), category: ov.querySelector('.nc').value, wishes: ov.querySelector('.nw').value.trim(), price: Math.round(Number(ov.querySelector('.a').value)), note: ov.querySelector('.n').value.trim(), photos: newPhotos };
+        var f = { title: ov.querySelector('.nt').value.trim(), description: ov.querySelector('.nd').value.trim(), address: ov.querySelector('.na').value.trim(), category: ov.querySelector('.nc').value, wishes: ov.querySelector('.nw').value.trim(), price: Math.round(Number(ov.querySelector('.a').value)), note: ov.querySelector('.n').value.trim(), photos: newPhotos, item: (priceRows[nsEl.value] && priceRows[nsEl.value].name) || '' };
         if (!f.title) { alert('Введите название заказа'); return; }
         if (!f.description) { alert('Введите описание'); return; }
         if (!f.address) { alert('Введите адрес'); return; }
@@ -7207,6 +7215,7 @@ function renderChatCtl(d) {
     chatComposer = mcMount(ctl, {
       base: SUPABASE_URL, key: SUPABASE_ANON_KEY,
       send: async (t, urls) => { await callMod('mod_send', { clientId: chatOpenId, text: t, photos: urls }); await openChat(chatOpenId, true); },
+      prices: async () => { const r = await callMod('mod_prices'); return r.items || []; },
       create: async (f) => { await callMod('mod_create_order', Object.assign({ clientId: chatOpenId }, f)); await openChat(chatOpenId, true); },
       attach: async (urls, oid) => { const r = await callMod('mod_attach', { clientId: chatOpenId, photos: urls, orderId: oid }).catch((e) => { throw new Error(e.code === 'no_order' ? 'no_order' : e.message); }); return r.number ? 'T-' + r.number : ''; },
       price: async (amt, oid, note) => { await callMod('mod_set_price', { clientId: chatOpenId, amount: amt, orderId: oid, note }); await openChat(chatOpenId, true); },
@@ -7414,12 +7423,82 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+/* ===== Сценарии: Что / Что происходит / Уточнение / Что происходит / Позиция в прайсе ===== */
+let scenRows = [], scenPrices = [], scenDirty = false;
+const SC_COLS = [['what','Что'],['a','Что происходит'],['clar','Уточнение'],['b','Что происходит']];
+async function loadScen() {
+  const box = document.getElementById('scen-body');
+  try {
+    const [r1, r2] = await Promise.all([callAdminPricing('get_scenarios'), callAdminPricing('list')]);
+    scenRows = r1.rows || []; scenPrices = r2.prices || [];
+    if (!scenRows.length) scenRows = [{ what:'', a:'', clar:'', b:'', item:null }];
+    scenDirty = false; renderScen();
+  } catch (e) { box.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
+}
+function scenItemLabel(id) {
+  const it = scenPrices.find((x) => x.id === id);
+  return it ? it.category + ' · ' + it.name : '';
+}
+function renderScen() {
+  const box = document.getElementById('scen-body');
+  const cats = {};
+  scenPrices.forEach((it) => { (cats[it.category] = cats[it.category] || []).push(it); });
+  const opts = (sel) => '<option value="">— не выбрано —</option>' + Object.keys(cats).map((c) =>
+    '<optgroup label="' + aiEsc(c) + '">' + cats[c].map((it) => '<option value="' + it.id + '"' + (it.id === sel ? ' selected' : '') + '>' + aiEsc(it.name) + '</option>').join('') + '</optgroup>').join('') +
+    '<option value="__new">➕ Новая позиция</option>';
+  const rows = scenRows.map((r, i) => {
+    const it = scenPrices.find((x) => x.id === r.item);
+    return '<tr data-i="' + i + '">' + SC_COLS.map(([k]) => '<td><textarea rows="2" data-k="' + k + '" style="width:100%;min-width:150px;box-sizing:border-box;font:inherit;border:1px solid #ccc;border-radius:6px;padding:5px">' + aiEsc(r[k] || '') + '</textarea></td>').join('') +
+      '<td style="min-width:220px"><select data-k="item" style="width:100%">' + opts(r.item) + '</select>' +
+      '<div class="count-hint" data-p>' + (it ? it.price + ' ₽ · ' + (it.minutes || 60) + ' мин' : '') + '</div><div data-new></div></td>' +
+      '<td style="white-space:nowrap"><button data-act="dup" title="Копировать строку">⧉</button> <button data-act="del" title="Удалить">✕</button></td></tr>';
+  }).join('');
+  box.innerHTML = '<p class="count-hint">Пишите своими словами. Повторяющиеся «Что» можно оставлять в каждой строке. Цена и время берутся из прайса и здесь не редактируются.</p>' +
+    '<div style="overflow:auto"><table style="border-collapse:collapse;width:100%"><thead><tr>' + SC_COLS.map(([, t]) => '<th style="text-align:left;padding:4px">' + t + '</th>').join('') + '<th style="text-align:left;padding:4px">Позиция в прайсе</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<p style="margin-top:12px"><button id="scen-add">+ Строка</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+  const msg = (t) => { document.getElementById('scen-msg').textContent = t; };
+  box.querySelectorAll('tbody tr').forEach((tr) => {
+    const i = +tr.dataset.i;
+    tr.querySelectorAll('textarea').forEach((ta) => { ta.oninput = () => { scenRows[i][ta.dataset.k] = ta.value; scenDirty = true; }; });
+    const sel = tr.querySelector('select');
+    sel.onchange = () => {
+      const nw = tr.querySelector('[data-new]');
+      if (sel.value === '__new') {
+        const cs = Object.keys(cats);
+        nw.innerHTML = '<div style="margin-top:6px;display:grid;gap:4px"><select class="nc">' + cs.map((c) => '<option>' + aiEsc(c) + '</option>').join('') + '</select><input class="nn" placeholder="Название"><input class="np" type="number" placeholder="Цена, ₽"><input class="nm" type="number" placeholder="Минуты" value="60"><button class="ny">Создать в прайсе</button></div>';
+        nw.querySelector('.ny').onclick = async () => {
+          try {
+            const r = await callAdminPricing('add_price_item', { category: nw.querySelector('.nc').value, name: nw.querySelector('.nn').value, price: nw.querySelector('.np').value, minutes: nw.querySelector('.nm').value });
+            scenPrices.push(r.item); scenRows[i].item = r.item.id; scenDirty = true; renderScen();
+          } catch (e) { msg('Ошибка: ' + e.message); }
+        };
+      } else {
+        nw.innerHTML = ''; scenRows[i].item = sel.value ? +sel.value : null; scenDirty = true;
+        const it = scenPrices.find((x) => x.id === scenRows[i].item);
+        tr.querySelector('[data-p]').textContent = it ? it.price + ' ₽ · ' + (it.minutes || 60) + ' мин' : '';
+      }
+    };
+    tr.querySelectorAll('[data-act]').forEach((b) => { b.onclick = () => {
+      if (b.dataset.act === 'dup') scenRows.splice(i + 1, 0, Object.assign({}, scenRows[i]));
+      else scenRows.splice(i, 1);
+      if (!scenRows.length) scenRows.push({ what:'', a:'', clar:'', b:'', item:null });
+      scenDirty = true; renderScen();
+    }; });
+  });
+  document.getElementById('scen-add').onclick = () => { const l = scenRows[scenRows.length - 1] || {}; scenRows.push({ what: l.what || '', a:'', clar:'', b:'', item:null }); scenDirty = true; renderScen(); };
+  document.getElementById('scen-save').onclick = async () => {
+    try { const r = await callAdminPricing('save_scenarios', { rows: scenRows }); scenDirty = false; msg('Сохранено: ' + r.count + ' строк'); }
+    catch (e) { msg('Ошибка: ' + e.message); }
+  };
+}
+
 function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `panel-${tab}`));
   if (tab === 'map') renderMap();
   if (tab === 'pricing' && !pricingLoaded) loadPricing();
   if (tab === 'ai') loadAi();
+  if (tab === 'scen') loadScen();
   if (tab === 'chats') { chatOpenId = null; chatAllView = false; loadChats(); }
   if (tab === 'payouts') { if (!payoutsLoaded) loadPayouts(); else renderPayouts(); }
   if (tab === 'accounting') { if (!payoutsLoaded) loadPayouts().then(renderAccounting); renderAccounting(); }
