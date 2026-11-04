@@ -7423,71 +7423,99 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-/* ===== Сценарии: Что / Что происходит / Уточнение / Что происходит / Позиция в прайсе ===== */
-let scenRows = [], scenPrices = [], scenDirty = false;
-const SC_COLS = [['what','Что'],['a','Что происходит'],['clar','Уточнение'],['b','Что происходит']];
+/* ===== Сценарии: дерево Что → Что происходит → Уточнение → Что происходит → Позиция в прайсе ===== */
+let scenTree = [], scenPrices = [];
+const SC_PH = ['Что (например: розетка)', 'Что происходит', 'Уточнение', 'Что происходит'];
+const scNew = () => ({ t: '', item: null, kids: [] });
+function scLegacy(rows) {
+  return (rows || []).map((r) => {
+    const parts = [r.what, r.a, r.clar, r.b].filter(Boolean);
+    if (!parts.length) return null;
+    let root = null, cur = null;
+    parts.forEach((t) => { const n = { t, item: null, kids: [] }; if (cur) cur.kids.push(n); else root = n; cur = n; });
+    cur.item = r.item || null; return root;
+  }).filter(Boolean);
+}
 async function loadScen() {
   const box = document.getElementById('scen-body');
   try {
     const [r1, r2] = await Promise.all([callAdminPricing('get_scenarios'), callAdminPricing('list')]);
-    scenRows = r1.rows || []; scenPrices = r2.prices || [];
-    if (!scenRows.length) scenRows = [{ what:'', a:'', clar:'', b:'', item:null }];
-    scenDirty = false; renderScen();
+    scenTree = r1.tree || scLegacy(r1.rows); scenPrices = r2.prices || [];
+    if (!scenTree.length) scenTree = [scNew()];
+    renderScen();
   } catch (e) { box.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
 }
-function scenItemLabel(id) {
-  const it = scenPrices.find((x) => x.id === id);
-  return it ? it.category + ' · ' + it.name : '';
+function scGet(p) {
+  const ix = p.split('.').map(Number); let arr = scenTree, n = null, parent = null;
+  ix.forEach((i) => { parent = arr; n = arr[i]; arr = n.kids; });
+  return { n, parent, i: ix[ix.length - 1] };
+}
+function scPriceCell(n, p) {
+  const it = scenPrices.find((x) => x.id === n.item);
+  const inner = it
+    ? '<div><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · ' + it.price + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить</button></div>'
+    : '<input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div>';
+  return '<div class="sc sp" data-p="' + p + '" style="background:#eef6ee">' + inner + '</div>';
+}
+function scHtml(n, path, depth) {
+  const p = path.join('.');
+  let h = '<div class="sn"><div class="sc" data-p="' + p + '"><textarea rows="2" placeholder="' + SC_PH[depth] + '">' + aiEsc(n.t) + '</textarea><div class="sb">' +
+    (depth < 3 ? '<button data-act="kid" title="Добавить ветку вправо">↳ ветка</button> ' : '') +
+    '<button data-act="sib" title="Ещё вариант на этом же уровне">＋ рядом</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
+  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i), depth + 1)).join('') + '</div>';
+  else h += scPriceCell(n, p);
+  return h + '</div>';
 }
 function renderScen() {
   const box = document.getElementById('scen-body');
-  const cats = {};
-  scenPrices.forEach((it) => { (cats[it.category] = cats[it.category] || []).push(it); });
-  const opts = (sel) => '<option value="">— не выбрано —</option>' + Object.keys(cats).map((c) =>
-    '<optgroup label="' + aiEsc(c) + '">' + cats[c].map((it) => '<option value="' + it.id + '"' + (it.id === sel ? ' selected' : '') + '>' + aiEsc(it.name) + '</option>').join('') + '</optgroup>').join('') +
-    '<option value="__new">➕ Новая позиция</option>';
-  const rows = scenRows.map((r, i) => {
-    const it = scenPrices.find((x) => x.id === r.item);
-    return '<tr data-i="' + i + '">' + SC_COLS.map(([k]) => '<td><textarea rows="2" data-k="' + k + '" style="width:100%;min-width:150px;box-sizing:border-box;font:inherit;border:1px solid #ccc;border-radius:6px;padding:5px">' + aiEsc(r[k] || '') + '</textarea></td>').join('') +
-      '<td style="min-width:220px"><select data-k="item" style="width:100%">' + opts(r.item) + '</select>' +
-      '<div class="count-hint" data-p>' + (it ? it.price + ' ₽ · ' + (it.minutes || 60) + ' мин' : '') + '</div><div data-new></div></td>' +
-      '<td style="white-space:nowrap"><button data-act="dup" title="Копировать строку">⧉</button> <button data-act="del" title="Удалить">✕</button></td></tr>';
-  }).join('');
-  box.innerHTML = '<p class="count-hint">Пишите своими словами. Повторяющиеся «Что» можно оставлять в каждой строке. Цена и время берутся из прайса и здесь не редактируются.</p>' +
-    '<div style="overflow:auto"><table style="border-collapse:collapse;width:100%"><thead><tr>' + SC_COLS.map(([, t]) => '<th style="text-align:left;padding:4px">' + t + '</th>').join('') + '<th style="text-align:left;padding:4px">Позиция в прайсе</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-    '<p style="margin-top:12px"><button id="scen-add">+ Строка</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
-  const msg = (t) => { document.getElementById('scen-msg').textContent = t; };
-  box.querySelectorAll('tbody tr').forEach((tr) => {
-    const i = +tr.dataset.i;
-    tr.querySelectorAll('textarea').forEach((ta) => { ta.oninput = () => { scenRows[i][ta.dataset.k] = ta.value; scenDirty = true; }; });
-    const sel = tr.querySelector('select');
-    sel.onchange = () => {
-      const nw = tr.querySelector('[data-new]');
-      if (sel.value === '__new') {
-        const cs = Object.keys(cats);
-        nw.innerHTML = '<div style="margin-top:6px;display:grid;gap:4px"><select class="nc">' + cs.map((c) => '<option>' + aiEsc(c) + '</option>').join('') + '</select><input class="nn" placeholder="Название"><input class="np" type="number" placeholder="Цена, ₽"><input class="nm" type="number" placeholder="Минуты" value="60"><button class="ny">Создать в прайсе</button></div>';
-        nw.querySelector('.ny').onclick = async () => {
-          try {
-            const r = await callAdminPricing('add_price_item', { category: nw.querySelector('.nc').value, name: nw.querySelector('.nn').value, price: nw.querySelector('.np').value, minutes: nw.querySelector('.nm').value });
-            scenPrices.push(r.item); scenRows[i].item = r.item.id; scenDirty = true; renderScen();
-          } catch (e) { msg('Ошибка: ' + e.message); }
-        };
-      } else {
-        nw.innerHTML = ''; scenRows[i].item = sel.value ? +sel.value : null; scenDirty = true;
-        const it = scenPrices.find((x) => x.id === scenRows[i].item);
-        tr.querySelector('[data-p]').textContent = it ? it.price + ' ₽ · ' + (it.minutes || 60) + ' мин' : '';
-      }
-    };
-    tr.querySelectorAll('[data-act]').forEach((b) => { b.onclick = () => {
-      if (b.dataset.act === 'dup') scenRows.splice(i + 1, 0, Object.assign({}, scenRows[i]));
-      else scenRows.splice(i, 1);
-      if (!scenRows.length) scenRows.push({ what:'', a:'', clar:'', b:'', item:null });
-      scenDirty = true; renderScen();
-    }; });
-  });
-  document.getElementById('scen-add').onclick = () => { const l = scenRows[scenRows.length - 1] || {}; scenRows.push({ what: l.what || '', a:'', clar:'', b:'', item:null }); scenDirty = true; renderScen(); };
+  const heads = ['Что', 'Что происходит', 'Уточнение', 'Что происходит', 'Позиция в прайсе'];
+  box.innerHTML = '<style>#scen-body .sn{display:flex;align-items:center}#scen-body .sk{display:flex;flex-direction:column;border-left:2px solid #bbb;margin-left:4px;padding-left:4px}' +
+    '#scen-body .sc{width:210px;flex:none;margin:3px;padding:6px;border:1px solid #ccc;border-radius:8px;background:#fff;position:relative}#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px}' +
+    '#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:6px;right:6px;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
+    '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}</style>' +
+    '<p class="count-hint">Пишите своими словами. «↳ ветка» — следующий шаг вправо, «＋ рядом» — другой вариант на том же уровне. В конце ветки выберите позицию прайса: начните вводить, а если такой нет — предложит создать. Цена и время берутся только из прайса.</p>' +
+    '<div style="overflow:auto;padding-bottom:160px"><div style="display:flex;font-weight:600;margin-left:3px">' + heads.map((t) => '<div style="width:224px;flex:none">' + t + '</div>').join('') + '</div>' +
+    scenTree.map((n, i) => '<div style="border-top:1px solid #ddd;padding:6px 0">' + scHtml(n, [i], 0) + '</div>').join('') + '</div>' +
+    '<p><button id="scen-add">+ Новое «Что»</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+  const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
+  box.oninput = (ev) => {
+    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    if (el.tagName === 'TEXTAREA') { scGet(c.dataset.p).n.t = el.value; return; }
+    if (!el.classList.contains('si')) return;
+    const q = el.value.trim().toLowerCase(), dd = c.querySelector('.sd');
+    if (!q) { dd.innerHTML = ''; return; }
+    const m = scenPrices.filter((x) => (x.name + ' ' + x.category).toLowerCase().includes(q)).slice(0, 8);
+    dd.innerHTML = m.map((x) => '<div data-id="' + x.id + '">' + aiEsc(x.name) + ' <span class="count-hint">' + aiEsc(x.category) + ' · ' + x.price + ' ₽</span></div>').join('') +
+      (m.length ? '' : '<div data-newi="1">➕ Создать позицию «' + aiEsc(el.value.trim()) + '»</div>');
+  };
+  box.onclick = async (ev) => {
+    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    const p = c.dataset.p, act = el.dataset.act;
+    if (el.dataset.id) { scGet(p).n.item = +el.dataset.id; return renderScen(); }
+    if (el.closest('[data-newi]')) {
+      const name = c.querySelector('.si').value.trim(), cats = [...new Set(scenPrices.map((x) => x.category))];
+      c.querySelector('.sd').innerHTML = '';
+      c.insertAdjacentHTML('beforeend', '<div class="nf" style="margin-top:6px;display:grid;gap:4px"><select class="nc">' + cats.map((x) => '<option>' + aiEsc(x) + '</option>').join('') + '</select><input class="nn" value="' + aiEsc(name) + '"><input class="np" type="number" placeholder="Цена, ₽"><input class="nm" type="number" value="60" placeholder="Минуты"><button class="ny">Создать в прайсе</button></div>');
+      return;
+    }
+    if (el.classList.contains('ny')) {
+      try {
+        const r = await callAdminPricing('add_price_item', { category: c.querySelector('.nc').value, name: c.querySelector('.nn').value, price: c.querySelector('.np').value, minutes: c.querySelector('.nm').value });
+        scenPrices.push(r.item); scGet(p).n.item = r.item.id; renderScen();
+      } catch (e) { msg('Ошибка: ' + e.message); }
+      return;
+    }
+    if (!act) return;
+    const g = scGet(p);
+    if (act === 'clr') g.n.item = null;
+    if (act === 'kid') { g.n.item = null; g.n.kids.push(scNew()); }
+    if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew());
+    if (act === 'del') { g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew()); }
+    renderScen();
+  };
+  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew()); renderScen(); };
   document.getElementById('scen-save').onclick = async () => {
-    try { const r = await callAdminPricing('save_scenarios', { rows: scenRows }); scenDirty = false; msg('Сохранено: ' + r.count + ' строк'); }
+    try { const r = await callAdminPricing('save_scenarios', { tree: scenTree }); msg('Сохранено: ' + r.count + ' начал'); }
     catch (e) { msg('Ошибка: ' + e.message); }
   };
 }
