@@ -5234,6 +5234,8 @@ async function ensureUserByPhone(phone, extra = {}) {
  */
 let phoneVerifyState = null;
 let loginPopupOpen = false;
+/** Куда вернуть после входа из всплывающего окна (см. renderMain). */
+let loginReturnScreen = null;
 
 /**
  * Раскрыто ли поле редактирования номера в renderPhoneOverlay() — живёт вне
@@ -12362,20 +12364,18 @@ function renderMain() {
   }
 
   const screensRequiringUser = ['orders', 'profile', 'masterPanel', 'masterWizard', 'workerBalance', 'notifications', 'orderDetail'];
+  // Отдельной страницы «Вход по номеру телефона» больше нет (08.11.2026, по
+  // просьбе Sg): она ловила людей, пришедших на главную, и выглядела как
+  // сломанный сайт. Если без входа открылся экран, которому нужен аккаунт, —
+  // показываем главную со всплывающим входом (как по клику на аватарку), а
+  // после входа возвращаем на тот экран, куда человек шёл.
   if (isSupabaseConfigured() && screensRequiringUser.includes(state.screen) && !currentUser()) {
-    app.innerHTML = `
-      ${renderTopbarNoUser()}
-      <div class="screen">
-        <div class="section-title">Вход по номеру телефона</div>
-        <div class="chat-thread">${renderPhoneGate()}</div>
-      </div>
-      ${state.infoOverlay === 'short' ? renderOnboardingOverlay() : state.infoOverlay === 'long' ? renderHelpOverlay() : state.infoOverlay === 'radius' ? renderRadiusNoticeOverlay() : state.infoOverlay === 'support' ? renderSupportOverlay() : state.infoOverlay === 'payment_success' ? renderPaymentSuccessOverlay() : state.infoOverlay === 'payment_failed' ? renderPaymentFailedOverlay() : state.infoOverlay === 'telegram' ? renderTelegramOverlay() : state.infoOverlay === 'push' ? renderPushOverlay() : state.infoOverlay === 'phone' ? renderPhoneOverlay() : state.infoOverlay === 'avatar-menu' ? renderAvatarMenuOverlay() : state.infoOverlay === 'order-created' ? renderOrderCreatedTipOverlay() : state.infoOverlay === 'order-paid' ? renderOrderCreatedTipOverlay('paid') : state.infoOverlay === 'cancel-order' ? renderCancelOrderOverlay() : state.infoOverlay === 'decline-order' ? renderDeclineOrderOverlay() : state.infoOverlay === 'cash-report' ? renderCashReportOverlay() : state.infoOverlay === 'feedback' ? renderFeedbackOverlay() : ''}
-    ${renderPhotoViewerOverlay()}
-    ${renderStoriesOverlay()}
-      ${passwordStepState ? renderPasswordStepOverlay(passwordStepState) : ''}
-    `;
-    wireEvents();
-    return;
+    loginReturnScreen = state.screen;
+    state.screen = 'home';
+    loginPopupOpen = true;
+  } else if (loginReturnScreen && currentUser()) {
+    state.screen = loginReturnScreen;
+    loginReturnScreen = null;
   }
 
   if (!currentUser() && !isSupabaseConfigured()) {
@@ -14645,7 +14645,7 @@ async function handleAction(action, value) {
     case 'go-profile':
       if (state.screen === 'home' && isSupabaseConfigured() && !currentUser()) { loginPopupOpen = true; return render(); }
       return go('profile');
-    case 'close-login-popup': loginPopupOpen = false; return render();
+    case 'close-login-popup': loginPopupOpen = false; loginReturnScreen = null; return render();
     case 'go-master-panel': return go('masterPanel');
     case 'go-master-wizard': return openMasterWizard();
     case 'mw-change-phone': profilePhoneEditOpen = true; state.infoOverlay = 'phone'; return render();
