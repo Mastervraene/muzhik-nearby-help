@@ -912,7 +912,9 @@ body.embed .chat-screen { padding-top:6px; }
       desiredDate: '', timeWindow: '', urgency: 'normal', customerBudget: null,
       estimate: { min: price, max: price, factors: [] }, status: 'draft', timeline: [{ status: 'draft', at: now, sign: signInfo }],
       warnings: LIVE ? [] : ['Тестовый заказ из чат-помощника'], isPrecedent: false, negotiation: { customerOffer: null, workerOffer: null },
-      isTest: !LIVE
+      isTest: !LIVE,
+      // Сколько займёт работа — по прайсу (минуты на единицу × количество, округление до 5 мин, как в чате). Мастер видит «Займёт примерно …».
+      estimatedMinutes: (function () { var m0 = Number(draft._min) || 0; if (!(m0 > 0)) return null; return Math.round(m0 * Math.max(1, Number(draft.qty) || 1) / 5) * 5; })()
     };
     try {
       var res = await fetch(URL_BASE + '/functions/v1/create-order', {
