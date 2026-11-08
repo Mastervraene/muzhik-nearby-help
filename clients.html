@@ -20,22 +20,19 @@ a{color:inherit}
 .osw{font-family:"Oswald","Arial Narrow",Impact,sans-serif;font-weight:700}
 
 /* Первый экран — продолжение листовки */
-.hero{position:relative;background:#fff;padding:18px 20px 0;overflow:hidden}
+.hero{position:relative;background:#fff;padding:18px 20px 0;overflow:hidden;min-height:min(100svh,800px);display:flex;flex-direction:column}
+.hero::after{content:"";position:absolute;right:-30%;bottom:-14%;width:120%;height:42%;background:var(--blue);border-radius:50%;z-index:0}
 .brand{position:relative;z-index:3;display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text)}
 .brand img{width:34px;height:38px}
 .brand b{font-size:17px}.brand small{display:block;color:var(--muted);font-size:11px;font-weight:400}
-.copy{position:relative;z-index:3;margin-top:20px}
-.q{display:inline-block;border:3px solid var(--blue);border-radius:999px;padding:4px 18px 2px;font-size:clamp(24px,7vw,34px);color:var(--ink)}
-.hero h1{margin:12px 0 0;color:var(--ink);font-size:clamp(38px,11.5vw,58px);line-height:1;text-transform:uppercase}
-.hero h1 small{display:block;font-size:.5em;text-transform:none;line-height:1.1;margin-bottom:4px}
-.free{position:relative;z-index:3;display:inline-flex;align-items:center;gap:6px;margin-top:14px;background:var(--yellow);color:var(--ink);border-radius:18px;padding:8px 16px 6px;font-size:clamp(26px,8vw,38px);text-decoration:none;transform:rotate(-2deg)}
-.free sup{font-size:.55em}
-.fine{margin:10px 0 0;font-size:13px;color:var(--muted)}
-.fine a{color:var(--blue)}
-.fig{position:relative;margin:8px -20px 0;height:min(110vw,480px);overflow:hidden}
-.fig::before{content:"";position:absolute;left:-12%;right:-12%;bottom:-30%;height:78%;background:var(--blue);border-radius:50%;}
-.fig .pic{position:absolute;left:0;bottom:0;height:100%;width:auto}
-.call{position:absolute;z-index:3;right:20px;bottom:40px;background:var(--yellow);color:var(--ink);border-radius:999px;padding:10px 22px 8px;font-size:30px;text-decoration:none;box-shadow:0 10px 24px rgba(15,27,61,.25)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.tw{position:relative;z-index:3;align-self:flex-end;width:min(76%,380px);margin:4px -6px 0 0}
+.tw img{width:100%;display:block;filter:drop-shadow(0 6px 14px rgba(15,27,61,.15))}
+.tw .star{position:absolute;left:84%;top:63%;font:700 30px/1 "Oswald",sans-serif;color:var(--ink);text-decoration:none}
+.tw .call{position:absolute;left:37%;top:83%;width:46%;height:16%;border-radius:999px}
+.hero .pic{position:absolute;z-index:2;left:-16px;bottom:0;height:60%;max-height:520px;width:auto}
+.fine{position:relative;z-index:3;margin:auto 0 18px auto;max-width:44%;font-size:12.5px;line-height:1.4;color:#fff;text-align:right}
+.fine a{color:#fff;font-weight:700}
 
 section{padding:34px 20px 6px}
 section h2{font-family:"Oswald",sans-serif;font-weight:700;font-size:28px;line-height:1.1;margin:0 0 6px;color:var(--ink);text-transform:uppercase}
@@ -93,13 +90,14 @@ body{-webkit-tap-highlight-color:transparent}
 
   <header class="hero">
     <a class="brand" href="/"><img src="/logo.png" alt="" /><span><b>Мужик</b><small>рядом поможет</small></span></a>
-    <div class="copy">
-      <span class="q osw">Починить?</span>
-      <h1 class="osw"><small>Сделаем вам</small>ремонт по дому</h1>
-      <a class="free osw" href="/akciya/">Бесплатно<sup>*</sup></a>
-      <p class="fine">*Каждый месяц один заказ полностью за наш счёт. <a href="/akciya/">Правила акции</a></p>
+    <h1 class="sr">Починить? Сделаем вам ремонт по дому. Бесплатно* — зовите!</h1>
+    <div class="tw">
+      <img src="/promo/title-client.webp" alt="Починить? Сделаю вам ремонт по дому. Бесплатно! Зови!" />
+      <a class="star" href="/akciya/" aria-label="Условия акции">*</a>
+      <a class="call" href="/" aria-label="Описать задачу"></a>
     </div>
-    <div class="fig"><img class="pic" src="/promo/hero-client.webp?v=3" alt="Мастер" /><a class="call osw" href="/">Зовите!</a></div>
+    <img class="pic" src="/promo/hero-client.webp?v=3" alt="Мастер" />
+    <p class="fine">*Каждый месяц один заказ полностью за наш счёт. <a href="/akciya/">Правила акции</a></p>
   </header>
 
   <section>
