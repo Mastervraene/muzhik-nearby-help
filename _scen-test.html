@@ -1,0 +1,235 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>scen test</title><style>body{font-family:Arial;margin:0}.count-hint{color:#777;font-size:12px}</style></head><body><div id="scen-body"></div>
+<script>
+function aiEsc(x){return String(x==null?'':x).replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const TREE=[{"t": "Розетка", "k": "a", "extra": false, "item": null, "kids": [{"t": "Болтается, не держится, вываливается", "k": "a", "extra": false, "item": null, "kids": [{"t": "Приложите пару фотографий, чтобы мастер понимал, что нужно будет сделать", "k": "r", "extra": false, "item": 60, "kids": []}]}, {"t": "Искрит, трещит", "k": "a", "extra": false, "item": null, "kids": [{"t": "Проблема может быть с плохо затянутыми контактами, в этом случае мастер подтянет их и всё будет работать. По если дом старый (до 2003 года), проблема может быть и с проводкой. В таком случае иногда лучше сразу заменить розетку на новую.", "k": "q", "extra": false, "item": null, "kids": [{"t": "дом старый, хрущевка", "k": "a", "extra": false, "item": null, "kids": [{"t": "Купите новую розетку или чиним старую?", "k": "q", "extra": false, "item": null, "kids": [{"t": "Куплю", "k": "a", "extra": false, "item": null, "kids": [{"t": "Хорошо, после покупки детали нажмите \"оформить заказ\"", "k": "r", "extra": false, "item": 58, "kids": []}]}, {"t": "Чиним старую, ремонтируем, не куплю", "k": "a", "extra": false, "item": null, "kids": []}]}]}, {"t": "дом новый, относительно новый, не очень старый", "k": "a", "extra": false, "item": null, "kids": [{"t": "Хорошо, тогда просто подтянем контакты.", "k": "r", "extra": false, "item": 60, "kids": []}]}]}]}, {"t": "Заменить розетку", "k": "a", "extra": false, "item": null, "kids": []}]}, {"k": "a", "t": "Розетка (исправленный вариант)", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что с розеткой?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Болтается, не держится, вываливается из стены", "item": null, "extra": false, "kids": [{"k": "c", "t": "Это быстрая работа: мастер закрепит розетку, обычно минут за 20. Если есть возможность, пришлите фото — мастеру будет понятнее.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 60, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Искрит, трещит, греется, пахнет гарью", "item": null, "extra": false, "kids": [{"k": "c", "t": "Пока не пользуйтесь этой розеткой — это опасно. Чаще всего ослабли контакты, но в старых домах бывает виновата и сама розетка или проводка.", "item": null, "extra": false, "kids": [{"k": "q", "t": "Дом старый (примерно до 2000 года: хрущёвка, панелька) или новый?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Старый", "item": null, "extra": false, "kids": [{"k": "q", "t": "В таком доме надёжнее сразу поставить новую розетку. Купите новую или попробуем отремонтировать старую?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Куплю новую", "item": null, "extra": false, "kids": [{"k": "r", "t": "Розетку покупаете заранее, мастер приходит без деталей.", "item": 58, "extra": false, "kids": []}]}, {"k": "a", "t": "Отремонтировать старую", "item": null, "extra": false, "kids": [{"k": "r", "t": "Если ремонт не поможет, мастер скажет, какую розетку купить.", "item": 58, "extra": false, "kids": []}]}]}]}, {"k": "a", "t": "Новый", "item": null, "extra": false, "kids": [{"k": "c", "t": "Скорее всего, достаточно подтянуть контакты.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 58, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Не знаю", "item": null, "extra": false, "kids": [{"k": "r", "t": "Мастер посмотрит на месте и скажет, нужна ли новая розетка.", "item": 58, "extra": false, "kids": []}]}]}]}]}, {"k": "a", "t": "Не работает, нет тока", "item": null, "extra": false, "kids": [{"k": "c", "t": "Мастер найдёт причину: иногда дело в самой розетке, иногда в автомате в щитке.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 5, "extra": false, "kids": []}, {"k": "r", "t": "Если розетку нужно менять", "item": 1, "extra": true, "kids": []}]}]}, {"k": "a", "t": "Нужно заменить на новую / поставить другую", "item": null, "extra": false, "kids": [{"k": "q", "t": "Новая розетка у вас уже есть? Мастер приходит без деталей.", "item": null, "extra": false, "kids": [{"k": "a", "t": "Есть или куплю", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за одну розетку; несколько — одним визитом.", "item": 1, "extra": false, "kids": []}]}, {"k": "a", "t": "Нет, не знаю какую", "item": null, "extra": false, "kids": [{"k": "c", "t": "Подойдёт любая обычная розетка того же типа (с заземлением, если у старой есть заземление). Купите заранее — так мастер сделает всё за один приход.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 1, "extra": false, "kids": []}]}]}]}]}]}], "draft": true}, {"k": "a", "t": "Выключатель", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно сделать с выключателем?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Болтается, вываливается", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 60, "extra": false, "kids": []}]}, {"k": "a", "t": "Не работает или нужно заменить", "item": null, "extra": false, "kids": [{"k": "c", "t": "Новый выключатель купите заранее — мастер приходит без деталей.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 2, "extra": false, "kids": []}]}]}]}], "draft": true}, {"k": "a", "t": "Люстра, светильник", "item": null, "extra": false, "kids": [{"k": "q", "t": "Люстра уже куплена и на потолке есть крючок или провода под неё?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Да, всё есть", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 3, "extra": false, "kids": []}]}, {"k": "a", "t": "Люстра есть, а крючка или проводов нет", "item": null, "extra": false, "kids": [{"k": "c", "t": "Скорее всего, понадобится дополнительная работа — мастер посмотрит на месте.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 3, "extra": false, "kids": []}, {"k": "r", "t": "Если нужно искать проводку", "item": 5, "extra": true, "kids": []}]}]}, {"k": "a", "t": "Не знаю", "item": null, "extra": false, "kids": [{"k": "r", "t": "Пришлите фото потолка и люстры — мастер заранее поймёт объём.", "item": 3, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Не работает свет, выбивает автомат", "item": null, "extra": false, "kids": [{"k": "c", "t": "Сначала проверьте, не выбило ли автомат в щитке. Если выбивает снова и снова — лучше не включать, это может быть замыкание.", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что происходит?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Не горит свет в одной комнате или не работает одна розетка", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 5, "extra": false, "kids": []}]}, {"k": "a", "t": "Выбивает автомат", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 5, "extra": false, "kids": []}, {"k": "r", "t": "Если автомат неисправен — замена", "item": 4, "extra": true, "kids": []}]}, {"k": "a", "t": "Пробили кабель при сверлении", "item": null, "extra": false, "kids": [{"k": "c", "t": "Это серьёзная работа: нужно вскрыть стену и соединить кабель.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 59, "extra": false, "kids": []}]}]}]}]}], "draft": true}, {"k": "a", "t": "Течёт кран, смеситель", "item": null, "extra": false, "kids": [{"k": "q", "t": "Где именно течёт?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Из носика капает, даже когда закрыто", "item": null, "extra": false, "kids": [{"k": "q", "t": "Смеситель меняем целиком или пробуем устранить течь?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Заменить (смеситель куплю)", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 7, "extra": false, "kids": []}]}, {"k": "a", "t": "Устранить течь", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 12, "extra": false, "kids": []}]}]}]}, {"k": "a", "t": "Под раковиной, из шланга", "item": null, "extra": false, "kids": [{"k": "c", "t": "Обычно виновата гибкая подводка — её надо заменить. Купите подводку заранее (лучше сфотографируйте старую в магазине).", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 10, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Под раковиной, из трубы или сифона", "item": null, "extra": false, "kids": [{"k": "r", "t": "Сифон покупаете заранее.", "item": 9, "extra": false, "kids": []}, {"k": "r", "t": "Если течь можно устранить без замены", "item": 12, "extra": true, "kids": []}]}, {"k": "a", "t": "Не понимаю, просто мокро", "item": null, "extra": false, "kids": [{"k": "r", "t": "Пришлите фото — мастер подскажет, что купить.", "item": 12, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Засор, не уходит вода", "item": null, "extra": false, "kids": [{"k": "q", "t": "Где засор?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Раковина", "item": null, "extra": false, "kids": [{"k": "c", "t": "Чаще всего забит сифон — его снимают и промывают.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 8, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Ванна или душ", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 57, "extra": false, "kids": []}]}, {"k": "a", "t": "Унитаз", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 57, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Унитаз", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно сделать?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Заменить унитаз", "item": null, "extra": false, "kids": [{"k": "c", "t": "Унитаз и гофру покупаете заранее.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 56, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Течёт или засор", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 57, "extra": false, "kids": []}, {"k": "r", "t": "Если течь", "item": 12, "extra": true, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Стиральная машина", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Подключить новую", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 11, "extra": false, "kids": []}]}, {"k": "a", "t": "Течёт шланг подводки", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 10, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Повесить полку, картину, зеркало", "item": null, "extra": false, "kids": [{"k": "q", "t": "Сколько предметов и какая стена: бетон или кирпич, гипсокартон, не знаю?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Бетон или кирпич", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за один предмет.", "item": 13, "extra": false, "kids": []}]}, {"k": "a", "t": "Гипсокартон", "item": null, "extra": false, "kids": [{"k": "c", "t": "Для гипсокартона нужны специальные дюбели-«бабочки» — мастер принесёт обычный крепёж, но лучше купить подходящий заранее.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 13, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Не знаю", "item": null, "extra": false, "kids": [{"k": "r", "t": "Мастер определит на месте.", "item": 13, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Повесить телевизор", "item": null, "extra": false, "kids": [{"k": "q", "t": "Кронштейн уже есть?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Да", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 15, "extra": false, "kids": []}]}, {"k": "a", "t": "Нет", "item": null, "extra": false, "kids": [{"k": "c", "t": "Кронштейн нужно купить заранее — под диагональ и крепление телевизора (стандарт VESA указан на задней крышке).", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 15, "extra": false, "kids": []}]}]}]}], "draft": true}, {"k": "a", "t": "Повесить карниз", "item": null, "extra": false, "kids": [{"k": "r", "t": "Карниз покупаете заранее.", "item": 14, "extra": false, "kids": []}], "draft": true}, {"k": "a", "t": "Собрать мебель", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно собрать?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Тумбу или полку", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 30, "extra": false, "kids": []}]}, {"k": "a", "t": "Стол или комод", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 31, "extra": false, "kids": []}]}, {"k": "a", "t": "Кровать", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 32, "extra": false, "kids": []}]}, {"k": "a", "t": "Шкаф", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 33, "extra": false, "kids": []}]}, {"k": "a", "t": "Повесить навесной шкаф", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 34, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Кухня и шкафы: дверцы, ручки, ящики", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что именно?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Провисла дверца, сломалась петля", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за одну дверцу.", "item": 55, "extra": false, "kids": []}]}, {"k": "a", "t": "Заменить ручки", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за одну ручку.", "item": 54, "extra": false, "kids": []}]}, {"k": "a", "t": "Ящик плохо выдвигается, сломались направляющие", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за один ящик; направляющие покупаете заранее.", "item": 53, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Окно", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что с окном?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Дует, плохо закрывается, цепляет", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 19, "extra": false, "kids": []}]}, {"k": "a", "t": "Сломалась ручка", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 20, "extra": false, "kids": []}]}, {"k": "a", "t": "Нужно заменить уплотнитель", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 21, "extra": false, "kids": []}]}, {"k": "a", "t": "Поставить москитную сетку", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 22, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Дверь и замок", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что с дверью?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Замок заедает, ключ туго проворачивается", "item": null, "extra": false, "kids": [{"k": "c", "t": "Часто хватает смазки личинки.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 62, "extra": false, "kids": []}, {"k": "r", "t": "Если личинку нужно менять", "item": 16, "extra": true, "kids": []}]}]}, {"k": "a", "t": "Заменить личинку замка", "item": null, "extra": false, "kids": [{"k": "c", "t": "Новую личинку купите заранее — под размер старой.", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 16, "extra": false, "kids": []}]}]}, {"k": "a", "t": "Дверь провисла, плохо закрывается", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 17, "extra": false, "kids": []}]}, {"k": "a", "t": "Врезать замок", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 24, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Кондиционер", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Почистить", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 26, "extra": false, "kids": []}]}, {"k": "a", "t": "Не холодит, течёт, шумит", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 25, "extra": false, "kids": []}, {"k": "r", "t": "Если нужна заправка", "item": 27, "extra": true, "kids": []}]}, {"k": "a", "t": "Установить", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 29, "extra": false, "kids": []}]}, {"k": "a", "t": "Снять", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 28, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Уборка и помощь по дому", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Уборка", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за час.", "item": 36, "extra": false, "kids": []}]}, {"k": "a", "t": "Помыть окна", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за одну створку.", "item": 35, "extra": false, "kids": []}]}, {"k": "a", "t": "Разное по дому (муж на час)", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 63, "extra": false, "kids": []}]}]}], "draft": true}, {"k": "a", "t": "Вынести, перенести вещи", "item": null, "extra": false, "kids": [{"k": "q", "t": "Что нужно?", "item": null, "extra": false, "kids": [{"k": "a", "t": "Вынести мусор или один предмет", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 38, "extra": false, "kids": []}]}, {"k": "a", "t": "Переставить мебель по квартире", "item": null, "extra": false, "kids": [{"k": "r", "t": "", "item": 39, "extra": false, "kids": []}]}, {"k": "a", "t": "Погрузить или разгрузить", "item": null, "extra": false, "kids": [{"k": "r", "t": "Цена за час.", "item": 40, "extra": false, "kids": []}]}]}], "draft": true}], PRICES=[{"id": 62, "category": "minor_repair", "name": "Смазать личинку замка", "price": 300, "minutes": 10, "sort": 5, "updated_at": "2026-11-02T13:27:27.097059+00:00"}, {"id": 60, "category": "electrics", "name": "Закрепить болтающуюся розетку или выключатель", "price": 500, "minutes": 20, "sort": 7, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 35, "category": "household_help", "name": "Помыть окно (одна створка)", "price": 500, "minutes": 20, "sort": 1, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 27, "category": "air_conditioning", "name": "Заправка фреоном", "price": 3200, "minutes": 60, "sort": 3, "updated_at": "2026-10-30T11:25:02.583+00:00"}, {"id": 28, "category": "air_conditioning", "name": "Демонтаж сплит-системы", "price": 2700, "minutes": 60, "sort": 4, "updated_at": "2026-10-30T11:25:02.583+00:00"}, {"id": 29, "category": "air_conditioning", "name": "Монтаж сплит-системы (от)", "price": 7700, "minutes": 180, "sort": 5, "updated_at": "2026-10-30T11:25:02.583+00:00"}, {"id": 30, "category": "assembly", "name": "Собрать тумбу или полку", "price": 1200, "minutes": 60, "sort": 1, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 31, "category": "assembly", "name": "Собрать стол или комод", "price": 1700, "minutes": 90, "sort": 2, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 32, "category": "assembly", "name": "Собрать кровать", "price": 2200, "minutes": 120, "sort": 3, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 33, "category": "assembly", "name": "Собрать шкаф", "price": 3200, "minutes": 180, "sort": 4, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 25, "category": "air_conditioning", "name": "Диагностика кондиционера", "price": 1200, "minutes": 45, "sort": 1, "updated_at": "2026-10-30T11:25:02.583+00:00"}, {"id": 26, "category": "air_conditioning", "name": "Чистка внутреннего блока", "price": 2700, "minutes": 60, "sort": 2, "updated_at": "2026-10-30T11:25:02.583+00:00"}, {"id": 36, "category": "household_help", "name": "Уборка, за час", "price": 1200, "minutes": 60, "sort": 2, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 37, "category": "household_help", "name": "Помощь по дому, за час", "price": 900, "minutes": 60, "sort": 3, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 46, "category": "computers", "name": "Диагностика компьютера или ноутбука", "price": 1200, "minutes": 60, "sort": 1, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 47, "category": "computers", "name": "Установить Windows", "price": 2700, "minutes": 120, "sort": 2, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 48, "category": "computers", "name": "Почистить ноутбук от пыли", "price": 2200, "minutes": 60, "sort": 3, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 49, "category": "computers", "name": "Настроить роутер или Wi-Fi", "price": 1200, "minutes": 45, "sort": 4, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 50, "category": "computers", "name": "Установить программы", "price": 1200, "minutes": 45, "sort": 5, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 51, "category": "computers", "name": "Подключить принтер", "price": 1200, "minutes": 30, "sort": 6, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 52, "category": "computers", "name": "Заменить SSD или память (деталь клиента)", "price": 1700, "minutes": 60, "sort": 7, "updated_at": "2026-10-15T18:04:09.533025+00:00"}, {"id": 61, "category": "minor_repair", "name": "Смазать личинку замка", "price": 300, "minutes": 10, "sort": 5, "updated_at": "2026-11-02T00:40:00.119494+00:00"}, {"id": 63, "category": "minor_repair", "name": "Муж на час", "price": 1700, "minutes": 60, "sort": 10, "updated_at": "2026-11-04T12:02:03.387818+00:00"}, {"id": 14, "category": "minor_repair", "name": "Повесить карниз", "price": 1200, "minutes": 45, "sort": 2, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 15, "category": "minor_repair", "name": "Повесить телевизор на стену", "price": 1700, "minutes": 60, "sort": 3, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 16, "category": "minor_repair", "name": "Заменить личинку замка", "price": 700, "minutes": 20, "sort": 4, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 17, "category": "minor_repair", "name": "Отрегулировать дверь или петли", "price": 700, "minutes": 30, "sort": 5, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 18, "category": "minor_repair", "name": "Заменить силикон в шве", "price": 1200, "minutes": 30, "sort": 6, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 38, "category": "moving_help", "name": "Вынести мусор или один предмет мебели", "price": 700, "minutes": 30, "sort": 1, "updated_at": "2026-10-15T18:10:08.769+00:00"}, {"id": 39, "category": "moving_help", "name": "Перенести мебель по квартире", "price": 1200, "minutes": 45, "sort": 2, "updated_at": "2026-10-15T18:10:08.769+00:00"}, {"id": 40, "category": "moving_help", "name": "Погрузка или разгрузка, за час", "price": 1200, "minutes": 60, "sort": 3, "updated_at": "2026-10-15T18:10:08.769+00:00"}, {"id": 41, "category": "cars", "name": "Заменить лампочку", "price": 700, "minutes": 20, "sort": 1, "updated_at": "2026-10-15T18:10:52.019+00:00"}, {"id": 42, "category": "cars", "name": "Заменить дворники", "price": 500, "minutes": 15, "sort": 2, "updated_at": "2026-10-15T18:10:52.019+00:00"}, {"id": 43, "category": "cars", "name": "Помочь «прикурить»", "price": 1200, "minutes": 30, "sort": 3, "updated_at": "2026-10-15T18:10:52.019+00:00"}, {"id": 44, "category": "cars", "name": "Заменить колесо", "price": 1700, "minutes": 30, "sort": 4, "updated_at": "2026-10-15T18:10:52.019+00:00"}, {"id": 45, "category": "cars", "name": "Заменить аккумулятор", "price": 700, "minutes": 15, "sort": 5, "updated_at": "2026-10-15T18:10:52.019+00:00"}, {"id": 13, "category": "minor_repair", "name": "Повесить полку, картину или зеркало", "price": 700, "minutes": 30, "sort": 1, "updated_at": "2026-10-15T18:09:12.068+00:00"}, {"id": 57, "category": "plumbing", "name": "Прочистить трубы (засор)", "price": 1700, "minutes": 60, "sort": 4, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 2, "category": "electrics", "name": "Заменить выключатель", "price": 500, "minutes": 20, "sort": 1, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 4, "category": "electrics", "name": "Заменить автомат в щитке", "price": 1200, "minutes": 40, "sort": 2, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 6, "category": "electrics", "name": "Подключить варочную панель или духовку", "price": 2200, "minutes": 90, "sort": 5, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 1, "category": "electrics", "name": "Заменить розетку", "price": 500, "minutes": 20, "sort": 6, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 10, "category": "plumbing", "name": "Заменить гибкую подводку", "price": 1200, "minutes": 30, "sort": 5, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 11, "category": "plumbing", "name": "Подключить стиральную машину", "price": 2200, "minutes": 60, "sort": 6, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 12, "category": "plumbing", "name": "Устранить небольшую течь", "price": 1200, "minutes": 30, "sort": 7, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 3, "category": "electrics", "name": "Установить светильник или люстру", "price": 1200, "minutes": 60, "sort": 3, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 5, "category": "electrics", "name": "Найти причину: не работает свет или розетка", "price": 700, "minutes": 45, "sort": 4, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 7, "category": "plumbing", "name": "Заменить смеситель", "price": 2700, "minutes": 90, "sort": 1, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 8, "category": "plumbing", "name": "Прочистить сифон (снять и промыть)", "price": 1700, "minutes": 45, "sort": 2, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 9, "category": "plumbing", "name": "Заменить сифон", "price": 1200, "minutes": 30, "sort": 3, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 56, "category": "plumbing", "name": "Заменить унитаз (напольный на напольный или на инсталляцию; гофру и унитаз покупает клиент)", "price": 2500, "minutes": 90, "sort": 8, "updated_at": "2026-10-30T11:24:54.828+00:00"}, {"id": 19, "category": "windows_doors", "name": "Отрегулировать окно или дверь", "price": 700, "minutes": 30, "sort": 1, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 20, "category": "windows_doors", "name": "Заменить оконную ручку", "price": 500, "minutes": 20, "sort": 2, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 21, "category": "windows_doors", "name": "Заменить уплотнитель на окне", "price": 700, "minutes": 30, "sort": 3, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 22, "category": "windows_doors", "name": "Установить москитную сетку", "price": 1200, "minutes": 45, "sort": 4, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 23, "category": "windows_doors", "name": "Заменить ручку или петлю двери", "price": 700, "minutes": 30, "sort": 5, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 24, "category": "windows_doors", "name": "Врезать замок в дверь", "price": 2200, "minutes": 90, "sort": 6, "updated_at": "2026-10-30T11:24:58.686+00:00"}, {"id": 34, "category": "assembly", "name": "Повесить навесной шкаф", "price": 1700, "minutes": 60, "sort": 5, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 53, "category": "assembly", "name": "Заменить направляющие выдвижных ящиков, за 1 ящик", "price": 500, "minutes": 20, "sort": 6, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 54, "category": "assembly", "name": "Заменить ручки на мебели, за 1 ручку", "price": 100, "minutes": 5, "sort": 7, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 55, "category": "assembly", "name": "Заменить петли на дверцах, за 1 дверцу (2 петли)", "price": 200, "minutes": 10, "sort": 8, "updated_at": "2026-10-30T11:25:09.095+00:00"}, {"id": 58, "category": "electrics", "name": "Заменить или отремонтировать розетку, которая трещит или искрит", "price": 1000, "minutes": 40, "sort": 8, "updated_at": "2026-11-04T15:21:29.683+00:00"}, {"id": 59, "category": "electrics", "name": "Починить перебитый кабель в стене (после сверления, со штроблением)", "price": 9500, "minutes": 360, "sort": 9, "updated_at": "2026-11-04T15:21:29.683+00:00"}];
+async function callAdminPricing(a){ if(a==='get_scenarios') return {tree:JSON.parse(JSON.stringify(TREE))}; if(a==='list') return {prices:PRICES}; if(a==='save_scenarios') return {count:TREE.length}; }
+/* ===== Сценарии: дерево диалога для ассистента =====
+ * Блоки: «Клиент говорит / если» (a) — условие или вариант ответа клиента;
+ * «Уточнение» (q) — вопрос клиенту, его дети-«если» становятся кнопками ответа;
+ * «Комментарий ассистента» (c) — что сказать; «Результат» (r) — позиция прайса.
+ * Правильный порядок: если → (уточнение | комментарий | результат); уточнение → если…;
+ * комментарий → (уточнение | результат); результат — конец ветки (можно несколько рядом,
+ * «дополнительно, если подтвердится»). Линии рисуются поверх (SVG), как в конструкторах ботов.
+ */
+let scenTree = [], scenPrices = [], scOpen = new Set([0]);
+const SC_T = {
+  a: { n: 'Клиент говорит / если', s: 'Если', c: '#f1f1f1', b: '#9aa1ab', ph: 'Запрос или ответ клиента (например: розетка искрит)' },
+  q: { n: 'Уточнение', s: 'Вопрос', c: '#e6f0ff', b: '#2563eb', ph: 'Что спросить у клиента' },
+  c: { n: 'Комментарий ассистента', s: 'Сказать', c: '#fff6d6', b: '#d9a400', ph: 'Что и с какой аргументацией сказать клиенту' },
+  r: { n: 'Результат', s: 'Итог', c: '#e3f4e3', b: '#16a34a', ph: 'Пояснение к позиции (необязательно)' },
+};
+const SC_NEXT = { a: 'q', q: 'a', c: 'r', r: 'c' };
+const scNew = (k) => ({ k: k || 'a', t: '', item: null, extra: false, kids: [] });
+function scFix(list, depth) {
+  (list || []).forEach((n) => {
+    if (!n.k) { // старый формат без назначения
+      n.k = depth === 2 ? 'q' : 'a';
+      if (n.item) { n.kids = (n.kids || []).concat([{ k: 'r', t: '', item: n.item, extra: false, kids: [] }]); n.item = null; }
+    }
+    n.kids = n.kids || []; scFix(n.kids, depth + 1);
+  });
+  return list;
+}
+function scLegacy(rows) {
+  return (rows || []).map((r) => {
+    const parts = [r.what, r.a, r.clar, r.b].filter(Boolean);
+    if (!parts.length) return null;
+    let root = null, cur = null;
+    parts.forEach((t) => { const n = { t, item: null, kids: [] }; if (cur) cur.kids.push(n); else root = n; cur = n; });
+    cur.item = r.item || null; return root;
+  }).filter(Boolean);
+}
+async function loadScen() {
+  const box = document.getElementById('scen-body');
+  try {
+    const [r1, r2] = await Promise.all([callAdminPricing('get_scenarios'), callAdminPricing('list')]);
+    scenTree = scFix(r1.tree || scLegacy(r1.rows), 0); scenPrices = r2.prices || [];
+    if (!scenTree.length) scenTree = [scNew('a')];
+    renderScen();
+  } catch (e) { box.innerHTML = '<p class="count-hint">Ошибка: ' + aiEsc(e.message) + '</p>'; }
+}
+function scGet(p) {
+  const ix = p.split('.').map(Number); let arr = scenTree, n = null, parent = null;
+  ix.forEach((i) => { parent = arr; n = arr[i]; arr = n.kids; });
+  return { n, parent, i: ix[ix.length - 1] };
+}
+const scItem = (id) => scenPrices.find((x) => x.id === id);
+const scClientPrice = (it) => (Number(it.price) || 0) + 500; // как в чате: работа + выезд 500 ₽
+/** Проблемы блока: пусто, тупик, неверный порядок. */
+function scIssues(n, isRoot) {
+  const out = [], kinds = n.kids.map((k) => k.k);
+  if (!String(n.t || '').trim() && !(n.k === 'r' && n.item)) out.push('пустой текст');
+  if (n.k === 'a' && !n.kids.length) out.push('тупик: после «если» нужен вопрос, комментарий или результат');
+  if (n.k === 'q' && !n.kids.length) out.push('у вопроса нет вариантов ответа («если»)');
+  if (n.k === 'q' && kinds.some((k) => k !== 'a')) out.push('после вопроса должны идти только варианты ответа («если»)');
+  if (n.k === 'c' && !n.kids.length) out.push('после комментария нужен вопрос или результат');
+  if (n.k === 'r' && !n.item) out.push('не выбрана позиция прайса');
+  if (n.k === 'r' && n.kids.length) out.push('после результата ветка заканчивается — дальнейшие блоки не используются');
+  if (isRoot && n.k !== 'a') out.push('начало ветки должно быть «Клиент говорит»');
+  return out;
+}
+function scCount(n) { return 1 + n.kids.reduce((s, k) => s + scCount(k), 0); }
+function scBad(n, isRoot) { return scIssues(n, isRoot).length + n.kids.reduce((s, k) => s + scBad(k, false), 0); }
+function scPrice(n) {
+  const it = scItem(n.item);
+  const inner = it
+    ? '<div style="margin-top:4px"><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · клиенту ' + scClientPrice(it) + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить позицию</button></div>'
+    : '<div style="position:relative;margin-top:4px"><input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div></div>';
+  return inner + '<label class="count-hint" style="display:block;margin-top:3px"><input type="checkbox" data-act="extra"' + (n.extra ? ' checked' : '') + '> дополнительно, если подтвердится</label>';
+}
+function scHtml(n, path) {
+  const p = path.join('.'), T = SC_T[n.k] || SC_T.a, iss = scIssues(n, path.length === 1);
+  const opts = Object.keys(SC_T).map((k) => '<option value="' + k + '"' + (k === n.k ? ' selected' : '') + '>' + SC_T[k].n + '</option>').join('');
+  let h = '<div class="sn"><div class="sc' + (iss.length ? ' bad' : '') + '" data-p="' + p + '" style="background:' + T.c + ';border-color:' + (iss.length ? '#e04b4b' : T.b) + '">' +
+    '<select class="sk-t">' + opts + '</select>' +
+    '<textarea rows="2" placeholder="' + aiEsc(T.ph) + '">' + aiEsc(n.t) + '</textarea>' + (n.k === 'r' ? scPrice(n) : '') +
+    (iss.length ? '<div class="si-bad">⚠ ' + iss.map(aiEsc).join('<br>⚠ ') + '</div>' : '') +
+    '<div class="sb"><button data-act="kid" title="Следующий шаг вправо">↳ дальше</button> <button data-act="sib" title="Другой вариант на этом уровне">＋ вариант</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
+  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i))).join('') + '</div>';
+  return h + '</div>';
+}
+function scDrawLines() {
+  document.querySelectorAll('#scen-body .sroot').forEach((root) => {
+    const svg = root.querySelector('svg.sl'); if (!svg) return;
+    const R = root.getBoundingClientRect();
+    svg.setAttribute('width', root.scrollWidth); svg.setAttribute('height', root.scrollHeight);
+    let d = '';
+    root.querySelectorAll('.sn').forEach((sn) => {
+      const card = sn.firstElementChild, kids = sn.querySelector(':scope > .sk'); if (!kids) return;
+      const a = card.getBoundingClientRect(), x1 = a.right - R.left + root.scrollLeft, y1 = a.top + Math.min(26, a.height / 2) - R.top + root.scrollTop;
+      kids.querySelectorAll(':scope > .sn > .sc').forEach((ch) => {
+        const b = ch.getBoundingClientRect(), x2 = b.left - R.left + root.scrollLeft, y2 = b.top + Math.min(26, b.height / 2) - R.top + root.scrollTop, mx = (x1 + x2) / 2;
+        d += 'M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + (x2 - 6) + ',' + y2 + ' ';
+        d += 'M' + (x2 - 11) + ',' + (y2 - 4) + ' L' + (x2 - 4) + ',' + y2 + ' L' + (x2 - 11) + ',' + (y2 + 4) + ' ';
+      });
+    });
+    svg.innerHTML = '<path d="' + d + '" fill="none" stroke="#7b8494" stroke-width="1.6"/>';
+  });
+}
+/** Тест-прогон ветки так, как её увидит клиент: вопросы с кнопками, комментарии, итог с ценой. */
+function scTest(rootIx) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:min(420px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden"><div style="padding:12px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center"><b>Как это увидит клиент</b><button data-x="1">✕</button></div><div class="tlog" style="padding:12px;overflow:auto;flex:1;background:#f7f7f8"></div><div class="tbtn" style="padding:10px;border-top:1px solid #eee;display:flex;flex-wrap:wrap;gap:6px"></div></div>';
+  document.body.appendChild(ov);
+  const log = ov.querySelector('.tlog'), btns = ov.querySelector('.tbtn');
+  const say = (who, html) => { log.insertAdjacentHTML('beforeend', '<div style="margin:6px 0;display:flex;justify-content:' + (who === 'u' ? 'flex-end' : 'flex-start') + '"><div style="max-width:85%;padding:8px 11px;border-radius:14px;font-size:14px;line-height:1.4;background:' + (who === 'u' ? '#2563eb;color:#fff' : who === 'r' ? '#e3f4e3' : '#fff;border:1px solid #e5e5e5') + '">' + html + '</div></div>'); log.scrollTop = log.scrollHeight; };
+  const choose = (opts) => { btns.innerHTML = ''; opts.forEach((o) => { const b = document.createElement('button'); b.textContent = o.label; b.style.cssText = 'border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:999px;padding:7px 12px;cursor:pointer'; b.onclick = o.go; btns.appendChild(b); }); };
+  const walk = (nodes) => {
+    // идём по цепочке: комментарии говорим, на вопросе ждём кнопку, результаты собираем
+    const res = [];
+    for (const n of nodes) {
+      if (n.k === 'c') { say('a', aiEsc(n.t || '…')); return walk(n.kids); }
+      if (n.k === 'q') {
+        say('a', aiEsc(n.t || '…'));
+        const ans = n.kids.filter((k) => k.k === 'a');
+        if (!ans.length) { say('r', '⚠ У вопроса нет вариантов ответа — ветка обрывается'); return choose([]); }
+        return choose(ans.map((k) => ({ label: k.t || '…', go: () => { say('u', aiEsc(k.t)); walk(k.kids); } })));
+      }
+      if (n.k === 'r') res.push(n);
+      if (n.k === 'a') { // несколько «если» подряд без вопроса — даём выбрать
+        const ans = nodes.filter((k) => k.k === 'a');
+        say('a', '<i>(ассистент сам поймёт из сообщения клиента, какой вариант)</i>');
+        return choose(ans.map((k) => ({ label: k.t || '…', go: () => { say('u', aiEsc(k.t)); walk(k.kids); } })));
+      }
+    }
+    if (res.length) {
+      res.forEach((n) => { const it = scItem(n.item); say('r', (n.extra ? '<b>Дополнительно, если подтвердится:</b> ' : '<b>Итог:</b> ') + (it ? aiEsc(it.name) + ' — ' + scClientPrice(it) + ' ₽ с выездом, около ' + (it.minutes || 60) + ' мин' : '⚠ позиция не выбрана') + (n.t ? '<br><span style="color:#555">' + aiEsc(n.t) + '</span>' : '')); });
+      say('a', '<i>Дальше ассистент спрашивает фото, адрес и удобное время.</i>');
+    } else say('r', '⚠ Тупик: ветка закончилась без результата');
+    choose([{ label: '↺ Сначала', go: () => { log.innerHTML = ''; start(); } }]);
+  };
+  const root = scenTree[rootIx];
+  const start = () => { say('u', aiEsc(root.t || '…')); walk(root.kids); };
+  ov.onclick = (e) => { if (e.target === ov || e.target.dataset.x) ov.remove(); };
+  start();
+}
+function renderScen() {
+  const box = document.getElementById('scen-body');
+  const total = scenTree.reduce((s, n, i) => s + scBad(n, true), 0);
+  box.innerHTML = '<style>#scen-body .sroot{position:relative;overflow:auto;padding:4px 0 150px}#scen-body svg.sl{position:absolute;left:0;top:0;pointer-events:none;z-index:0}' +
+    '#scen-body .sn{display:flex;align-items:flex-start;position:relative;z-index:1}#scen-body .sk{display:flex;flex-direction:column;margin-left:46px}' +
+    '#scen-body .sc{width:230px;flex:none;margin:5px 0;padding:6px;border:2px solid #ccc;border-radius:10px;position:relative}#scen-body .sc.bad{box-shadow:0 0 0 3px rgba(224,75,75,.15)}#scen-body .si-bad{color:#c0392b;font-size:11px;margin-top:4px;line-height:1.3}' +
+    '#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px;margin-top:4px}#scen-body .sk-t{width:100%;font-size:12px;font-weight:600}' +
+    '#scen-body .sb{margin-top:4px}#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
+    '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}' +
+    '#scen-body .rh{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fafafa;border:1px solid #e5e5e5;border-radius:10px;cursor:pointer;margin-top:8px}#scen-body .rh b{flex:1}#scen-body .tag{font-size:11px;border-radius:999px;padding:2px 8px}' +
+    '#scen-body .lg span{display:inline-block;margin-right:10px;font-size:12px}#scen-body .lg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:2px solid}</style>' +
+    '<p class="count-hint">Дерево — это сценарий разговора для ассистента. «Клиент говорит / если» — условие или вариант ответа, «Уточнение» — вопрос (его варианты «если» клиент увидит кнопками), «Комментарий» — что сказать и почему, «Результат» — позиция прайса. Цена и время берутся только из прайса (клиенту — с выездом 500 ₽). Порядок: если → вопрос / комментарий / результат; вопрос → варианты «если»; комментарий → вопрос / результат; результат — конец.</p>' +
+    '<p class="lg">' + Object.keys(SC_T).map((k) => '<span><i style="background:' + SC_T[k].c + ';border-color:' + SC_T[k].b + '"></i>' + SC_T[k].n + '</span>').join('') + (total ? '<span style="color:#c0392b">⚠ проблем: ' + total + '</span>' : '<span style="color:#16a34a">✓ ошибок нет</span>') + '</p>' +
+    scenTree.map((n, i) => {
+      const open = scOpen.has(i), bad = scBad(n, true);
+      return '<div class="rh" data-root="' + i + '"><span>' + (open ? '▾' : '▸') + '</span><b>' + aiEsc(n.t || '(без названия)') + '</b>' + (n.draft ? '<span class="tag" style="background:#fff6d6">черновик Claude</span>' : '') +
+        '<span class="tag" style="background:#eee">' + scCount(n) + ' блоков</span>' + (bad ? '<span class="tag" style="background:#fde2e2;color:#c0392b">⚠ ' + bad + '</span>' : '<span class="tag" style="background:#e3f4e3;color:#16a34a">✓</span>') +
+        '<button data-test="' + i + '">▶ Проверить</button></div>' +
+        (open ? '<div class="sroot"><svg class="sl"></svg>' + scHtml(n, [i]) + '</div>' : '');
+    }).join('') +
+    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+  const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
+  requestAnimationFrame(scDrawLines);
+  box.oninput = (ev) => {
+    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    if (el.tagName === 'TEXTAREA') { scGet(c.dataset.p).n.t = el.value; return; }
+    if (!el.classList.contains('si')) return;
+    const q = el.value.trim().toLowerCase(), dd = c.querySelector('.sd');
+    if (!q) { dd.innerHTML = ''; return; }
+    const m = scenPrices.filter((x) => (x.name + ' ' + x.category).toLowerCase().includes(q)).slice(0, 8);
+    dd.innerHTML = m.map((x) => '<div data-id="' + x.id + '">' + aiEsc(x.name) + ' <span class="count-hint">' + aiEsc(x.category) + ' · ' + x.price + ' ₽</span></div>').join('') +
+      (m.length ? '' : '<div data-newi="1">➕ Создать позицию «' + aiEsc(el.value.trim()) + '»</div>');
+  };
+  box.onchange = (ev) => {
+    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    if (el.classList.contains('sk-t')) { const n = scGet(c.dataset.p).n; n.k = el.value; if (n.k !== 'r') n.item = null; renderScen(); }
+    else if (el.dataset.act === 'extra') scGet(c.dataset.p).n.extra = el.checked;
+  };
+  box.onclick = async (ev) => {
+    const el = ev.target;
+    if (el.dataset.test !== undefined) { ev.stopPropagation(); return scTest(+el.dataset.test); }
+    const rh = el.closest('.rh');
+    if (rh) { const i = +rh.dataset.root; scOpen.has(i) ? scOpen.delete(i) : scOpen.add(i); return renderScen(); }
+    const c = el.closest('.sc'); if (!c) return;
+    const p = c.dataset.p, act = el.dataset.act;
+    if (el.closest('[data-id]')) { scGet(p).n.item = +el.closest('[data-id]').dataset.id; return renderScen(); }
+    if (el.closest('[data-newi]')) {
+      const name = c.querySelector('.si').value.trim(), cats = [...new Set(scenPrices.map((x) => x.category))];
+      c.querySelector('.sd').innerHTML = '';
+      c.insertAdjacentHTML('beforeend', '<div class="nf" style="margin-top:6px;display:grid;gap:4px"><select class="nc">' + cats.map((x) => '<option>' + aiEsc(x) + '</option>').join('') + '</select><input class="nn" value="' + aiEsc(name) + '"><input class="np" type="number" placeholder="Цена, ₽"><input class="nm" type="number" value="60" placeholder="Минуты"><button class="ny">Создать в прайсе</button></div>');
+      return;
+    }
+    if (el.classList.contains('ny')) {
+      try {
+        const r = await callAdminPricing('add_price_item', { category: c.querySelector('.nc').value, name: c.querySelector('.nn').value, price: c.querySelector('.np').value, minutes: c.querySelector('.nm').value });
+        scenPrices.push(r.item); scGet(p).n.item = r.item.id; renderScen();
+      } catch (e) { msg('Ошибка: ' + e.message); }
+      return;
+    }
+    if (!act || act === 'extra') return;
+    const g = scGet(p);
+    if (act === 'clr') g.n.item = null;
+    if (act === 'kid') g.n.kids.push(scNew(SC_NEXT[g.n.k]));
+    if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew(g.n.k));
+    if (act === 'del') { if (!confirmDelScen(g.n)) return; g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew('a')); }
+    renderScen();
+  };
+  box.onscroll = null;
+  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew('a')); scOpen.add(scenTree.length - 1); renderScen(); };
+  document.getElementById('scen-open').onclick = () => { scenTree.forEach((_, i) => scOpen.add(i)); renderScen(); };
+  document.getElementById('scen-close').onclick = () => { scOpen.clear(); renderScen(); };
+  document.getElementById('scen-save').onclick = async () => {
+    try { const r = await callAdminPricing('save_scenarios', { tree: scenTree }); msg('Сохранено: ' + r.count + ' начал'); }
+    catch (e) { msg('Ошибка: ' + e.message); }
+  };
+}
+// Удаление ветки с вложенными блоками — без системного диалога (он ломает автоматизацию браузера), двойной клик-подтверждение.
+let scDelArm = null;
+function confirmDelScen(n) {
+  if (!n.kids.length) return true;
+  if (scDelArm === n) { scDelArm = null; return true; }
+  scDelArm = n; const e = document.getElementById('scen-msg'); if (e) e.textContent = 'У блока есть продолжение (' + (scCount(n) - 1) + ' блоков). Нажмите ✕ ещё раз, чтобы удалить вместе с ним.';
+  return false;
+}
+window.addEventListener('resize', () => { if (document.querySelector('#scen-body .sroot')) scDrawLines(); });
+
+
+loadScen();
+</script></body></html>
