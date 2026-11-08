@@ -37,6 +37,9 @@ body { display:flex; justify-content:center; height:100vh; height:100dvh; }
 .chat-log:not(.empty) .home-hero { display:none; }
 .bubble { max-width:86%; padding:8px 13px; border-radius:18px; font-size:15px; line-height:1.35; white-space:pre-wrap; word-wrap:break-word;
   margin-top:4px; animation:pop .22s ease-out both; box-shadow:0 1px 2px rgba(15,23,42,.05); }
+.qr { align-self:flex-start; display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; max-width:92%; }
+.qr button { border:1.5px solid var(--accent); color:var(--accent); background:#fff; border-radius:999px; padding:7px 13px; font:inherit; font-size:14px; cursor:pointer; }
+.qr button:active { background:var(--accent); color:#fff; }
 .bubble.me { align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:5px; }
 .bubble.ai { align-self:flex-start; background:var(--gray-100); color:var(--gray-900); border-bottom-left-radius:5px; }
 .bubble.sys { align-self:center; background:transparent; box-shadow:none; color:var(--gray-500); font-size:12.5px; text-align:center; padding:4px 10px; max-width:92%; }
@@ -429,7 +432,7 @@ body.embed .chat-screen { padding-top:6px; }
       act({ action: 'draft_save', userId: S.uid, sessionToken: S.tok, state: { messages: messages.slice(-30), draft: draft, photos: orderPhotos, convId: convId, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() } });
     }, 1500);
   }
-  function save() { ls(HIST_KEY, JSON.stringify({ messages: messages, draft: draft, photos: orderPhotos, convId: convId, order: order, adminCursor: adminCursor, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() })); srvSave(); }
+  function save() { ls(HIST_KEY, JSON.stringify({ tree: tree, messages: messages, draft: draft, photos: orderPhotos, convId: convId, order: order, adminCursor: adminCursor, locAddr: locAddr, locSent: locSent, locPoint: locPoint, at: Date.now() })); srvSave(); }
   function grade() { send.classList.toggle('grade-3', Boolean(ta.value.trim())); }
   function grow() { if (!ta.value) { ta.style.height = ''; return; } ta.style.height = '24px'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; }
 
@@ -940,7 +943,7 @@ body.embed .chat-screen { padding-top:6px; }
 
   function restore() {
     var raw = ls(HIST_KEY);
-    if (raw) { try { var o = JSON.parse(raw); if (!o.order && o.at && Date.now() - o.at > 3 * 86400000) { o = {}; ls(HIST_KEY, null); } messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || ''; order = o.order || null; adminCursor = o.adminCursor || 0; locAddr = o.locAddr || ''; locSent = Boolean(o.locSent); locPoint = o.locPoint || null; } catch (e) {} }
+    if (raw) { try { var o = JSON.parse(raw); if (!o.order && o.at && Date.now() - o.at > 3 * 86400000) { o = {}; ls(HIST_KEY, null); } messages = o.messages || []; tree = o.tree || null; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || ''; order = o.order || null; adminCursor = o.adminCursor || 0; locAddr = o.locAddr || ''; locSent = Boolean(o.locSent); locPoint = o.locPoint || null; } catch (e) {} }
     syncIcons();
     if (!convId) newConv();
     messages.forEach(function (m) { if (m.role === 'admin') adminBubble(m); else if (m.role === 'user') { var pt = prettyUser(m.text); if (pt) add('me', pt); } else add('ai', m.text); });
@@ -949,7 +952,7 @@ body.embed .chat-screen { padding-top:6px; }
   }
 
   function resetChat() {
-    closeSheet(); setChip(null); messages = []; draft = null; draftEl = null; photos = []; orderPhotos = []; order = null; adminCursor = 0; waitNoted = false; locAddr = ''; locPoint = null; locSent = false; syncIcons(); var rs = getSess(); if (rs) act({ action: 'thread_reset', userId: rs.uid, sessionToken: rs.tok }); newConv(); renderPhotos(); ls(HIST_KEY, null);
+    closeSheet(); setChip(null); messages = []; tree = null; draft = null; draftEl = null; photos = []; orderPhotos = []; order = null; adminCursor = 0; waitNoted = false; locAddr = ''; locPoint = null; locSent = false; syncIcons(); var rs = getSess(); if (rs) act({ action: 'thread_reset', userId: rs.uid, sessionToken: rs.tok }); newConv(); renderPhotos(); ls(HIST_KEY, null);
     document.querySelectorAll('.chat-screen .bubble,.chat-screen .draft-card').forEach(function (n) { n.remove(); });
     log.classList.add('empty'); ta.value = ''; grow(); grade();
   }
@@ -968,6 +971,7 @@ body.embed .chat-screen { padding-top:6px; }
   function prettyUser(t) {
     t = String(t || '');
     if (/^\[Система\]/.test(t)) return '';
+    t = t.replace(/\s*\[(Сценарий пройден|Подходящий сценарий не найден)[^\]]*\]/g, '');
     var m = t.match(/^\[клиент указал адрес(?: на карте)?: (.*?) — адрес не спрашивай\]/);
     if (m) return '📍 ' + m[1];
     return t;
@@ -1004,7 +1008,7 @@ body.embed .chat-screen { padding-top:6px; }
     go.onclick = function () {
       c.remove();
       if (o) {
-        messages = o.messages || []; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || convId; order = o.order || null; locAddr = o.locAddr || ''; locPoint = o.locPoint || null; locSent = Boolean(o.locSent);
+        messages = o.messages || []; tree = o.tree || null; draft = o.draft || null; orderPhotos = o.photos || []; convId = o.convId || convId; order = o.order || null; locAddr = o.locAddr || ''; locPoint = o.locPoint || null; locSent = Boolean(o.locSent);
         ls(PREV_KEY, null); paintMessages(); syncIcons(); renderDraft(); save();
         if (order && order.stage === 'unpaid') payModal();
       } else {
@@ -1089,6 +1093,7 @@ body.embed .chat-screen { padding-top:6px; }
   async function submit(e) {
     if (e) e.preventDefault();
     var t = ta.value.trim();
+    if (t && !busy) document.querySelectorAll('.qr').forEach(function (x) { x.remove(); });
     var ready = photos.filter(function (p) { return !p.up && p.url; });
     if (photos.some(function (p) { return p.up; })) { add('sys', 'Фото ещё загружается…'); return; }
     if ((!t && !ready.length) || busy) return;
@@ -1114,6 +1119,10 @@ body.embed .chat-screen { padding-top:6px; }
     var S = await ensureSession();
     if (!S) { fail('Не получилось начать диалог.', t, mine, !!mine); messages.pop(); busy = false; return; }
     if (mine && !messages.some(function (m) { return m.role === 'assistant' || m.role === 'admin'; }) && !log.querySelector('.bubble.ai, .bubble.admin, .bubble.aiNote')) add('sys', 'Диалог ведёт ИИ ассистент, он может ошибаться.\nПри необходимости позовите администратора.');
+    if (!order && treeOn()) {
+      var tr = await treeTurn(S);
+      if (tr === 'handled') { busy = false; save(); toBottom(); syncWait(); return; }
+    }
     var wait = add('ai typing', ''); wait.innerHTML = '<i></i><i></i><i></i>';
     var ctl = new AbortController(), tAbort = setTimeout(function () { ctl.abort(); }, 70000);
     var tSlow = setTimeout(function () { add('sys', 'Ассистент отвечает дольше обычного. Подождите ещё немного: если не ответит, мы позовём администратора.'); }, 25000);
@@ -1151,6 +1160,43 @@ body.embed .chat-screen { padding-top:6px; }
       fail('Нет связи с сервером. Проверьте интернет. Ваше сообщение не потеряно: нажмите «Повторить».', t, mine, !!mine); messages.pop();
     }
     busy = false; save(); toBottom(); syncWait();
+  }
+  // ---- Сценарии: сайт ведёт клиента по дереву из админки (функция chat-tree), ИИ только понимает ответы ----
+  var tree = null;
+  function treeOn() {
+    if (tree && (tree.phase === 'off' || tree.phase === 'done')) return false;
+    if (!tree && messages.some(function (m) { return m.role === 'assistant' || m.role === 'admin'; })) { tree = { phase: 'off' }; return false; }
+    return true;
+  }
+  function quick(after, labels) {
+    var wrap = document.createElement('div'); wrap.className = 'qr';
+    labels.forEach(function (l) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = l;
+      b.onclick = function () { if (busy) return; document.querySelectorAll('.qr').forEach(function (x) { x.remove(); }); ta.value = l; submit(); };
+      wrap.appendChild(b);
+    });
+    after.parentNode.insertBefore(wrap, after.nextSibling); toBottom();
+  }
+  async function treeTurn(S) {
+    var w = add('ai typing', ''); w.innerHTML = '<i></i><i></i><i></i>';
+    var data = null;
+    try {
+      var ctl = new AbortController(), tA = setTimeout(function () { ctl.abort(); }, 25000);
+      var body = { userId: S.uid, sessionToken: S.tok, convId: convId || (newConv(), convId), messages: messages.filter(function (m) { return m.role !== 'admin'; }), state: tree || { phase: 'pick' } };
+      try { var tt = localStorage.getItem('mnr_test_tree'); if (tt) body.testTree = JSON.parse(tt); } catch (e) {}
+      var res = await fetch(URL_BASE + '/functions/v1/chat-tree', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', apikey: ANON, Authorization: 'Bearer ' + ANON }, body: JSON.stringify(body) });
+      clearTimeout(tA);
+      data = await res.json().catch(function () { return null; });
+    } catch (x) { data = null; }
+    w.remove();
+    if (!data || !data.ok) { tree = { phase: 'off' }; return 'pass'; }
+    tree = data.state || { phase: 'off' };
+    if (data.note) { var lu = messages[messages.length - 1]; if (lu && lu.role === 'user') lu.text += ' ' + data.note; }
+    if (data.handled && data.reply) {
+      var b = add('ai', data.reply);
+      if (!data.done) { messages.push({ role: 'assistant', text: data.reply }); if (data.buttons && data.buttons.length) quick(b, data.buttons); }
+    }
+    return data.handled && !data.done ? 'handled' : 'pass';
   }
   async function callAdmin() {
     if (busy) return;
