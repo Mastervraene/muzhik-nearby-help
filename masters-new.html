@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="robots" content="noindex" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="theme-color" content="#111111" />
+<title>Мужик — деньги за ремонт и помощь по дому в твоём районе</title>
+<meta name="description" content="Бери небольшие заказы рядом с домом: розетка, кран, полка, люстра. Сам выбираешь, что брать. Сервис «Мужик» — мастерврайоне.рф" />
+<link rel="icon" type="image/png" href="/logo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+:root{--ink:#121212;--muted:#5f6670;--line:#e8eaee;--yellow:#ffcc00;--blue:#2563eb;--bg:#f6f7f9}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;-webkit-text-size-adjust:100%}
+img{display:block;max-width:100%}
+a{color:inherit}
+.page{max-width:520px;margin:0 auto;background:#fff;min-height:100vh;padding-bottom:96px}
+.h{font-family:"Oswald","Arial Narrow",Impact,sans-serif;font-weight:700;text-transform:uppercase;line-height:1.05;letter-spacing:.005em;margin:0}
+
+/* Первый экран — продолжение листовки */
+.hero{position:relative;background:#111 radial-gradient(120% 80% at 100% 0%,#2a2a2a 0%,#111 60%);color:#fff;overflow:hidden;padding:18px 20px 0;min-height:min(92svh,720px);display:flex;flex-direction:column}
+.hero::after{content:"";position:absolute;right:-60px;top:40px;width:260px;height:320px;background:linear-gradient(115deg,transparent 30%,var(--yellow) 30%,var(--yellow) 44%,transparent 44%,transparent 54%,var(--yellow) 54%,var(--yellow) 60%,transparent 60%);opacity:.9;z-index:0}
+.brand{position:relative;z-index:3;display:flex;align-items:center;gap:10px;text-decoration:none}
+.brand img{width:34px;height:38px}
+.brand b{font-size:17px}.brand small{display:block;color:#a7abb2;font-size:11px;font-weight:400}
+.hero .copy{position:relative;z-index:3;margin-top:22px;max-width:62%}
+.tag{display:inline-block;background:var(--yellow);color:#111;padding:4px 10px 2px;transform:skew(-6deg)}
+.hero h1{font-size:clamp(34px,10.5vw,52px)}
+.hero h1 .w{display:block;color:#fff}
+.hero .sub{font-size:16px;line-height:1.4;color:#d9dce1;margin:14px 0 0}
+.hero .pic{position:absolute;z-index:1;right:-18px;bottom:0;height:78%;max-height:600px;width:auto}
+.hero .pill{position:relative;z-index:3;margin-top:auto;margin-bottom:22px;align-self:flex-start;display:flex;align-items:center;gap:8px;background:var(--yellow);color:#111;border-radius:999px;padding:9px 16px 7px 12px;font-family:"Oswald",sans-serif;font-weight:700;font-size:20px;text-transform:uppercase}
+.hero .pill svg{width:20px;height:20px;flex:none}
+
+section{padding:34px 20px 6px}
+section h2{font-family:"Oswald",sans-serif;font-weight:700;font-size:28px;line-height:1.1;margin:0 0 6px;text-transform:uppercase}
+section .lead{color:var(--muted);font-size:16px;line-height:1.45;margin:0 0 18px}
+
+/* Задачи */
+.tasks{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.task{display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:16px;padding:12px}
+.task .ic{width:42px;height:42px;border-radius:12px;background:#111;display:flex;align-items:center;justify-content:center;flex:none}
+.task .ic svg{width:24px;height:24px;stroke:var(--yellow);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.task span{font-weight:600;font-size:15px;line-height:1.2}
+.more{margin:10px 0 0;color:var(--muted);font-size:14px}
+
+/* Шаги со скриншотами */
+.step{display:grid;grid-template-columns:1fr;gap:14px;margin:0 0 30px}
+.step .num{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:var(--yellow);font-weight:800;font-size:15px;margin-bottom:8px}
+.step h3{font-family:"Oswald",sans-serif;font-weight:700;font-size:22px;line-height:1.15;margin:0 0 6px;text-transform:uppercase}
+.step p{margin:0;color:var(--muted);font-size:15px;line-height:1.45}
+.phone{width:min(78%,300px);margin:0 auto;border-radius:34px;background:#111;padding:9px;box-shadow:0 18px 40px rgba(17,17,17,.18)}
+.phone img,.phone .ph{border-radius:26px;width:100%}
+.phone.crop{overflow:hidden}
+.phone.crop .win{border-radius:26px;overflow:hidden;aspect-ratio:9/12;background:#fff}
+.phone.crop .win img{border-radius:0}
+.note{font-size:12px;color:var(--muted);text-align:center;margin:8px 0 0}
+.ph{aspect-ratio:9/16;background:repeating-linear-gradient(45deg,#f1f2f4 0 12px,#e9ebee 12px 24px);display:flex;align-items:center;justify-content:center;text-align:center;color:#7a8089;font-size:13px;padding:20px}
+.push{display:flex;gap:10px;align-items:flex-start;background:rgba(245,245,247,.97);border:1px solid var(--line);border-radius:18px;padding:11px 12px;box-shadow:0 10px 24px rgba(0,0,0,.08);max-width:340px;margin:0 auto}
+.push img{width:38px;height:38px;border-radius:9px;background:#fff;object-fit:contain;flex:none}
+.push b{font-size:14px}.push .t{font-size:12px;color:#8a8f97;float:right}
+.push p{margin:2px 0 0;font-size:14px;line-height:1.35;color:#222}
+
+/* Честно */
+.facts{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.facts li{display:flex;gap:12px;align-items:flex-start;background:var(--bg);border-radius:16px;padding:14px;font-size:15px;line-height:1.4}
+.facts li b{display:block;font-size:16px;margin-bottom:2px}
+.facts .ok{flex:none;width:26px;height:26px;border-radius:50%;background:#111;color:var(--yellow);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px}
+
+/* Поделиться */
+.share{margin:8px 20px 0;background:#111;color:#fff;border-radius:22px;padding:22px 20px;text-align:center}
+.share h2{color:#fff;font-size:24px}
+.share p{color:#c9ccd2;margin:6px 0 16px;font-size:15px;line-height:1.4}
+.btn2{display:inline-flex;align-items:center;gap:8px;border:2px solid var(--yellow);color:var(--yellow);background:transparent;border-radius:999px;padding:12px 20px;font-weight:800;font-size:15px;cursor:pointer;font-family:inherit}
+
+footer{padding:26px 20px 10px;color:#8a8f97;font-size:12px;line-height:1.5}
+footer a{color:#8a8f97}
+
+/* Кнопка всегда внизу */
+.bar{position:fixed;left:0;right:0;bottom:0;z-index:20;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(to top,#fff 70%,rgba(255,255,255,0))}
+.bar a{display:block;max-width:492px;margin:0 auto;background:var(--yellow);color:#111;text-align:center;text-decoration:none;font-family:"Oswald",sans-serif;font-weight:700;font-size:21px;text-transform:uppercase;letter-spacing:.02em;padding:15px 12px 13px;border-radius:16px;box-shadow:0 8px 22px rgba(0,0,0,.18)}
+.bar small{display:block;text-align:center;color:var(--muted);font-size:12px;margin-top:6px}
+body{-webkit-tap-highlight-color:transparent}
+@media(min-width:521px){.page{box-shadow:0 0 0 1px var(--line)}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <a class="brand" href="/"><img src="/logo.png" alt="" /><span><b>Мужик</b><small>рядом поможет</small></span></a>
+    <div class="copy">
+      <h1 class="h"><span class="tag">Деньги за</span><span class="w">ремонт и помощь по дому</span></h1>
+      <p class="sub">Ты это и так умеешь. Теперь можешь за это получать.</p>
+    </div>
+    <img class="pic" src="/promo/hero-master.webp" alt="Мужик с шуруповёртом" />
+    <div class="pill"><svg viewBox="0 0 24 24"><path fill="#e11d2a" d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/><circle cx="12" cy="9" r="2.6" fill="#ffcc00"/></svg>В твоём районе</div>
+  </header>
+
+  <section>
+    <h2>Заказы — обычные</h2>
+    <p class="lead">То, что ты делаешь дома, у друзей и родителей. Только теперь за деньги.</p>
+    <div class="tasks">
+      <div class="task"><div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="4"/><circle cx="10.6" cy="11.4" r=".4"/><circle cx="13.4" cy="11.4" r=".4"/></svg></div><span>Розетка, выключатель</span></div>
+      <div class="task"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 9h9a3 3 0 0 1 3 3v2"/><path d="M8 6h4M10 6v3"/><path d="M16 17v1M16 20.5v.5"/></svg></div><span>Кран, сифон, протечка</span></div>
+      <div class="task"><div class="ic"><svg viewBox="0 0 24 24"><path d="M3 14h18M5 14v4M19 14v4"/><rect x="6" y="6" width="3" height="8"/><rect x="10" y="8" width="3" height="6"/></svg></div><span>Полка, карниз, ТВ</span></div>
+      <div class="task"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v5"/><path d="M6 15a6 6 0 0 1 12 0z"/><path d="M12 18v2M8 18l-1 2M16 18l1 2"/></svg></div><span>Люстра, светильник</span></div>
+    </div>
+    <p class="more">А ещё сборка мебели, петли, двери, окна и другая мелочь.</p>
+  </section>
+
+  <section>
+    <h2>Как это работает</h2>
+    <p class="lead">Клиентов искать не нужно — сервис сам принимает заявки и договаривается о цене.</p>
+
+    <div class="step">
+      <div><span class="num">1</span><h3>Рядом заказ — приходит уведомление</h3><p>В Telegram или пушем на телефон. Только заказы поблизости и по твоим навыкам.</p></div>
+      <div class="push"><img src="/logo.png" alt="" /><div style="flex:1"><span class="t">сейчас</span><b>Мужик</b><p>Рядом с вами есть заказ. Посмотреть на сайте: мастерврайоне.рф</p></div></div>
+      <div class="phone crop"><div class="win"><img src="/promo/m-near.webp" alt="Список заказов рядом" style="margin-top:-46%" /></div></div>
+    </div>
+
+    <div class="step">
+      <div><span class="num">2</span><h3>Сначала смотришь — потом берёшь</h3><p>Что сделать, где, сколько получишь — видно до того, как нажмёшь «Принять». Не подходит — просто не берёшь.</p></div>
+      <div class="phone crop"><div class="win" style="aspect-ratio:9/13"><img src="/promo/m-order.webp" alt="Карточка заказа: Вы заработаете 700 ₽" style="margin-top:-12%" /></div></div>
+      <p class="note">Пример заказа. Сумма зависит от работы.</p>
+    </div>
+
+    <div class="step">
+      <div><span class="num">3</span><h3>Сделал — получил оплату</h3><p>Клиент платит сервису заранее. Ты приезжаешь, делаешь, отмечаешь в заказе — сервис перечисляет тебе деньги.</p></div>
+      <div class="phone"><div class="ph">Здесь будет скриншот:<br/>заказ в работе («Выехал» / «Начал работу»)</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Честно о главном</h2>
+    <ul class="facts">
+      <li><span class="ok">✓</span><div><b>Не нужно быть мастером</b>Нужно уметь руками то, что умеешь. Диплом не спрашиваем.</div></li>
+      <li><span class="ok">✓</span><div><b>Работа остаётся работой</b>Берёшь заказы, когда удобно: вечером, в выходные, по пути домой.</div></li>
+      <li><span class="ok">✓</span><div><b>Сам решаешь, что брать</b>Никаких обязательств и планов.</div></li>
+      <li><span class="ok">✓</span><div><b>Что понадобится</b>Телефон, свой инструмент, документы для проверки и самозанятость или ИП — <a href="/oferta-dlya-ispolniteley.html">подробнее в оферте</a>.</div></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Подключиться — 5 минут</h2>
+    <p class="lead">Вход по номеру телефона → анкета «Стать мастером»: район, что умеешь, Telegram. Потом включи уведомления — без них заказы не увидишь.</p>
+    <div class="phone crop"><div class="win"><img src="/promo/m-profile.webp" alt="Профиль: кнопка «Стать мастером»" style="margin-top:-62%" /></div></div>
+  </section>
+
+  <div class="share">
+    <h2 class="h">Это не про тебя?</h2>
+    <p>У каждого есть такой мужик — тот, кому звонят, когда что-то сломалось. Отправь ему.</p>
+    <button class="btn2" type="button" id="share">Отправить тому, кто умеет</button>
+  </div>
+
+  <footer>
+    «Мужик» (Мастер в районе) — информационный сервис. ИП Матреницкая Луиза Алексеевна, ИНН 770301870259.<br />
+    <a href="/oferta-dlya-ispolniteley.html">Оферта для исполнителей</a> · <a href="/privacy-policy.html">Конфиденциальность</a> · <a href="/">Главная</a>
+  </footer>
+</div>
+
+<div class="bar"><a class="cta" href="/?master=1">Стать мастером</a><small>Вход по номеру телефона · анкета за 5 минут</small></div>
+
+<script>
+document.getElementById('share').addEventListener('click', function () {
+  var url = location.origin + location.pathname + '?utm_source=share';
+  var text = 'Смотри, тут платят за мелкий ремонт рядом с домом. Ты же это умеешь:';
+  if (navigator.share) { navigator.share({ title: 'Мужик', text: text, url: url }).catch(function () {}); }
+  else { try { navigator.clipboard.writeText(text + ' ' + url); this.textContent = 'Ссылка скопирована'; } catch (e) {} }
+});
+</script>
+<script src="/mnr-track.js?v=2"></script>
+</body>
+</html>

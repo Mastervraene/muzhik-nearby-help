@@ -86,7 +86,7 @@
         var a = links[i];
         var isHome = a.hostname === location.hostname && (a.pathname === '/' || a.pathname === '/index.html');
         if (!isHome) continue;
-        var q = new URLSearchParams();
+        var q = new URLSearchParams(a.search || '');
         if (fromUrl) {
           ['source', 'medium', 'campaign', 'content'].forEach(function (k) {
             if (fromUrl[k]) q.set('utm_' + k, fromUrl[k]);
