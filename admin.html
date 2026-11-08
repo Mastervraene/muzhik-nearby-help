@@ -7445,13 +7445,20 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
-/* ===== Сценарии: дерево блоков с назначением (если клиент / уточнение / комментарий ассистента / результат) ===== */
-let scenTree = [], scenPrices = [];
+/* ===== Сценарии: дерево диалога для ассистента =====
+ * Блоки: «Клиент говорит / если» (a) — условие или вариант ответа клиента;
+ * «Уточнение» (q) — вопрос клиенту, его дети-«если» становятся кнопками ответа;
+ * «Комментарий ассистента» (c) — что сказать; «Результат» (r) — позиция прайса.
+ * Правильный порядок: если → (уточнение | комментарий | результат); уточнение → если…;
+ * комментарий → (уточнение | результат); результат — конец ветки (можно несколько рядом,
+ * «дополнительно, если подтвердится»). Линии рисуются поверх (SVG), как в конструкторах ботов.
+ */
+let scenTree = [], scenPrices = [], scOpen = new Set([0]);
 const SC_T = {
-  a: { n: 'Клиент говорит / если', c: '#f1f1f1', ph: 'Запрос или ответ клиента (например: розетка искрит)' },
-  q: { n: 'Уточнение', c: '#e6f0ff', ph: 'Что спросить у клиента' },
-  c: { n: 'Комментарий ассистента', c: '#fff6d6', ph: 'Что и с какой аргументацией сказать клиенту' },
-  r: { n: 'Результат', c: '#e3f4e3', ph: 'Пояснение к позиции (необязательно)' },
+  a: { n: 'Клиент говорит / если', s: 'Если', c: '#f1f1f1', b: '#9aa1ab', ph: 'Запрос или ответ клиента (например: розетка искрит)' },
+  q: { n: 'Уточнение', s: 'Вопрос', c: '#e6f0ff', b: '#2563eb', ph: 'Что спросить у клиента' },
+  c: { n: 'Комментарий ассистента', s: 'Сказать', c: '#fff6d6', b: '#d9a400', ph: 'Что и с какой аргументацией сказать клиенту' },
+  r: { n: 'Результат', s: 'Итог', c: '#e3f4e3', b: '#16a34a', ph: 'Пояснение к позиции (необязательно)' },
 };
 const SC_NEXT = { a: 'q', q: 'a', c: 'r', r: 'c' };
 const scNew = (k) => ({ k: k || 'a', t: '', item: null, extra: false, kids: [] });
@@ -7488,32 +7495,120 @@ function scGet(p) {
   ix.forEach((i) => { parent = arr; n = arr[i]; arr = n.kids; });
   return { n, parent, i: ix[ix.length - 1] };
 }
+const scItem = (id) => scenPrices.find((x) => x.id === id);
+const scClientPrice = (it) => (Number(it.price) || 0) + 500; // как в чате: работа + выезд 500 ₽
+/** Проблемы блока: пусто, тупик, неверный порядок. */
+function scIssues(n, isRoot) {
+  const out = [], kinds = n.kids.map((k) => k.k);
+  if (!String(n.t || '').trim() && !(n.k === 'r' && n.item)) out.push('пустой текст');
+  if (n.k === 'a' && !n.kids.length) out.push('тупик: после «если» нужен вопрос, комментарий или результат');
+  if (n.k === 'q' && !n.kids.length) out.push('у вопроса нет вариантов ответа («если»)');
+  if (n.k === 'q' && kinds.some((k) => k !== 'a')) out.push('после вопроса должны идти только варианты ответа («если»)');
+  if (n.k === 'c' && !n.kids.length) out.push('после комментария нужен вопрос или результат');
+  if (n.k === 'r' && !n.item) out.push('не выбрана позиция прайса');
+  if (n.k === 'r' && n.kids.length) out.push('после результата ветка заканчивается — дальнейшие блоки не используются');
+  if (isRoot && n.k !== 'a') out.push('начало ветки должно быть «Клиент говорит»');
+  return out;
+}
+function scCount(n) { return 1 + n.kids.reduce((s, k) => s + scCount(k), 0); }
+function scBad(n, isRoot) { return scIssues(n, isRoot).length + n.kids.reduce((s, k) => s + scBad(k, false), 0); }
 function scPrice(n) {
-  const it = scenPrices.find((x) => x.id === n.item);
+  const it = scItem(n.item);
   const inner = it
-    ? '<div style="margin-top:4px"><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · ' + it.price + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить позицию</button></div>'
+    ? '<div style="margin-top:4px"><b>' + aiEsc(it.name) + '</b><div class="count-hint">' + aiEsc(it.category) + ' · клиенту ' + scClientPrice(it) + ' ₽ · ' + (it.minutes || 60) + ' мин</div><button data-act="clr">сменить позицию</button></div>'
     : '<div style="position:relative;margin-top:4px"><input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div></div>';
   return inner + '<label class="count-hint" style="display:block;margin-top:3px"><input type="checkbox" data-act="extra"' + (n.extra ? ' checked' : '') + '> дополнительно, если подтвердится</label>';
 }
 function scHtml(n, path) {
-  const p = path.join('.'), T = SC_T[n.k] || SC_T.a;
+  const p = path.join('.'), T = SC_T[n.k] || SC_T.a, iss = scIssues(n, path.length === 1);
   const opts = Object.keys(SC_T).map((k) => '<option value="' + k + '"' + (k === n.k ? ' selected' : '') + '>' + SC_T[k].n + '</option>').join('');
-  let h = '<div class="sn"><div class="sc" data-p="' + p + '" style="background:' + T.c + '"><select class="sk-t">' + opts + '</select>' +
+  let h = '<div class="sn"><div class="sc' + (iss.length ? ' bad' : '') + '" data-p="' + p + '" style="background:' + T.c + ';border-color:' + (iss.length ? '#e04b4b' : T.b) + '">' +
+    '<select class="sk-t">' + opts + '</select>' +
     '<textarea rows="2" placeholder="' + aiEsc(T.ph) + '">' + aiEsc(n.t) + '</textarea>' + (n.k === 'r' ? scPrice(n) : '') +
-    '<div class="sb"><button data-act="kid" title="Следующий шаг вправо">↳ ветка</button> <button data-act="sib" title="Другой вариант на этом уровне">＋ рядом</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
+    (iss.length ? '<div class="si-bad">⚠ ' + iss.map(aiEsc).join('<br>⚠ ') + '</div>' : '') +
+    '<div class="sb"><button data-act="kid" title="Следующий шаг вправо">↳ дальше</button> <button data-act="sib" title="Другой вариант на этом уровне">＋ вариант</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
   if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i))).join('') + '</div>';
   return h + '</div>';
 }
+function scDrawLines() {
+  document.querySelectorAll('#scen-body .sroot').forEach((root) => {
+    const svg = root.querySelector('svg.sl'); if (!svg) return;
+    const R = root.getBoundingClientRect();
+    svg.setAttribute('width', root.scrollWidth); svg.setAttribute('height', root.scrollHeight);
+    let d = '';
+    root.querySelectorAll('.sn').forEach((sn) => {
+      const card = sn.firstElementChild, kids = sn.querySelector(':scope > .sk'); if (!kids) return;
+      const a = card.getBoundingClientRect(), x1 = a.right - R.left + root.scrollLeft, y1 = a.top + Math.min(26, a.height / 2) - R.top + root.scrollTop;
+      kids.querySelectorAll(':scope > .sn > .sc').forEach((ch) => {
+        const b = ch.getBoundingClientRect(), x2 = b.left - R.left + root.scrollLeft, y2 = b.top + Math.min(26, b.height / 2) - R.top + root.scrollTop, mx = (x1 + x2) / 2;
+        d += 'M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + (x2 - 6) + ',' + y2 + ' ';
+        d += 'M' + (x2 - 11) + ',' + (y2 - 4) + ' L' + (x2 - 4) + ',' + y2 + ' L' + (x2 - 11) + ',' + (y2 + 4) + ' ';
+      });
+    });
+    svg.innerHTML = '<path d="' + d + '" fill="none" stroke="#7b8494" stroke-width="1.6"/>';
+  });
+}
+/** Тест-прогон ветки так, как её увидит клиент: вопросы с кнопками, комментарии, итог с ценой. */
+function scTest(rootIx) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:min(420px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden"><div style="padding:12px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center"><b>Как это увидит клиент</b><button data-x="1">✕</button></div><div class="tlog" style="padding:12px;overflow:auto;flex:1;background:#f7f7f8"></div><div class="tbtn" style="padding:10px;border-top:1px solid #eee;display:flex;flex-wrap:wrap;gap:6px"></div></div>';
+  document.body.appendChild(ov);
+  const log = ov.querySelector('.tlog'), btns = ov.querySelector('.tbtn');
+  const say = (who, html) => { log.insertAdjacentHTML('beforeend', '<div style="margin:6px 0;display:flex;justify-content:' + (who === 'u' ? 'flex-end' : 'flex-start') + '"><div style="max-width:85%;padding:8px 11px;border-radius:14px;font-size:14px;line-height:1.4;background:' + (who === 'u' ? '#2563eb;color:#fff' : who === 'r' ? '#e3f4e3' : '#fff;border:1px solid #e5e5e5') + '">' + html + '</div></div>'); log.scrollTop = log.scrollHeight; };
+  const choose = (opts) => { btns.innerHTML = ''; opts.forEach((o) => { const b = document.createElement('button'); b.textContent = o.label; b.style.cssText = 'border:1px solid #2563eb;color:#2563eb;background:#fff;border-radius:999px;padding:7px 12px;cursor:pointer'; b.onclick = o.go; btns.appendChild(b); }); };
+  const walk = (nodes) => {
+    // идём по цепочке: комментарии говорим, на вопросе ждём кнопку, результаты собираем
+    const res = [];
+    for (const n of nodes) {
+      if (n.k === 'c') { say('a', aiEsc(n.t || '…')); return walk(n.kids); }
+      if (n.k === 'q') {
+        say('a', aiEsc(n.t || '…'));
+        const ans = n.kids.filter((k) => k.k === 'a');
+        if (!ans.length) { say('r', '⚠ У вопроса нет вариантов ответа — ветка обрывается'); return choose([]); }
+        return choose(ans.map((k) => ({ label: k.t || '…', go: () => { say('u', aiEsc(k.t)); walk(k.kids); } })));
+      }
+      if (n.k === 'r') res.push(n);
+      if (n.k === 'a') { // несколько «если» подряд без вопроса — даём выбрать
+        const ans = nodes.filter((k) => k.k === 'a');
+        say('a', '<i>(ассистент сам поймёт из сообщения клиента, какой вариант)</i>');
+        return choose(ans.map((k) => ({ label: k.t || '…', go: () => { say('u', aiEsc(k.t)); walk(k.kids); } })));
+      }
+    }
+    if (res.length) {
+      res.forEach((n) => { const it = scItem(n.item); say('r', (n.extra ? '<b>Дополнительно, если подтвердится:</b> ' : '<b>Итог:</b> ') + (it ? aiEsc(it.name) + ' — ' + scClientPrice(it) + ' ₽ с выездом, около ' + (it.minutes || 60) + ' мин' : '⚠ позиция не выбрана') + (n.t ? '<br><span style="color:#555">' + aiEsc(n.t) + '</span>' : '')); });
+      say('a', '<i>Дальше ассистент спрашивает фото, адрес и удобное время.</i>');
+    } else say('r', '⚠ Тупик: ветка закончилась без результата');
+    choose([{ label: '↺ Сначала', go: () => { log.innerHTML = ''; start(); } }]);
+  };
+  const root = scenTree[rootIx];
+  const start = () => { say('u', aiEsc(root.t || '…')); walk(root.kids); };
+  ov.onclick = (e) => { if (e.target === ov || e.target.dataset.x) ov.remove(); };
+  start();
+}
 function renderScen() {
   const box = document.getElementById('scen-body');
-  box.innerHTML = '<style>#scen-body .sn{display:flex;align-items:center}#scen-body .sk{display:flex;flex-direction:column;border-left:2px solid #bbb;margin-left:4px;padding-left:4px}' +
-    '#scen-body .sc{width:230px;flex:none;margin:3px;padding:6px;border:1px solid #ccc;border-radius:8px;position:relative}#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px;margin-top:4px}#scen-body .sk-t{width:100%;font-size:12px;font-weight:600}' +
+  const total = scenTree.reduce((s, n, i) => s + scBad(n, true), 0);
+  box.innerHTML = '<style>#scen-body .sroot{position:relative;overflow:auto;padding:4px 0 150px}#scen-body svg.sl{position:absolute;left:0;top:0;pointer-events:none;z-index:0}' +
+    '#scen-body .sn{display:flex;align-items:flex-start;position:relative;z-index:1}#scen-body .sk{display:flex;flex-direction:column;margin-left:46px}' +
+    '#scen-body .sc{width:230px;flex:none;margin:5px 0;padding:6px;border:2px solid #ccc;border-radius:10px;position:relative}#scen-body .sc.bad{box-shadow:0 0 0 3px rgba(224,75,75,.15)}#scen-body .si-bad{color:#c0392b;font-size:11px;margin-top:4px;line-height:1.3}' +
+    '#scen-body textarea{width:100%;box-sizing:border-box;font:inherit;border:1px solid #ddd;border-radius:6px;padding:4px;margin-top:4px}#scen-body .sk-t{width:100%;font-size:12px;font-weight:600}' +
     '#scen-body .sb{margin-top:4px}#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
-    '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}</style>' +
-    '<p class="count-hint">Каждый блок имеет назначение. «Клиент говорит / если» — условие ветки, «Уточнение» — вопрос клиенту, «Комментарий ассистента» — что и с каким обоснованием сказать, «Результат» — позиция прайса (можно несколько, в том числе «дополнительно, если подтвердится»). Цена и время берутся только из прайса.</p>' +
-    '<div style="overflow:auto;padding-bottom:160px">' + scenTree.map((n, i) => '<div style="border-top:1px solid #ddd;padding:6px 0">' + scHtml(n, [i]) + '</div>').join('') + '</div>' +
-    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+    '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}' +
+    '#scen-body .rh{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fafafa;border:1px solid #e5e5e5;border-radius:10px;cursor:pointer;margin-top:8px}#scen-body .rh b{flex:1}#scen-body .tag{font-size:11px;border-radius:999px;padding:2px 8px}' +
+    '#scen-body .lg span{display:inline-block;margin-right:10px;font-size:12px}#scen-body .lg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:2px solid}</style>' +
+    '<p class="count-hint">Дерево — это сценарий разговора для ассистента. «Клиент говорит / если» — условие или вариант ответа, «Уточнение» — вопрос (его варианты «если» клиент увидит кнопками), «Комментарий» — что сказать и почему, «Результат» — позиция прайса. Цена и время берутся только из прайса (клиенту — с выездом 500 ₽). Порядок: если → вопрос / комментарий / результат; вопрос → варианты «если»; комментарий → вопрос / результат; результат — конец.</p>' +
+    '<p class="lg">' + Object.keys(SC_T).map((k) => '<span><i style="background:' + SC_T[k].c + ';border-color:' + SC_T[k].b + '"></i>' + SC_T[k].n + '</span>').join('') + (total ? '<span style="color:#c0392b">⚠ проблем: ' + total + '</span>' : '<span style="color:#16a34a">✓ ошибок нет</span>') + '</p>' +
+    scenTree.map((n, i) => {
+      const open = scOpen.has(i), bad = scBad(n, true);
+      return '<div class="rh" data-root="' + i + '"><span>' + (open ? '▾' : '▸') + '</span><b>' + aiEsc(n.t || '(без названия)') + '</b>' + (n.draft ? '<span class="tag" style="background:#fff6d6">черновик Claude</span>' : '') +
+        '<span class="tag" style="background:#eee">' + scCount(n) + ' блоков</span>' + (bad ? '<span class="tag" style="background:#fde2e2;color:#c0392b">⚠ ' + bad + '</span>' : '<span class="tag" style="background:#e3f4e3;color:#16a34a">✓</span>') +
+        '<button data-test="' + i + '">▶ Проверить</button></div>' +
+        (open ? '<div class="sroot"><svg class="sl"></svg>' + scHtml(n, [i]) + '</div>' : '');
+    }).join('') +
+    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-drafts" title="Черновые ветки по остальным задачам — добавятся в конец, потом нажмите «Сохранить»">＋ Черновики веток от Claude</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
   const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
+  requestAnimationFrame(scDrawLines);
   box.oninput = (ev) => {
     const el = ev.target, c = el.closest('.sc'); if (!c) return;
     if (el.tagName === 'TEXTAREA') { scGet(c.dataset.p).n.t = el.value; return; }
@@ -7530,7 +7625,11 @@ function renderScen() {
     else if (el.dataset.act === 'extra') scGet(c.dataset.p).n.extra = el.checked;
   };
   box.onclick = async (ev) => {
-    const el = ev.target, c = el.closest('.sc'); if (!c) return;
+    const el = ev.target;
+    if (el.dataset.test !== undefined) { ev.stopPropagation(); return scTest(+el.dataset.test); }
+    const rh = el.closest('.rh');
+    if (rh) { const i = +rh.dataset.root; scOpen.has(i) ? scOpen.delete(i) : scOpen.add(i); return renderScen(); }
+    const c = el.closest('.sc'); if (!c) return;
     const p = c.dataset.p, act = el.dataset.act;
     if (el.closest('[data-id]')) { scGet(p).n.item = +el.closest('[data-id]').dataset.id; return renderScen(); }
     if (el.closest('[data-newi]')) {
@@ -7551,15 +7650,35 @@ function renderScen() {
     if (act === 'clr') g.n.item = null;
     if (act === 'kid') g.n.kids.push(scNew(SC_NEXT[g.n.k]));
     if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew(g.n.k));
-    if (act === 'del') { g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew('a')); }
+    if (act === 'del') { if (!confirmDelScen(g.n)) return; g.parent.splice(g.i, 1); if (!scenTree.length) scenTree.push(scNew('a')); }
     renderScen();
   };
-  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew('a')); renderScen(); };
+  box.onscroll = null;
+  document.getElementById('scen-add').onclick = () => { scenTree.push(scNew('a')); scOpen.add(scenTree.length - 1); renderScen(); };
+  document.getElementById('scen-drafts').onclick = async () => {
+    try {
+      const d = await fetch('/scen-drafts.json?v=' + Date.now()).then((r) => r.json());
+      const have = new Set(scenTree.map((n) => String(n.t || '').trim()));
+      const add = d.filter((n) => !have.has(String(n.t || '').trim()));
+      scenTree.push(...add); renderScen(); msg(add.length ? 'Добавлено веток: ' + add.length + '. Проверьте и нажмите «Сохранить».' : 'Все черновики уже добавлены');
+    } catch (e) { msg('Не удалось загрузить черновики: ' + e.message); }
+  };
+  document.getElementById('scen-open').onclick = () => { scenTree.forEach((_, i) => scOpen.add(i)); renderScen(); };
+  document.getElementById('scen-close').onclick = () => { scOpen.clear(); renderScen(); };
   document.getElementById('scen-save').onclick = async () => {
     try { const r = await callAdminPricing('save_scenarios', { tree: scenTree }); msg('Сохранено: ' + r.count + ' начал'); }
     catch (e) { msg('Ошибка: ' + e.message); }
   };
 }
+// Удаление ветки с вложенными блоками — без системного диалога (он ломает автоматизацию браузера), двойной клик-подтверждение.
+let scDelArm = null;
+function confirmDelScen(n) {
+  if (!n.kids.length) return true;
+  if (scDelArm === n) { scDelArm = null; return true; }
+  scDelArm = n; const e = document.getElementById('scen-msg'); if (e) e.textContent = 'У блока есть продолжение (' + (scCount(n) - 1) + ' блоков). Нажмите ✕ ещё раз, чтобы удалить вместе с ним.';
+  return false;
+}
+window.addEventListener('resize', () => { if (document.querySelector('#scen-body .sroot')) scDrawLines(); });
 
 function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
