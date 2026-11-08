@@ -7606,7 +7606,7 @@ function renderScen() {
         '<button data-test="' + i + '">▶ Проверить</button></div>' +
         (open ? '<div class="sroot"><svg class="sl"></svg>' + scHtml(n, [i]) + '</div>' : '');
     }).join('') +
-    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-drafts" title="Черновые ветки по остальным задачам — добавятся в конец, потом нажмите «Сохранить»">＋ Черновики веток от Claude</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <span id="scen-msg" class="count-hint"></span></p>';
+    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-drafts" title="Черновые ветки по остальным задачам — добавятся в конец, потом нажмите «Сохранить»">＋ Черновики веток от Claude</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <button id="scen-live" title="Откроет настоящий чат сайта, который поведёт по этому дереву (даже несохранённому). Видите это только вы, в этом браузере.">▶ Проверить в настоящем чате</button> <button id="scen-live-off" style="display:' + (scTestOn() ? 'inline-block' : 'none') + '">✕ Выключить проверку</button> <span id="scen-msg" class="count-hint"></span></p><p class="count-hint">Для всех клиентов сценарии в чате пока <b>выключены</b> — чат работает по-старому. Когда ветки готовы: сохраните и скажите Claude «включай сценарии». Ветки с ошибками ⚠ в чат не попадают.</p>';
   const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
   requestAnimationFrame(scDrawLines);
   box.oninput = (ev) => {
@@ -7663,6 +7663,12 @@ function renderScen() {
       scenTree.push(...add); renderScen(); msg(add.length ? 'Добавлено веток: ' + add.length + '. Проверьте и нажмите «Сохранить».' : 'Все черновики уже добавлены');
     } catch (e) { msg('Не удалось загрузить черновики: ' + e.message); }
   };
+  document.getElementById('scen-live').onclick = () => {
+    try { localStorage.setItem('mnr_test_tree', JSON.stringify(scenTree)); } catch (e) { return msg('Не удалось включить проверку: ' + e.message); }
+    window.open('/chat.html?scen_test=' + Date.now(), '_blank');
+    msg('Открыт чат в режиме проверки. Нажмите «Новый чат» и напишите задачу как клиент.'); renderScen();
+  };
+  document.getElementById('scen-live-off').onclick = () => { try { localStorage.removeItem('mnr_test_tree'); } catch (e) {} renderScen(); };
   document.getElementById('scen-open').onclick = () => { scenTree.forEach((_, i) => scOpen.add(i)); renderScen(); };
   document.getElementById('scen-close').onclick = () => { scOpen.clear(); renderScen(); };
   document.getElementById('scen-save').onclick = async () => {
@@ -7679,6 +7685,7 @@ function confirmDelScen(n) {
   return false;
 }
 window.addEventListener('resize', () => { if (document.querySelector('#scen-body .sroot')) scDrawLines(); });
+function scTestOn() { try { return !!localStorage.getItem('mnr_test_tree'); } catch (e) { return false; } }
 
 function activateTab(tab) {
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));

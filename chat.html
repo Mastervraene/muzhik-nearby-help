@@ -1221,6 +1221,7 @@ body.embed .chat-screen { padding-top:6px; }
   ta.addEventListener('input', function () { grow(); grade(); });
   ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
   restore(); grade();
+  try { if (localStorage.getItem('mnr_test_tree')) add('sys', 'Режим проверки сценариев из админки (видите только вы). Нажмите «Новый чат» и напишите задачу как клиент.'); } catch (e) {}
   (function schedulePoll() {
     setTimeout(async function () {
       try { if (document.visibilityState === 'visible') await pollAdmin(); } catch (e) {}

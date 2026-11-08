@@ -3557,6 +3557,8 @@ function dbUserToUser(row, skillsByUser) {
     // раньше задание снималось автоматически по нажатию «Я выполнил(а)»,
     // без проверки админом; теперь это промежуточный статус).
     masterTaskSubmittedAt: row.master_task_submitted_at || null,
+    // Навыки, которых нет в списке, — ручной ввод в анкете мастера (09.11.2026). Пока нигде не используется.
+    extraSkills: row.extra_skills || '',
     // Защита от частой смены номера/IP/геолокации (см. триггер
     // log_user_contact_change и save-profile.ts) — читается только, клиент
     // сам эти поля никогда не отправляет (см. userToDbUser).
@@ -11600,7 +11602,21 @@ document.addEventListener('input', (e) => {
   else if (id === 'feedback-text') { feedbackText = e.target.value; }
   else if (id === 'mw-first') { masterWizardFirstName = e.target.value; masterWizardNameTouched = true; }
   else if (id === 'mw-last') { masterWizardLastName = e.target.value; masterWizardNameTouched = true; }
+  else if (id === 'mw-extra-skills') { mwExtraSkillsDraft = e.target.value; clearTimeout(mwExtraSkillsTimer); mwExtraSkillsTimer = setTimeout(saveMwExtraSkills, 900); }
 });
+
+// Свои навыки мастера (ручной ввод через запятую) — сохраняются в users.extra_skills через save-profile.
+let mwExtraSkillsDraft = null, mwExtraSkillsTimer = null;
+async function saveMwExtraSkills() {
+  const user = currentUser(); const sessionToken = loadSessionToken();
+  if (!user || !sessionToken || mwExtraSkillsDraft === null) return;
+  const value = mwExtraSkillsDraft.trim().slice(0, 500);
+  try {
+    await callSecureFn('save-profile', { userId: user.id, sessionToken, patch: { extraSkills: value } });
+    const i = cache.users.findIndex((u) => u.id === user.id);
+    if (i >= 0) cache.users[i] = { ...cache.users[i], extraSkills: value };
+  } catch (err) { console.error('[extra-skills] не сохранилось', err); }
+}
 
 function renderMasterWizardSkills(user) {
   return `<div class="skill-buttons">
@@ -11700,6 +11716,8 @@ function renderMasterWizardStepBody(step, user) {
       <div class="field-card">
         <p class="order-meta" style="margin-bottom:10px;">Нажмите на направление и поставьте оценку своим навыкам от 1 до 5 звёзд. Вам будут показываться только заказы, которые соответствуют вашим навыкам. Отметьте хотя бы одно.<br>Если вы профессионал — нажмите «PRO» (показать иконку), максимум 2 категории.</p>
         ${renderMasterWizardSkills(user)}
+        <label for="mw-extra-skills" style="display:block;margin-top:16px;">Если вашего навыка нет в списке, напишите через запятую</label>
+        <textarea id="mw-extra-skills" rows="2" maxlength="500" placeholder="сварщик, плотник, обувной мастер" style="width:100%;box-sizing:border-box;margin-top:6px;">${escapeHtml(mwExtraSkillsDraft !== null ? mwExtraSkillsDraft : (user.extraSkills || ''))}</textarea>
       </div>`;
   }
   // avatar
