@@ -67,6 +67,11 @@ section .lead{color:var(--muted);font-size:16px;line-height:1.45;margin:0 0 18px
 .promo p{margin:0 0 14px;color:#dbe6ff;font-size:15px;line-height:1.45}
 .promo a{display:inline-block;background:var(--yellow);color:var(--ink);font-weight:800;border-radius:999px;padding:11px 18px;text-decoration:none;font-size:15px}
 
+.share{margin:12px 20px 0;background:var(--soft);border-radius:22px;padding:22px 20px;text-align:center}
+.share h2{font-family:"Oswald",sans-serif;font-weight:700;font-size:24px;color:var(--ink);margin:0 0 6px;text-transform:uppercase}
+.share p{margin:0 0 14px;color:var(--muted);font-size:15px;line-height:1.45}
+.btn2{display:inline-flex;align-items:center;gap:8px;border:2px solid var(--blue);color:var(--blue);background:#fff;border-radius:999px;padding:12px 20px;font-weight:800;font-size:15px;cursor:pointer;font-family:inherit}
+
 footer{padding:26px 20px 10px;color:#8a8f97;font-size:12px;line-height:1.5}
 footer a{color:#8a8f97}
 
@@ -139,6 +144,12 @@ body{-webkit-tap-highlight-color:transparent}
     <img class="thumb" src="/promo/man-thumb.webp" alt="" loading="lazy" />
   </div>
 
+  <div class="share">
+    <h2>Кому ещё пригодится?</h2>
+    <p>У каждой есть подруга, у которой третий месяц капает кран. Отправьте ей — пусть тоже вызовет мужика.</p>
+    <button class="btn2" type="button" data-share data-share-url="/clients.html?utm_source=shlist1" data-share-text="Нашла сервис: мастер рядом починит розетку, кран, повесит полку. Цена сразу, а раз в месяц один заказ бесплатно:">Отправить подруге</button>
+  </div>
+
   <footer>
     «Мужик» (Мастер в районе) — информационный сервис. ИП Матреницкая Луиза Алексеевна, ИНН 770301870259. Акция «Ремонт бесплатно» с 01.11.2026 по 31.05.2027, <a href="/akciya/">правила</a>.<br />
     <a href="/price-list.html">Цены</a> · <a href="/privacy-policy.html">Конфиденциальность</a> · <a href="/">Главная</a>
@@ -146,6 +157,7 @@ body{-webkit-tap-highlight-color:transparent}
 </div>
 
 <div class="bar"><a class="cta" href="/">Описать задачу</a><small>Откроется чат — напишите, что нужно сделать</small></div>
+<script src="/share.js?v=1"></script>
 <script src="/mnr-track.js?v=2"></script>
 </body>
 </html>

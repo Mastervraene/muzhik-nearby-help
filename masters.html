@@ -148,7 +148,7 @@ body{-webkit-tap-highlight-color:transparent}
   <div class="share">
     <h2 class="h">Это не про тебя?</h2>
     <p>У каждого есть такой мужик — тот, кому звонят, когда что-то сломалось. Отправь ему.</p>
-    <button class="btn2" type="button" id="share">Отправить тому, кто умеет</button>
+    <button class="btn2" type="button" id="share" data-share data-share-url="/masters.html?utm_source=shlist1" data-share-text="Смотри, тут платят за мелкий ремонт рядом с домом. Ты же это умеешь:">Отправить тому, кто умеет</button>
     <img class="ok-man" src="/promo/man-ok.webp" alt="" loading="lazy" />
   </div>
 
@@ -160,14 +160,7 @@ body{-webkit-tap-highlight-color:transparent}
 
 <div class="bar"><a class="cta" href="/?master=1">Стать мастером</a><small>Вход по номеру телефона · анкета за 5 минут</small></div>
 
-<script>
-document.getElementById('share').addEventListener('click', function () {
-  var url = location.origin + '/masters.html?utm_source=shlist1';
-  var text = 'Смотри, тут платят за мелкий ремонт рядом с домом. Ты же это умеешь:';
-  if (navigator.share) { navigator.share({ title: 'Мужик', text: text, url: url }).catch(function () {}); }
-  else { try { navigator.clipboard.writeText(text + ' ' + url); this.textContent = 'Ссылка скопирована'; } catch (e) {} }
-});
-</script>
+<script src="/share.js?v=1"></script>
 <script src="/mnr-track.js?v=2"></script>
 </body>
 </html>
