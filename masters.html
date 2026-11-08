@@ -162,7 +162,7 @@ body{-webkit-tap-highlight-color:transparent}
 
 <script>
 document.getElementById('share').addEventListener('click', function () {
-  var url = location.origin + location.pathname + '?utm_source=share';
+  var url = location.origin + '/masters.html?utm_source=shlist1';
   var text = 'Смотри, тут платят за мелкий ремонт рядом с домом. Ты же это умеешь:';
   if (navigator.share) { navigator.share({ title: 'Мужик', text: text, url: url }).catch(function () {}); }
   else { try { navigator.clipboard.writeText(text + ' ' + url); this.textContent = 'Ссылка скопирована'; } catch (e) {} }
