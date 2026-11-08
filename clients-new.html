@@ -21,8 +21,7 @@ a{color:inherit}
 .osw{font-family:"Oswald","Arial Narrow",Impact,sans-serif;font-weight:700}
 
 /* Первый экран — продолжение листовки */
-.hero{position:relative;background:#fff;padding:18px 20px 0;min-height:min(90svh,700px);display:flex;flex-direction:column;overflow:hidden}
-.hero::before{content:"";position:absolute;left:-30%;bottom:-8%;width:160%;height:46%;background:var(--blue);border-radius:50% 50% 0 0/40% 40% 0 0;transform:rotate(-8deg);z-index:0}
+.hero{position:relative;background:#fff;padding:18px 20px 0;overflow:hidden}
 .brand{position:relative;z-index:3;display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text)}
 .brand img{width:34px;height:38px}
 .brand b{font-size:17px}.brand small{display:block;color:var(--muted);font-size:11px;font-weight:400}
@@ -32,10 +31,12 @@ a{color:inherit}
 .hero h1 small{display:block;font-size:.5em;text-transform:none;line-height:1.1;margin-bottom:4px}
 .free{position:relative;z-index:3;display:inline-flex;align-items:center;gap:6px;margin-top:14px;background:var(--yellow);color:var(--ink);border-radius:18px;padding:8px 16px 6px;font-size:clamp(26px,8vw,38px);text-decoration:none;transform:rotate(-2deg)}
 .free sup{font-size:.55em}
-.fine{position:relative;z-index:3;margin:10px 0 0;font-size:13px;color:var(--muted);max-width:58%}
+.fine{margin:10px 0 0;font-size:13px;color:var(--muted)}
 .fine a{color:var(--blue)}
-.hero .pic{position:absolute;z-index:1;left:-14px;bottom:0;height:56%;max-height:430px;width:auto}
-.call{position:absolute;z-index:3;right:20px;bottom:34px;background:var(--blue);color:#fff;border-radius:999px;padding:10px 22px 8px;font-size:30px;text-decoration:none;box-shadow:0 10px 24px rgba(37,99,235,.35)}
+.fig{position:relative;margin:8px -20px 0;height:min(64vw,330px)}
+.fig::before{content:"";position:absolute;left:-10%;right:-10%;bottom:0;height:62%;background:var(--blue);border-radius:60% 60% 0 0/45% 45% 0 0;transform:rotate(-6deg);transform-origin:left bottom}
+.fig .pic{position:absolute;left:0;bottom:0;height:100%;width:auto;-webkit-mask-image:linear-gradient(to right,#000 80%,transparent);mask-image:linear-gradient(to right,#000 80%,transparent)}
+.call{position:absolute;z-index:3;right:20px;bottom:40px;background:#fff;color:var(--blue);border-radius:999px;padding:10px 22px 8px;font-size:30px;text-decoration:none;box-shadow:0 10px 24px rgba(15,27,61,.25)}
 
 section{padding:34px 20px 6px}
 section h2{font-family:"Oswald",sans-serif;font-weight:700;font-size:28px;line-height:1.1;margin:0 0 6px;color:var(--ink);text-transform:uppercase}
@@ -87,8 +88,7 @@ body{-webkit-tap-highlight-color:transparent}
       <a class="free osw" href="/akciya/">Бесплатно<sup>*</sup></a>
       <p class="fine">*Каждый месяц один заказ полностью за наш счёт. <a href="/akciya/">Правила акции</a></p>
     </div>
-    <img class="pic" src="/promo/hero-client.webp" alt="Мастер" />
-    <a class="call osw" href="/">Зовите!</a>
+    <div class="fig"><img class="pic" src="/promo/hero-client.webp" alt="Мастер" /><a class="call osw" href="/">Зовите!</a></div>
   </header>
 
   <section>
