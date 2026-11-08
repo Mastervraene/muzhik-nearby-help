@@ -20,18 +20,15 @@ a{color:inherit}
 .h{font-family:"Oswald","Arial Narrow",Impact,sans-serif;font-weight:700;text-transform:uppercase;line-height:1.05;letter-spacing:.005em;margin:0}
 
 /* Первый экран — продолжение листовки */
-.hero{position:relative;background:#111 radial-gradient(120% 80% at 100% 0%,#2a2a2a 0%,#111 60%);color:#fff;overflow:hidden;padding:18px 20px 0;min-height:min(92svh,720px);display:flex;flex-direction:column}
+.hero{position:relative;background:#111 radial-gradient(120% 80% at 100% 0%,#2a2a2a 0%,#111 60%);color:#fff;overflow:hidden;padding:18px 20px 0;min-height:min(100svh,780px);display:flex;flex-direction:column}
 .brand{position:relative;z-index:3;display:flex;align-items:center;gap:10px;text-decoration:none}
 .brand img{width:34px;height:38px}
 .brand b{font-size:17px}.brand small{display:block;color:#a7abb2;font-size:11px;font-weight:400}
-.hero .copy{position:relative;z-index:3;margin-top:22px;max-width:64%}
-.hero h1,.hero .sub{text-shadow:0 2px 12px rgba(0,0,0,.6)}
-.tag{display:inline-block;white-space:nowrap;background:var(--yellow);color:#111;padding:4px 10px 2px;transform:skew(-6deg)}
-.hero h1{font-size:clamp(34px,10.5vw,52px)}
-.hero h1 .w{display:block;color:#fff}
-.hero .sub{font-size:16px;line-height:1.4;color:#d9dce1;margin:14px 0 0}
-.hero .pic{position:absolute;z-index:1;right:-30px;bottom:0;height:84%;max-height:640px;width:auto;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 28%),linear-gradient(to bottom,transparent 0,#000 18%);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent 0,#000 28%),linear-gradient(to bottom,transparent 0,#000 18%);mask-composite:intersect}
-.hero .pill{position:relative;z-index:3;margin-top:auto;margin-bottom:22px;align-self:flex-start;display:flex;align-items:center;gap:8px;background:var(--yellow);color:#111;border-radius:999px;padding:9px 16px 7px 12px;font-family:"Oswald",sans-serif;font-weight:700;font-size:20px;text-transform:uppercase}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.hero .title{position:relative;z-index:3;width:min(74%,360px);margin-top:14px;filter:drop-shadow(0 6px 18px rgba(0,0,0,.45))}
+.hero .pic{position:absolute;z-index:1;right:-34px;bottom:0;height:70%;max-height:620px;width:auto}
+.hero .sub{position:relative;z-index:3;margin:auto 0 12px;max-width:52%;font-size:15px;line-height:1.4;color:#e4e6ea;text-shadow:0 2px 10px rgba(0,0,0,.7)}
+.hero .pill{position:relative;z-index:3;margin-bottom:22px;align-self:flex-start;display:flex;align-items:center;gap:8px;background:var(--yellow);color:#111;border-radius:999px;padding:9px 16px 7px 12px;font-family:"Oswald",sans-serif;font-weight:700;font-size:20px;text-transform:uppercase;box-shadow:0 6px 18px rgba(0,0,0,.35)}
 .hero .pill svg{width:20px;height:20px;flex:none}
 
 section{padding:34px 20px 6px}
@@ -70,7 +67,8 @@ section .lead{color:var(--muted);font-size:16px;line-height:1.45;margin:0 0 18px
 .facts .ok{flex:none;width:26px;height:26px;border-radius:50%;background:#111;color:var(--yellow);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px}
 
 /* Поделиться */
-.share{margin:8px 20px 0;background:#111;color:#fff;border-radius:22px;padding:22px 20px;text-align:center}
+.share{margin:8px 20px 0;background:#111;color:#fff;border-radius:22px;padding:22px 20px 0;text-align:center;overflow:hidden}
+.share .ok-man{display:block;width:150px;margin:16px auto 0}
 .share h2{color:#fff;font-size:24px}
 .share p{color:#c9ccd2;margin:6px 0 16px;font-size:15px;line-height:1.4}
 .btn2{display:inline-flex;align-items:center;gap:8px;border:2px solid var(--yellow);color:var(--yellow);background:transparent;border-radius:999px;padding:12px 20px;font-weight:800;font-size:15px;cursor:pointer;font-family:inherit}
@@ -91,11 +89,10 @@ body{-webkit-tap-highlight-color:transparent}
 
   <header class="hero">
     <a class="brand" href="/"><img src="/logo.png" alt="" /><span><b>Мужик</b><small>рядом поможет</small></span></a>
-    <div class="copy">
-      <h1 class="h"><span class="tag">Деньги за</span><span class="w">ремонт и помощь по дому</span></h1>
-      <p class="sub">Ты это и так умеешь. Теперь можешь за это получать.</p>
-    </div>
-    <img class="pic" src="/promo/hero-master.webp" alt="Мужик с шуруповёртом" />
+    <h1 class="sr">Деньги за ремонт и помощь по дому в твоём районе</h1>
+    <img class="title" src="/promo/title-master.webp" alt="Деньги за ремонт и помощь по дому" />
+    <img class="pic" src="/promo/hero-master.webp?v=2" alt="Мужик с деньгами и шуруповёртом" />
+    <p class="sub">Ты это и так умеешь. Теперь можешь за это получать.</p>
     <div class="pill"><svg viewBox="0 0 24 24"><path fill="#e11d2a" d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/><circle cx="12" cy="9" r="2.6" fill="#ffcc00"/></svg>В твоём районе</div>
   </header>
 
@@ -152,6 +149,7 @@ body{-webkit-tap-highlight-color:transparent}
     <h2 class="h">Это не про тебя?</h2>
     <p>У каждого есть такой мужик — тот, кому звонят, когда что-то сломалось. Отправь ему.</p>
     <button class="btn2" type="button" id="share">Отправить тому, кто умеет</button>
+    <img class="ok-man" src="/promo/man-ok.webp" alt="" loading="lazy" />
   </div>
 
   <footer>
