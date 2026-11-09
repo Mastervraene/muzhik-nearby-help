@@ -3282,7 +3282,7 @@ function orderCardHtml(o) {
       <div class="card-head" id="order-head-${o.id}">
         <div class="card-head-main">
           ${o.orderNumber || o.isTest ? `<p class="card-order-number">${o.isTest ? '<span style="background:#6b21a8;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-right:6px;">ТЕСТ</span>' : ''}${o.orderNumber ? (o.isTest ? 'T-' + o.orderNumber : 'Заказ №' + o.orderNumber) : ''}</p>` : ''}
-          <p class="card-title">${customerNameHtml}${districtSuffix}</p>
+          <p class="card-title">${o.urgency === 'urgent' ? '<span class="pill warn" title="Клиент написал, что срочно (без доплаты)">🔥 Срочно</span> ' : ''}${customerNameHtml}${districtSuffix}</p>
           ${workerLinksHtml ? `<p class="card-meta" style="margin:0 0 4px;">Мастер: ${workerLinksHtml}</p>` : ''}
           <div class="card-line-desc">${escapeHtml(o.description || o.title || 'Без описания')}</div>
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}

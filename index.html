@@ -2231,6 +2231,7 @@ body {
 
 .order-view-map { height: 160px; border-radius: 12px; overflow: hidden; margin: 8px 0; background: var(--gray-100); }
 .order-card-desc { margin: 6px 0 0; font-size: 14px; color: var(--gray-700); line-height: 1.4; }
+.urgent-tag{display:inline-block;font-size:11px;font-weight:800;color:#dc2626;background:#fef2f2;border-radius:999px;padding:1px 8px;vertical-align:2px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -10229,7 +10230,7 @@ function orderCardHtml(order, { viewer }) {
         <div>
           ${order.orderNumber ? `<p class="order-number-tag">${order.isTest ? 'ТЕСТ · T-' + order.orderNumber : 'Заказ №' + order.orderNumber}</p>` : ''}
           ${order.deviceModel ? `<p style="margin:2px 0;"><b>${escapeHtml(order.deviceModel)}</b></p>` : ''}
-          <p class="order-title">${escapeHtml(order.title)}</p>
+          <p class="order-title">${order.urgency === 'urgent' ? '<span class="urgent-tag">🔥 Срочно</span> ' : ''}${escapeHtml(order.title)}</p>
           <div class="order-meta">
             <span>${escapeHtml(catTitle)}</span>
             <span>${escapeHtml(viewer === 'worker' && order.assignedWorkerId !== state.currentUserId ? stripApartment(order.district) : order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
@@ -11135,7 +11136,7 @@ function renderOrderDetail() {
                 ? `<p style="margin:2px 0;"><button type="button" class="secondary-button" style="padding:2px 10px;font-size:12px;display:inline-block;width:auto;" data-action="edit-device-model" data-value="${order.id}">+ Указать модель устройства</button></p>`
                 : ''
             }
-            <p class="order-title">${escapeHtml(order.title)}</p>
+            <p class="order-title">${order.urgency === 'urgent' ? '<span class="urgent-tag">🔥 Срочно</span> ' : ''}${escapeHtml(order.title)}</p>
           </div>
           <span class="status-pill">${STATUS_LABELS[order.status]}</span>
         </div>
@@ -12448,7 +12449,7 @@ function syncChatHost() {
     chatHostEl = document.createElement('iframe');
     chatHostEl.id = 'chat-host';
     chatHostEl.title = 'Помощник';
-    chatHostEl.src = '/chat.html?embed=1&v=20261109b';
+    chatHostEl.src = '/chat.html?embed=1&v=20261109c';
     chatHostEl.setAttribute('allow', 'geolocation');
     chatHostEl.style.cssText = 'position:fixed;border:0;z-index:1;background:#fff;';
     document.body.appendChild(chatHostEl);
