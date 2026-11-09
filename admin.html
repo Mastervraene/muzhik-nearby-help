@@ -148,6 +148,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* Оранжевый «стикер» — частая смена номера (см. dbUserToUser.phoneChangeFlag,
    пожелание Sg: "оранжевый стикер/флаг на затронутых аккаунтах"). */
 .pill.orange { background: #fff7ed; color: #c2410c; }
+/* UTM-метки, по которым человек пришёл (landing_events, событие login): list1, shlist1… */
+.utm-tags { font-size: 10px; line-height: 1.2; color: var(--gray-600); font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
 .status-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 5px; vertical-align: middle; position: relative; top: -1px;
@@ -4550,6 +4552,7 @@ function masterCardHtml(u) {
             ${chatCount ? `<span class="pill chat-count${unreadCount ? ' unread' : ''}" title="${unreadCount ? 'Есть непрочитанные сообщения' : 'Переписка в Telegram'}">💬 ${chatCount}${unreadCount ? ` · новых ${unreadCount}` : ''}</span>` : ''}
             ${masterFlagsPillsHtml(u)}
             ${statusPills}
+            ${(userUtm.get(u.id) || []).length ? `<span class="utm-tags" title="Метки, по которым человек пришёл на сайт">${userUtm.get(u.id).map(escapeHtml).join(' ')}</span>` : ''}
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
@@ -6672,8 +6675,9 @@ function fillMapPoints() {
 // -----------------------------------------------------------------------
 // Загрузка данных и общий рендер
 // -----------------------------------------------------------------------
+let userUtm = new Map();
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows, blockRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows, blockRows, utmRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
@@ -6697,8 +6701,11 @@ async function loadData(opts) {
     // telegram_messages/notifications выше: таблица появилась позже остальных.
     getRows('admin_tasks', 'order=created_at.desc&limit=200').catch(() => []),
     getRows('master_customer_blocks').catch(() => []),
+    getRows('landing_events', 'order=created_at.asc&limit=5000', ['event', 'login']).catch(() => []),
   ]);
   allMasterBlocks = blockRows || [];
+  userUtm = new Map();
+  for (const r of (utmRows || [])) { if (!r.user_id || !r.utm_source) continue; const a = userUtm.get(r.user_id) || []; if (!a.includes(r.utm_source)) a.push(r.utm_source); userUtm.set(r.user_id, a); }
   allUsers = userRows.map(dbUserToUser);
   recomputeUserSeqIds();
   allOrders = orderRows.map(dbOrderToOrder);

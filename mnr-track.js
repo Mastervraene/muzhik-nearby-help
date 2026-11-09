@@ -114,4 +114,7 @@
     save(u);
     send('login', u, String(userId));
   };
+
+  // Уже вошедший на этом устройстве человек пришёл по метке — тоже привязываем метку к нему (видно в админке).
+  try { var sid = localStorage.getItem('muzhik_session_v1'); if (sid && /^[0-9a-f-]{36}$/i.test(sid) && load()) window.mnrTrackLogin(sid); } catch (e) { /* ignore */ }
 })();
