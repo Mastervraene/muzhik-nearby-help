@@ -7466,6 +7466,8 @@ async function extraLoadPrices() {
 }
 function extraLineCost(unit, qty) { let t = 0; for (let i = 1; i <= qty; i++) t += unit * (i <= 2 ? 1 : i <= 5 ? 0.9 : i <= 9 ? 0.85 : 0.7); return Math.round(t); }
 function extraWorkBlockHtml(order) {
+  const wait = ((order.payment && order.payment.surcharges) || []).find((x) => x.kind === 'extra_work' && x.status === 'needs_admin');
+  if (wait) return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доп. работы на ${wait.amount} ₽ ждут согласования администратором</b><br>${escapeHtml(String(wait.reason || '').replace(/^Доп\. работы: /, ''))}</p><p class="order-meta" style="font-size:12px;">Не начинайте их, пока администратор не согласует и заказчик не оплатит.</p><button type="button" class="secondary-button" data-action="extra-cancel" data-value="${order.id}:${wait.id}">Отменить доп. работы</button></div>`;
   const pend = ((order.payment && order.payment.surcharges) || []).find((x) => x.kind === 'extra_work' && x.status === 'pending');
   if (pend) return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доп. работы на ${pend.amount} ₽ ждут оплаты заказчиком</b><br>${escapeHtml(String(pend.reason || '').replace(/^Доп\. работы: /, ''))}</p><p class="order-meta" style="font-size:12px;">Начинайте доп. работы только после оплаты. Наличные брать нельзя.</p><button type="button" class="secondary-button" data-action="extra-cancel" data-value="${order.id}:${pend.id}">Отменить доп. работы</button></div>`;
   const hasDraft = (extraWorkDrafts[order.id] || []).length > 0;
@@ -7515,15 +7517,25 @@ function extraLinesHtml(orderId) {
   const total = lines.reduce((a, l) => a + extraLineCost(l.unit, l.qty), 0);
   const qb = 'style="width:30px;height:30px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;font-size:16px;line-height:1;cursor:pointer;"';
   return lines.map((l) => `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f2f5;"><span style="flex:1;font-size:14px;">${escapeHtml(l.name)}</span><button type="button" ${qb} onclick="extraQty('${orderId}',${l.id},-1)">−</button><b style="min-width:18px;text-align:center;">${l.qty}</b><button type="button" ${qb} onclick="extraQty('${orderId}',${l.id},1)">+</button><b style="min-width:64px;text-align:right;white-space:nowrap;">${extraLineCost(l.unit, l.qty)} ₽</b></div>`).join('') +
-    `<p class="order-meta" style="margin-top:8px;"><b>Итого доп. работы: ${total} ₽</b></p><button type="button" class="primary-button" data-action="extra-send" data-value="${orderId}">Отправить заказчику на оплату ${total} ₽</button>`;
+    `<p class="order-meta" style="margin-top:8px;"><b>Итого доп. работы: ${total} ₽</b></p>
+    <p class="order-meta" style="margin:6px 0 4px;"><b>Почему появились доп. работы?</b></p>
+    <label class="order-meta" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;"><input type="radio" name="extra-why-${orderId}" value="client_asked" /> <span>Заказчик сам попросил сделать ещё (сразу уйдёт заказчику на оплату)</span></label>
+    <label class="order-meta" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;"><input type="radio" name="extra-why-${orderId}" value="needed" /> <span>Без этого не сделать заказ — заказчик не всё рассказал (сначала согласует администратор)</span></label>
+    <textarea id="extra-note-${orderId}" class="composer-textarea" rows="2" placeholder="Коротко: что выяснилось на месте (для администратора)"></textarea>
+    <button type="button" class="primary-button" data-action="extra-send" data-value="${orderId}">Отправить: ${total} ₽</button>`;
 }
 window.extraSearch = extraSearch; window.extraAdd = extraAdd; window.extraQty = extraQty;
 async function extraWorkSend(orderId) {
   const lines = extraWorkDrafts[orderId] || []; if (!lines.length) return;
   const token = loadSessionToken(); if (!token) return showToast('Войдите заново');
   try {
-    const r = await callSecureFn('extra-work', { action: 'create', userId: state.currentUserId, sessionToken: token, orderId, items: lines.map((l) => ({ id: l.id, qty: l.qty })) });
-    showToast(r.paid ? 'Доп. работы добавлены (тестовый заказ)' : 'Отправлено заказчику на оплату: ' + r.amount + ' ₽');
+    const pick = document.querySelector(`input[name="extra-why-${orderId}"]:checked`);
+    if (!pick) return showToast('Отметьте, почему появились доп. работы');
+    const note = String((document.getElementById('extra-note-' + orderId) || {}).value || '').trim();
+    if (pick.value === 'needed' && note.length < 5) return showToast('Напишите коротко, что выяснилось на месте');
+    const r = await callSecureFn('extra-work', { action: 'create', userId: state.currentUserId, sessionToken: token, orderId, why: pick.value, note, items: lines.map((l) => ({ id: l.id, qty: l.qty })) });
+    delete extraWorkDrafts[orderId];
+    showToast(r.needsAdmin ? 'Отправлено администратору на согласование' : r.paid ? 'Доп. работы добавлены (тестовый заказ)' : 'Отправлено заказчику на оплату: ' + r.amount + ' ₽');
     setTimeout(() => window.location.reload(), 900);
   } catch (err) { showToast(err && err.code === 'already_pending' ? 'Уже есть доп. работы, ждущие оплаты' : 'Не получилось отправить'); }
 }

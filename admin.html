@@ -3264,6 +3264,22 @@ function orderHasPendingRatingDecision(o) {
   );
 }
 
+// Доп. работы, которые мастер выставил «без этого не сделать заказ» — ждут согласования администратора (функция extra-work).
+function extraWorkAdminHtml(o) {
+  const list = ((o.payment && o.payment.surcharges) || []).filter((x) => x.kind === 'extra_work' && x.status === 'needs_admin');
+  return list.map((x) => `<div class="card-clarification-block" style="background:#fff4e5;" onclick="event.stopPropagation()">🧰 <b>Мастер просит согласовать доп. работы на ${x.amount} ₽</b><br>${escapeHtml(String(x.reason || '').replace(/^Доп\. работы: /, ''))}${x.note ? `<br><i>Что выяснилось: ${escapeHtml(x.note)}</i>` : ''}<br>Цена фиксированная — проверьте, правда ли заказчик не сообщил важное.<div style="display:flex;gap:6px;margin-top:6px;"><button type="button" class="btn-sm primary" onclick="event.stopPropagation();adminExtraWork('${o.id}','${x.id}',true)">✓ Согласовать — заказчику на оплату</button><button type="button" class="btn-sm ghost" onclick="event.stopPropagation();adminExtraWork('${o.id}','${x.id}',false)">✕ Отклонить</button></div></div>`).join('');
+}
+async function adminExtraWork(orderId, surchargeId, ok) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/extra-work`, { method: 'POST', headers: sbHeaders(), body: JSON.stringify({ action: ok ? 'admin_approve' : 'admin_reject', adminToken: adminSessionToken, orderId, surchargeId }) });
+    const d = await res.json().catch(() => null);
+    if (!res.ok || !d || !d.ok) throw new Error((d && d.error) || res.status);
+    alert(ok ? 'Согласовано: заказчик получил доплату на оплату' : 'Доп. работы отклонены');
+    loadData();
+  } catch (e) { alert('Не получилось: ' + e.message); }
+}
+window.adminExtraWork = adminExtraWork;
+
 function orderCardHtml(o) {
   const open = openOrderId === o.id;
   const customerName = userName(o.customerId);
@@ -3288,6 +3304,7 @@ function orderCardHtml(o) {
           ${hasUnreadReview ? `<div class="card-clarification-block" style="background:#fff4e5;">🔔 Новый отзыв по заказу — не просмотрен</div>` : ''}
           ${hasPendingRatingDecision ? `<div class="card-clarification-block" style="background:#fff4e5;">⭐ Есть оценка, ожидающая решения «учитывать»/«не учитывать»</div>` : ''}
           ${cancelInfoHtml(o)}
+          ${extraWorkAdminHtml(o)}
           ${declineInfoHtml(o)}
           ${feedbackBannerHtml(o)}
           <div class="card-meta">
