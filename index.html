@@ -7449,8 +7449,88 @@ function surchargeBlockHtml(order, isCustomer) {
   return shown.map((x) => {
     if (x.status === 'paid') return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доплата ${x.amount} ₽ оплачена</b>${x.reason ? ' — ' + escapeHtml(x.reason) : ''}</p></div>`;
     if (!isCustomer) return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доплата ${x.amount} ₽</b> — ждёт оплаты заказчиком</p></div>`;
+    if (x.kind === 'extra_work') return `<div class="field-card clarification-alert" style="margin:8px 0;"><p class="order-meta"><b>Мастер предлагает доп. работы на ${x.amount} ₽</b><br>${escapeHtml(String(x.reason || '').replace(/^Доп\. работы: /, ''))}</p><p class="order-meta" style="font-size:12px;">Оплата только через сайт. Если мастер просит наличные — нажмите «Сообщить о проблеме».</p><button type="button" class="primary-button" id="pay-surcharge-${x.id}" data-action="pay-surcharge" data-value="${order.id}:${x.id}">Оплатить ${x.amount} ₽</button><button type="button" class="secondary-button" data-action="extra-cancel" data-value="${order.id}:${x.id}">Отказаться</button></div>`;
     return `<div class="field-card clarification-alert" style="margin:8px 0;"><p class="order-meta"><b>Требуется доплата ${x.amount} ₽</b>${x.reason ? '<br>' + escapeHtml(x.reason) : ''}</p><button type="button" class="primary-button" id="pay-surcharge-${x.id}" data-action="pay-surcharge" data-value="${order.id}:${x.id}">Оплатить доплату ${x.amount} ₽</button></div>`;
   }).join('');
+}
+/** Доп. работы на месте (мастер, заказ «в работе»): мастер ищет работы в прайсе (поиск со списком) → сайт считает → заказчик оплачивает. */
+const extraWorkDrafts = {};
+let extraPriceItems = null;
+async function extraLoadPrices() {
+  if (extraPriceItems) return extraPriceItems;
+  const { url } = getConfig();
+  const res = await fetch(`${url}/rest/v1/price_items?select=id,category,name,price&order=category.asc,sort.asc`, { headers: headers() });
+  const rows = await res.json().catch(() => []);
+  extraPriceItems = (Array.isArray(rows) ? rows : []).filter((x) => Number(x.price) > 0 && !/диагност|оценк|на час/i.test(String(x.name)));
+  return extraPriceItems;
+}
+function extraLineCost(unit, qty) { let t = 0; for (let i = 1; i <= qty; i++) t += unit * (i <= 2 ? 1 : i <= 5 ? 0.9 : i <= 9 ? 0.85 : 0.7); return Math.round(t); }
+function extraWorkBlockHtml(order) {
+  const pend = ((order.payment && order.payment.surcharges) || []).find((x) => x.kind === 'extra_work' && x.status === 'pending');
+  if (pend) return `<div class="field-card" style="margin:8px 0;"><p class="order-meta"><b>Доп. работы на ${pend.amount} ₽ ждут оплаты заказчиком</b><br>${escapeHtml(String(pend.reason || '').replace(/^Доп\. работы: /, ''))}</p><p class="order-meta" style="font-size:12px;">Начинайте доп. работы только после оплаты. Наличные брать нельзя.</p><button type="button" class="secondary-button" data-action="extra-cancel" data-value="${order.id}:${pend.id}">Отменить доп. работы</button></div>`;
+  const hasDraft = (extraWorkDrafts[order.id] || []).length > 0;
+  return `<details class="field-card extra-work" data-order="${order.id}" data-cat="${escapeHtml(order.categoryId || '')}" style="margin:8px 0;"${hasDraft ? ' open' : ''}><summary class="order-meta" style="cursor:pointer;"><b>➕ Доп. работы</b> — нужно сделать что-то ещё?</summary>
+    <div style="position:relative;margin-top:8px;">
+      <input type="search" id="extra-q-${order.id}" class="field-input" autocomplete="off" placeholder="Начните вводить: сифон, розетка, полка…" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d0d5dd;border-radius:10px;font-size:15px;" oninput="extraSearch('${order.id}')" onfocus="extraSearch('${order.id}')" />
+      <div id="extra-list-${order.id}" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:30;background:#fff;border:1px solid #d0d5dd;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow:auto;"></div>
+    </div>
+    <div id="extra-res-${order.id}">${extraLinesHtml(order.id)}</div>
+    <p class="order-meta" style="font-size:12px;">Нет нужной работы — нажмите «Сообщить о проблеме», подключится администратор. Оплата только через сайт, наличные брать нельзя — за это блокировка.</p>
+  </details>`;
+}
+async function extraSearch(orderId) {
+  const inp = document.getElementById('extra-q-' + orderId), list = document.getElementById('extra-list-' + orderId);
+  if (!inp || !list) return;
+  const items = await extraLoadPrices().catch(() => []);
+  const cat = (inp.closest('.extra-work') || {}).dataset ? inp.closest('.extra-work').dataset.cat : '';
+  const norm = (t) => String(t || '').toLowerCase().replace(/ё/g, 'е');
+  const words = norm(inp.value).split(/[^a-zа-я0-9]+/).filter(Boolean).map((w) => w.slice(0, Math.max(3, w.length - 2)));
+  let found = items.filter((x) => words.every((w) => norm(x.name).includes(w)));
+  if (!words.length) found = items.filter((x) => x.category === cat);
+  found.sort((a, b) => (a.category === cat ? 0 : 1) - (b.category === cat ? 0 : 1));
+  found = found.slice(0, 12);
+  list.innerHTML = found.length ? found.map((x) => `<button type="button" style="display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;padding:10px 12px;border:0;border-bottom:1px solid #f0f2f5;background:#fff;font-size:14px;cursor:pointer;" onmousedown="event.preventDefault()" onclick="extraAdd('${orderId}',${Number(x.id)})"><span>${escapeHtml(x.name)}</span><b style="white-space:nowrap;">${Number(x.price)} ₽</b></button>`).join('') : '<p class="order-meta" style="padding:10px 12px;margin:0;">Ничего не нашлось. Попробуйте другое слово.</p>';
+  list.style.display = 'block';
+  if (!inp.dataset.blurBound) { inp.dataset.blurBound = '1'; inp.addEventListener('blur', () => setTimeout(() => { list.style.display = 'none'; }, 150)); }
+}
+function extraAdd(orderId, id) {
+  const it = (extraPriceItems || []).find((x) => Number(x.id) === Number(id)); if (!it) return;
+  const lines = extraWorkDrafts[orderId] || (extraWorkDrafts[orderId] = []);
+  const ex = lines.find((l) => l.id === it.id);
+  if (ex) ex.qty = Math.min(50, ex.qty + 1); else lines.push({ id: Number(it.id), name: String(it.name), unit: Number(it.price), qty: 1 });
+  const inp = document.getElementById('extra-q-' + orderId); if (inp) { inp.value = ''; inp.blur(); }
+  extraRender(orderId);
+}
+function extraQty(orderId, id, d) {
+  const lines = extraWorkDrafts[orderId] || []; const l = lines.find((x) => x.id === Number(id)); if (!l) return;
+  l.qty += d; if (l.qty <= 0) lines.splice(lines.indexOf(l), 1); if (l.qty > 50) l.qty = 50;
+  extraRender(orderId);
+}
+function extraRender(orderId) {
+  const box = document.getElementById('extra-res-' + orderId); if (box) box.innerHTML = extraLinesHtml(orderId);
+}
+function extraLinesHtml(orderId) {
+  const lines = extraWorkDrafts[orderId] || [];
+  if (!lines.length) return '';
+  const total = lines.reduce((a, l) => a + extraLineCost(l.unit, l.qty), 0);
+  const qb = 'style="width:30px;height:30px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;font-size:16px;line-height:1;cursor:pointer;"';
+  return lines.map((l) => `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f2f5;"><span style="flex:1;font-size:14px;">${escapeHtml(l.name)}</span><button type="button" ${qb} onclick="extraQty('${orderId}',${l.id},-1)">−</button><b style="min-width:18px;text-align:center;">${l.qty}</b><button type="button" ${qb} onclick="extraQty('${orderId}',${l.id},1)">+</button><b style="min-width:64px;text-align:right;white-space:nowrap;">${extraLineCost(l.unit, l.qty)} ₽</b></div>`).join('') +
+    `<p class="order-meta" style="margin-top:8px;"><b>Итого доп. работы: ${total} ₽</b></p><button type="button" class="primary-button" data-action="extra-send" data-value="${orderId}">Отправить заказчику на оплату ${total} ₽</button>`;
+}
+window.extraSearch = extraSearch; window.extraAdd = extraAdd; window.extraQty = extraQty;
+async function extraWorkSend(orderId) {
+  const lines = extraWorkDrafts[orderId] || []; if (!lines.length) return;
+  const token = loadSessionToken(); if (!token) return showToast('Войдите заново');
+  try {
+    const r = await callSecureFn('extra-work', { action: 'create', userId: state.currentUserId, sessionToken: token, orderId, items: lines.map((l) => ({ id: l.id, qty: l.qty })) });
+    showToast(r.paid ? 'Доп. работы добавлены (тестовый заказ)' : 'Отправлено заказчику на оплату: ' + r.amount + ' ₽');
+    setTimeout(() => window.location.reload(), 900);
+  } catch (err) { showToast(err && err.code === 'already_pending' ? 'Уже есть доп. работы, ждущие оплаты' : 'Не получилось отправить'); }
+}
+async function extraWorkCancel(orderId, sid) {
+  const token = loadSessionToken(); if (!token) return showToast('Войдите заново');
+  try { await callSecureFn('extra-work', { action: 'cancel', userId: state.currentUserId, sessionToken: token, orderId, surchargeId: sid }); showToast('Доп. работы отменены'); setTimeout(() => window.location.reload(), 700); }
+  catch (err) { showToast('Не получилось отменить'); }
 }
 function paidSurchargeTotal(order) {
   return (((order.payment && order.payment.surcharges) || []).filter((x) => x.status === 'paid').reduce((a, x) => a + (Number(x.amount) || 0), 0));
@@ -10918,6 +10998,7 @@ function renderOrderDetail() {
     if (canTransition(order.status, 'completed')) {
       actions += `<button class="primary-button" data-action="advance-order" data-value="${order.id}:completed">Завершил</button>`;
     }
+    if (order.status === 'in_progress') actions += extraWorkBlockHtml(order);
     if (
       // Деталь не подошла (или заказчик её ещё не купил) — работа не
       // выполнена, только диагностика (продумано с Sg 24.09.2026). Не
@@ -15175,6 +15256,8 @@ async function handleAction(action, value) {
       const [oid, mins] = value.split(':');
       return extendHourly(oid, Number(mins));
     }
+    case 'extra-send': return extraWorkSend(value);
+    case 'extra-cancel': { const [oid, sid] = value.split(':'); return extraWorkCancel(oid, sid); }
     case 'pay-surcharge': {
       const [oid, sid] = value.split(':');
       return paySurcharge(oid, sid);

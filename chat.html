@@ -907,8 +907,8 @@ body.embed .chat-screen { padding-top:6px; }
     try { var ps = await act({ action: 'price_sign', userId: S.uid, sessionToken: S.tok, convId: convId, category: draft.category, title: draft.title || '' }); if (ps && ps.ok && ps.price) { draft.price = ps.price; draft.sig = ps.sig; } } catch (e) {}
     var signInfo = { sig: draft.sig || '', price: draft.price || 0, category: draft.category, title: draft.title || '', convId: convId };
     var price = draft.price || 500;
-    // Метка «Срочно» (без доплат): клиент сам написал, что срочно или что топит.
-    function isUrgentChat(w) { var t = messages.filter(function (m) { return m.role === 'user'; }).map(function (m) { return String(m.text || '').replace(/\[[^\]]*\]/g, ' '); }).join(' ') + ' ' + String(w || ''); return /срочн|прямо сейчас|немедленно|как можно (скорее|быстрее)|побыстрее|поскорее|топит|затопил|хлещет|прорвал|сегодня же|аварийн/i.test(t) && !/не срочн/i.test(t); }
+    // Метка «Срочно» (без доплат): клиент сам написал, что срочно. Потоп/прорыв — не к нам, а в диспетчерскую.
+    function isUrgentChat(w) { var t = messages.filter(function (m) { return m.role === 'user'; }).map(function (m) { return String(m.text || '').replace(/\[[^\]]*\]/g, ' '); }).join(' ') + ' ' + String(w || ''); return /срочн|прямо сейчас|немедленно|как можно (скорее|быстрее)|побыстрее|поскорее|сегодня же/i.test(t) && !/не срочн/i.test(t); }
     var wish = String(draft.wishes || '').trim(); if (/^(нет|не надо|без пожеланий|-)\.?$/i.test(wish)) wish = '';
     var o = {
       title: draft.title || draft.description.slice(0, 60), categoryId: draft.category, description: draft.description, desiredOutcome: wish,
