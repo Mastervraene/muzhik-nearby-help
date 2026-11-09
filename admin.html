@@ -151,6 +151,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* UTM-метки, по которым человек пришёл (landing_events, событие login): list1, shlist1… */
 .card-head-below { flex: 0 0 100%; min-width: 0; }
 .card-head-below .card-row3 { margin-top: 2px; }
+.role-badge { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.role-logo { width: 18px; height: 20px; object-fit: contain; display: block; }
+.role-k { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--gray-100); color: var(--gray-600); font-size: 11px; font-weight: 700; }
 .dev-icons { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; font-size: 13px; line-height: 1; }
 .dev-icons svg { display: block; }
 .utm-tags { font-size: 10px; line-height: 1.2; color: var(--gray-600); font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
@@ -4546,7 +4549,7 @@ function masterCardHtml(u) {
           <div class="card-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
             ${deviceIconsHtml(u)}
-            ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span>` : '<span class="pill muted">клиент</span>'}
+            ${u.availableAsWorker ? `<span class="role-badge" title="Мастер"><img src="/logo.png" alt="мастер" class="role-logo" /><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span></span>` : '<span class="role-k" title="Клиент">К</span>'}
           </div>
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
@@ -4559,7 +4562,7 @@ function masterCardHtml(u) {
             ${chatCount ? `<span class="pill chat-count${unreadCount ? ' unread' : ''}" title="${unreadCount ? 'Есть непрочитанные сообщения' : 'Переписка в Telegram'}">💬 ${chatCount}${unreadCount ? ` · новых ${unreadCount}` : ''}</span>` : ''}
             ${masterFlagsPillsHtml(u)}
             ${statusPills}
-            ${(userUtm.get(u.id) || []).length ? `<span class="utm-tags" title="Метки, по которым человек пришёл на сайт">${userUtm.get(u.id).map(escapeHtml).join(' ')}</span>` : ''}
+            ${(userUtm.get(u.id) || []).length ? `<span class="utm-tags" title="Первая метка, по которой человек пришёл на сайт${userUtm.get(u.id).length > 1 ? '; все метки — в раскрытой карточке' : ''}">${escapeHtml(userUtm.get(u.id)[0])}${userUtm.get(u.id).length > 1 ? ' +' + (userUtm.get(u.id).length - 1) : ''}</span>` : ''}
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
@@ -4631,6 +4634,7 @@ function masterFormHtml(u) {
   const requestsHistory = requestsHistoryForMaster(u);
   return `
     <div class="card-body open" id="master-body-${u.id}">
+      ${(userUtm.get(u.id) || []).length ? `<p class="utm-tags" style="margin:0 0 8px;white-space:normal;">Метки: ${userUtm.get(u.id).map(escapeHtml).join(', ')}</p>` : ''}
       ${masterIncidentsHtml(u)}
       ${userOrdersListHtml(u)}
       ${u.masterStatus !== 'none' ? `
