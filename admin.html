@@ -149,6 +149,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
    пожелание Sg: "оранжевый стикер/флаг на затронутых аккаунтах"). */
 .pill.orange { background: #fff7ed; color: #c2410c; }
 /* UTM-метки, по которым человек пришёл (landing_events, событие login): list1, shlist1… */
+.card-head-below { flex: 0 0 100%; min-width: 0; }
+.card-head-below .card-row3 { margin-top: 2px; }
 .utm-tags { font-size: 10px; line-height: 1.2; color: var(--gray-600); font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
 .status-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -4533,7 +4535,7 @@ function masterCardHtml(u) {
     .join(' ');
   return `
     <div class="card">
-      <div class="card-head" id="master-head-${u.id}">
+      <div class="card-head" id="master-head-${u.id}" style="flex-wrap:wrap;row-gap:6px;">
         <div class="card-avatar ${u.avatarUrl ? 'card-avatar-clickable' : ''}" style="width:36px;height:36px;border-radius:50%;overflow:hidden;background:var(--gray-100,#eee);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
           ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" />` : `<span style="font-size:16px;">👤</span>`}
         </div>
@@ -4544,6 +4546,9 @@ function masterCardHtml(u) {
             ${u.deviceType || u.deviceOs ? `<span class="pill muted" title="Устройство и ОС по последнему заходу на сайт">${({ phone: '📱 телефон', tablet: '📟 планшет', computer: '💻 компьютер' })[u.deviceType] || ''} ${({ windows: 'Windows', macos: 'Mac OS', ios: 'iOS', android: 'Android', other: 'др. ОС' })[u.deviceOs] || ''}</span>` : ''}
             ${u.availableAsWorker ? `<span class="pill ok">мастер</span><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span>` : '<span class="pill muted">клиент</span>'}
           </div>
+        </div>
+        <span class="chevron">${open ? '▲' : '▼'}</span>
+        <div class="card-head-below">
           <div class="card-row3">
             ${statusBadge('avatar', Boolean(u.avatarUrl), u.avatarUrl ? 'Фото есть' : 'Фото не загружено')}
             ${statusBadge('phone', Boolean(u.phoneVerified), u.phoneVerified ? 'Телефон подтверждён' : u.phone ? 'Телефон не подтверждён' : 'Телефон не указан')}
@@ -4556,7 +4561,6 @@ function masterCardHtml(u) {
           </div>
           ${note ? `<p class="card-note-preview">📝 ${escapeHtml(note.length > 90 ? note.slice(0, 90) + '…' : note)}</p>` : ''}
         </div>
-        <span class="chevron">${open ? '▲' : '▼'}</span>
       </div>
       ${open ? masterFormHtml(u) : ''}
     </div>
