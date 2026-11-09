@@ -151,8 +151,15 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* UTM-метки, по которым человек пришёл (landing_events, событие login): list1, shlist1… */
 .card-head-below { flex: 0 0 100%; min-width: 0; }
 .card-head-below .card-row3 { margin-top: 2px; }
+.people-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; line-height: 24px; }
+.people-meta > * { display: inline-flex; align-items: center; height: 24px; margin: 0; }
+.people-meta .dev-icons { height: 22px; }
+.people-meta .role-k { height: 20px; width: 20px; }
+.card-head-below .card-row3 { gap: 5px; flex-wrap: nowrap; overflow: hidden; }
+.card-head-below .card-row3 > * { flex-shrink: 0; }
+.card-head-below .card-row3 .utm-tags { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .role-badge { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.role-logo { width: 18px; height: 20px; object-fit: contain; display: block; }
+.role-logo { width: 22px; height: 24px; object-fit: contain; display: block; }
 .role-k { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--gray-100); color: var(--gray-600); font-size: 11px; font-weight: 700; }
 .dev-icons { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; font-size: 13px; line-height: 1; }
 .dev-icons svg { display: block; }
@@ -4546,10 +4553,10 @@ function masterCardHtml(u) {
         </div>
         <div class="card-head-main">
           <p class="card-title">${escapeHtml(userNameLabel(u) || 'Без имени')} · ${userSeqLabel(u.id)}${city ? ` · ${escapeHtml(city)}` : ''}</p>
-          <div class="card-meta">
+          <div class="card-meta people-meta">
             <span>${escapeHtml(u.phone || '—')}</span>
+            ${u.availableAsWorker ? `<span class="role-badge" title="Мастер"><img src="/logo.png" alt="мастер" class="role-logo" /><span class="role-rating">★ ${u.rating.toFixed(1)} (${u.ratingCount})</span></span>` : '<span class="role-k" title="Клиент">К</span>'}
             ${deviceIconsHtml(u)}
-            ${u.availableAsWorker ? `<span class="role-badge" title="Мастер"><img src="/logo.png" alt="мастер" class="role-logo" /><span>★ ${u.rating.toFixed(1)} (${u.ratingCount})</span></span>` : '<span class="role-k" title="Клиент">К</span>'}
           </div>
         </div>
         <span class="chevron">${open ? '▲' : '▼'}</span>
