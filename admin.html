@@ -7517,7 +7517,10 @@ const SC_T = {
   r: { n: 'Результат', s: 'Итог', c: '#e3f4e3', b: '#16a34a', ph: 'Пояснение к позиции (необязательно)' },
 };
 const SC_NEXT = { a: 'q', q: 'a', c: 'r', r: 'c' };
-const scNew = (k) => ({ k: k || 'a', t: '', item: null, extra: false, kids: [] });
+const scNew = (k) => ({ k: k || 'a', t: '', item: null, extra: false, on: false, kids: [] }); // новый блок остановлен, пока не нажмут «Запуск»
+// Запуск/стоп: работает только блок, запущенный сам и все выше него. Стоп блока выключает всё, что после него.
+function scSetOn(n, v) { n.on = v; if (v) n.kids.forEach((k) => scSetOn(k, true)); }
+function scLiveCount(list, up) { return (list || []).reduce((s, n) => { const e = up && n.on === true; return s + (e ? 1 : 0) + scLiveCount(n.kids, e); }, 0); }
 function scFix(list, depth) {
   (list || []).forEach((n) => {
     if (!n.k) { // старый формат без назначения
@@ -7575,15 +7578,19 @@ function scPrice(n) {
     : '<div style="position:relative;margin-top:4px"><input class="si" placeholder="Позиция прайса: начните вводить…" style="width:100%;box-sizing:border-box"><div class="sd"></div></div>';
   return inner + '<label class="count-hint" style="display:block;margin-top:3px"><input type="checkbox" data-act="extra"' + (n.extra ? ' checked' : '') + '> дополнительно, если подтвердится</label>';
 }
-function scHtml(n, path) {
+function scHtml(n, path, up) {
+  if (up === undefined) up = true;
+  const live = up && n.on === true;
   const p = path.join('.'), T = SC_T[n.k] || SC_T.a, iss = scIssues(n, path.length === 1);
+  const st = live ? '<span class="son on">● работает</span>' : n.on === true ? '<span class="son up">○ стоит выше</span>' : '<span class="son off">■ остановлено</span>';
+  const tg = n.on === true ? '<button data-act="off" title="Остановить этот блок и всё после него">⏸ Стоп</button>' : '<button data-act="on" title="Запустить этот блок и всё после него">▶ Запуск</button>';
   const opts = Object.keys(SC_T).map((k) => '<option value="' + k + '"' + (k === n.k ? ' selected' : '') + '>' + SC_T[k].n + '</option>').join('');
-  let h = '<div class="sn"><div class="sc' + (iss.length ? ' bad' : '') + '" data-p="' + p + '" style="background:' + T.c + ';border-color:' + (iss.length ? '#e04b4b' : T.b) + '">' +
-    '<select class="sk-t">' + opts + '</select>' +
+  let h = '<div class="sn"><div class="sc' + (iss.length ? ' bad' : '') + (live ? '' : ' dim') + '" data-p="' + p + '" style="background:' + T.c + ';border-color:' + (iss.length ? '#e04b4b' : T.b) + '">' +
+    '<div class="sst">' + st + tg + '</div><select class="sk-t">' + opts + '</select>' +
     '<textarea rows="2" placeholder="' + aiEsc(T.ph) + '">' + aiEsc(n.t) + '</textarea>' + (n.k === 'r' ? scPrice(n) : '') +
     (iss.length ? '<div class="si-bad">⚠ ' + iss.map(aiEsc).join('<br>⚠ ') + '</div>' : '') +
     '<div class="sb"><button data-act="kid" title="Следующий шаг вправо">↳ дальше</button> <button data-act="sib" title="Другой вариант на этом уровне">＋ вариант</button> <button data-act="del" title="Удалить с ветками">✕</button></div></div>';
-  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i))).join('') + '</div>';
+  if (n.kids.length) h += '<div class="sk">' + n.kids.map((k, i) => scHtml(k, path.concat(i), live)).join('') + '</div>';
   return h + '</div>';
 }
 function scDrawLines() {
@@ -7652,6 +7659,7 @@ function renderScen() {
     '#scen-body .sb{margin-top:4px}#scen-body .sb button{font-size:11px;padding:1px 5px}#scen-body .sd{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15)}' +
     '#scen-body .sd div{padding:6px 8px;cursor:pointer;font-size:13px}#scen-body .sd div:hover{background:#eef}#scen-body .sd div+div{border-top:1px solid #eee}' +
     '#scen-body .rh{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fafafa;border:1px solid #e5e5e5;border-radius:10px;cursor:pointer;margin-top:8px}#scen-body .rh b{flex:1}#scen-body .tag{font-size:11px;border-radius:999px;padding:2px 8px}' +
+    '#scen-body .sc.dim{opacity:.6}#scen-body .sst{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px}#scen-body .son{font-size:11px;font-weight:700}#scen-body .son.on{color:#16a34a}#scen-body .son.off{color:#c0392b}#scen-body .son.up{color:#8a8f98}#scen-body .sst button{font-size:11px;padding:1px 6px}' +
     '#scen-body .lg span{display:inline-block;margin-right:10px;font-size:12px}#scen-body .lg i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px;border:2px solid}</style>' +
     '<p class="count-hint">Дерево — это сценарий разговора для ассистента. «Клиент говорит / если» — условие или вариант ответа, «Уточнение» — вопрос (его варианты «если» клиент увидит кнопками), «Комментарий» — что сказать и почему, «Результат» — позиция прайса. Цена и время берутся только из прайса (клиенту — с выездом 500 ₽). Порядок: если → вопрос / комментарий / результат; вопрос → варианты «если»; комментарий → вопрос / результат; результат — конец.</p>' +
     '<p class="lg">' + Object.keys(SC_T).map((k) => '<span><i style="background:' + SC_T[k].c + ';border-color:' + SC_T[k].b + '"></i>' + SC_T[k].n + '</span>').join('') + (total ? '<span style="color:#c0392b">⚠ проблем: ' + total + '</span>' : '<span style="color:#16a34a">✓ ошибок нет</span>') + '</p>' +
@@ -7659,10 +7667,11 @@ function renderScen() {
       const open = scOpen.has(i), bad = scBad(n, true);
       return '<div class="rh" data-root="' + i + '"><span>' + (open ? '▾' : '▸') + '</span><b>' + aiEsc(n.t || '(без названия)') + '</b>' + (n.draft ? '<span class="tag" style="background:#fff6d6">черновик Claude</span>' : '') +
         '<span class="tag" style="background:#eee">' + scCount(n) + ' блоков</span>' + (bad ? '<span class="tag" style="background:#fde2e2;color:#c0392b">⚠ ' + bad + '</span>' : '<span class="tag" style="background:#e3f4e3;color:#16a34a">✓</span>') +
+        (n.on === true ? '<span class="tag" style="background:#e3f4e3;color:#16a34a">● работает у клиентов</span><button data-rt="' + i + '" data-v="0">⏸ Остановить ветку</button>' : '<span class="tag" style="background:#fde2e2;color:#c0392b">■ остановлена</span><button data-rt="' + i + '" data-v="1">▶ Запустить ветку</button>') +
         '<button data-test="' + i + '">▶ Проверить</button></div>' +
         (open ? '<div class="sroot"><svg class="sl"></svg>' + scHtml(n, [i]) + '</div>' : '');
     }).join('') +
-    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-drafts" title="Черновые ветки по остальным задачам — добавятся в конец, потом нажмите «Сохранить»">＋ Черновики веток от Claude</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <button id="scen-live" title="Откроет настоящий чат сайта, который поведёт по этому дереву (даже несохранённому). Видите это только вы, в этом браузере.">▶ Проверить в настоящем чате</button> <button id="scen-live-off" style="display:' + (scTestOn() ? 'inline-block' : 'none') + '">✕ Выключить проверку</button> <span id="scen-msg" class="count-hint"></span></p><p class="count-hint">Для всех клиентов сценарии в чате пока <b>выключены</b> — чат работает по-старому. Когда ветки готовы: сохраните и скажите Claude «включай сценарии». Ветки с ошибками ⚠ в чат не попадают.</p>';
+    '<p><button id="scen-add">+ Новое начало (запрос клиента)</button> <button id="scen-drafts" title="Черновые ветки по остальным задачам — добавятся в конец, потом нажмите «Сохранить»">＋ Черновики веток от Claude</button> <button id="scen-open">Развернуть все</button> <button id="scen-close">Свернуть все</button> <button id="scen-save" class="btn-primary">Сохранить</button> <button id="scen-live" title="Откроет настоящий чат сайта, который поведёт по этому дереву (даже несохранённому). Видите это только вы, в этом браузере.">▶ Проверить в настоящем чате</button> <button id="scen-live-off" style="display:' + (scTestOn() ? 'inline-block' : 'none') + '">✕ Выключить проверку</button> <span id="scen-msg" class="count-hint"></span></p><p class="count-hint"><b>Запуск и стоп.</b> У клиентов работают только запущенные блоки (● работает). Новые блоки и черновики создаются <b>остановленными</b> — их можно спокойно собирать и проверять кнопкой «▶ Проверить» или «в настоящем чате» (проверка не смотрит на запуск). «▶ Запуск» включает блок и всё после него, «⏸ Стоп» выключает блок и всё после него — остальная часть дерева продолжает работать. Если клиент дошёл до остановленного места, дальше его ведёт обычный ассистент с тем, что уже выяснили. Кнопки запуска и стопа сохраняются сразу. Сейчас у клиентов работает блоков: <b>' + scLiveCount(scenTree, true) + '</b>.</p>';
   const msg = (t) => { const e = document.getElementById('scen-msg'); if (e) e.textContent = t; };
   requestAnimationFrame(scDrawLines);
   box.oninput = (ev) => {
@@ -7683,6 +7692,7 @@ function renderScen() {
   box.onclick = async (ev) => {
     const el = ev.target;
     if (el.dataset.test !== undefined) { ev.stopPropagation(); return scTest(+el.dataset.test); }
+    if (el.dataset.rt !== undefined) { ev.stopPropagation(); scSetOn(scenTree[+el.dataset.rt], el.dataset.v === '1'); return scSaveNow(el.dataset.v === '1' ? 'Ветка запущена' : 'Ветка остановлена'); }
     const rh = el.closest('.rh');
     if (rh) { const i = +rh.dataset.root; scOpen.has(i) ? scOpen.delete(i) : scOpen.add(i); return renderScen(); }
     const c = el.closest('.sc'); if (!c) return;
@@ -7703,6 +7713,7 @@ function renderScen() {
     }
     if (!act || act === 'extra') return;
     const g = scGet(p);
+    if (act === 'on' || act === 'off') { scSetOn(g.n, act === 'on'); return scSaveNow(act === 'on' ? 'Запущено' : 'Остановлено'); }
     if (act === 'clr') g.n.item = null;
     if (act === 'kid') g.n.kids.push(scNew(SC_NEXT[g.n.k]));
     if (act === 'sib') g.parent.splice(g.i + 1, 0, scNew(g.n.k));
@@ -7731,6 +7742,13 @@ function renderScen() {
     try { const r = await callAdminPricing('save_scenarios', { tree: scenTree }); msg('Сохранено: ' + r.count + ' начал'); }
     catch (e) { msg('Ошибка: ' + e.message); }
   };
+}
+// Запуск/стоп сохраняются сразу (вместе с остальными правками дерева).
+async function scSaveNow(what) {
+  renderScen();
+  const e = document.getElementById('scen-msg');
+  try { await callAdminPricing('save_scenarios', { tree: scenTree }); if (e) e.textContent = what + ' и сохранено. У клиентов работает блоков: ' + scLiveCount(scenTree, true); }
+  catch (x) { if (e) e.textContent = 'Не сохранилось: ' + x.message; }
 }
 // Удаление ветки с вложенными блоками — без системного диалога (он ломает автоматизацию браузера), двойной клик-подтверждение.
 let scDelArm = null;
