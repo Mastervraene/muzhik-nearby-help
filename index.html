@@ -6806,6 +6806,7 @@ async function refreshAvailableOrders(isRetry) {
       isPrecedent: Boolean(o.isPrecedent),
       createdAt: o.createdAt,
       distanceKm: o.distanceKm,
+      far: Boolean(o.far),
       estimatedMinutes: o.estimatedMinutes ?? null,
       workerNote: o.workerNote || '',
       partsAlreadyHave: o.partsAlreadyHave || '',
@@ -10328,6 +10329,8 @@ function orderCardHtml(order, { viewer }) {
             <span>${escapeHtml(viewer === 'worker' && order.assignedWorkerId !== state.currentUserId ? stripApartment(order.district) : order.district)}${order.houseNumberPublic ? ', д. ' + escapeHtml(order.houseNumberPublic) : ''}</span>
             ${viewer === 'worker' && dist ? `<span>~${dist} км</span>` : ''}
           </div>
+          ${viewer === 'worker' && order.far && order.status === 'searching' ? `<p class="far-tag" style="margin:6px 0 0;display:inline-block;background:#fff4e5;color:#9a3412;border-radius:8px;padding:2px 8px;font-size:12px;font-weight:600;">🚗 Дальше обычного — рядом с клиентом мастеров нет</p>` : ''}
+          ${viewer !== 'worker' && order.status === 'searching' && Number(order.searchRadiusKm) > 3 ? `<p style="margin:6px 0 0;font-size:12px;color:var(--gray-600,#545454);">Рядом пока мало свободных мастеров — ищем чуть дальше.</p>` : ''}
         </div>
         <span class="status-pill ${
           // part_purchase_requested добавлен 09.10.2026 (просьба Sg) — та
