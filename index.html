@@ -4128,7 +4128,6 @@ function saveUser(user) {
           displayName: user.displayName,
           avatarUrl: user.avatarUrl,
           district: user.district,
-          searchRadiusKm: user.searchRadiusKm,
           // availableAsWorker больше не отправляется отсюда: этот флаг теперь
           // переключается ТОЛЬКО модерацией в админке (одобрение заявки
           // «стать мастером», см. submit-master-application.ts и
@@ -6639,7 +6638,7 @@ async function acceptOrder(orderId) {
       if (handleUnauthorizedResponse(data)) return;
       const messages = {
         already_taken: 'Заказ уже взял другой мастер',
-        too_far: 'Этот заказ уже вне вашего радиуса',
+        too_far: 'Этот заказ слишком далеко от вас',
         not_eligible: 'Этот заказ вам больше не подходит',
       };
       showToast(messages[data && data.error] || 'Не получилось принять заказ — попробуйте ещё раз');
@@ -10752,7 +10751,7 @@ function renderOrders() {
     ? candidatesSorted.map((o) => orderCardHtml(o, { viewer: 'worker' })).join('')
     : candidateOrders.length
     ? hiddenByFilterNote('candidates')
-    : `<div class="empty-state">В вашем радиусе пока нет подходящих заказов по вашим навыкам</div>`;
+    : `<div class="empty-state">Рядом с вами пока нет подходящих заказов по вашим навыкам</div>`;
 
   return `
     <div class="screen">
@@ -12751,7 +12750,7 @@ function renderHelpOverlay() {
           <p><b>Нужна помощь по дому?</b> Опишите задачу одним сообщением на главном экране, приложите фото — с фото мастера откликаются охотнее, укажите адрес и удобное время. Сервис покажет примерную цену и отправит заявку мастерам поблизости.</p>
           <p>Как только заявку возьмут в работу, статус заказа будет обновляться: мастер выехал → начал работу → закончил. После завершения подтвердите работу и поставьте оценку мастеру.</p>
           <p>Чтобы отправить заявку и получать уведомления по заказу, понадобится номер телефона. Дополнительно можно привязать Telegram — бот пришлёт код для входа и будет присылать уведомления о статусе заказа прямо в чат.</p>
-          <p><b>Хотите брать заказы как мастер?</b> В профиле включите режим специалиста и укажите свои навыки и радиус работы — рядом начнут появляться подходящие заявки, которые можно принять.</p>
+          <p><b>Хотите брать заказы как мастер?</b> В профиле включите режим специалиста и укажите свои навыки — рядом начнут появляться подходящие заявки, которые можно принять.</p>
           <p>Подробнее о видах работ и ценах — в <a href="/articles/" target="_blank" rel="noopener">статьях о наших услугах</a>.</p>
           <button type="button" class="onboarding-cta" data-action="dismiss-onboarding">Понятно</button>
         </div>
@@ -15315,12 +15314,6 @@ async function handleAction(action, value) {
     case 'close-photo-viewer':
       state.photoViewer = null;
       return render();
-    case 'save-radius': {
-      const user = currentUser();
-      saveUser({ ...user, searchRadiusKm: Number(document.getElementById('field-radius').value || 3) });
-      showToast('Радиус сохранён');
-      return render();
-    }
     case 'toggle-skill-picker':
       // Открыт максимум один рейтинг за раз — клик по уже открытому навыку закрывает его.
       state.openSkillPicker = state.openSkillPicker === value ? null : value;
