@@ -1454,6 +1454,10 @@ async function deleteRow(table, id, byField) {
 function dbOrderToOrder(row) {
   return {
     isTest: Boolean(row.is_test),
+    defectSeverity: row.defect_severity || null,
+    defectNote: row.defect_note || '',
+    defectFix: row.defect_fix || '',
+    defectAt: row.defect_at || null,
     id: row.id,
     // Порядковый номер для людей (чек эквайринга, поиск здесь) — НЕ UUID
     // id заказа, см. миграцию orders.order_number (18.09.2026).
@@ -3522,6 +3526,68 @@ function orderBlockHtml(o) {
     </div>`;
 }
 
+// ===== Брак и оценки по навыкам (12.11.2026) =====
+// Брак ставит администратор после разбора жалобы. Тяжесть ограничивает оценку заказа сверху
+// (недочёт ≤4★, заметный ≤3★, серьёзный ≤1★) и даёт штрафные очки навыку (1/2/4).
+// 4+ очка за последние 10 заказов в категории → мастер не видит заказы этой категории,
+// пока администратор не снимет ограничение. Считает база: view worker_skill_stats,
+// общий рейтинг пересчитывает триггер trg_recompute_worker_rating.
+const DEFECT_LABELS = { minor: 'Мелкий недочёт (≤4★, 1 очко)', notable: 'Заметный брак (≤3★, 2 очка)', serious: 'Серьёзный (≤1★, 4 очка)' };
+const DEFECT_FIX_LABELS = { same_free: 'Тот же мастер переделывает бесплатно', other_paid_by_guilty: 'Другой мастер, доплату платит виновный', admin: 'Разбирает администратор' };
+function defectAdminHtml(o) {
+  if (!o.assignedWorkerId) return '';
+  const sev = o.defectSeverity;
+  const opt = (obj, cur) => Object.entries(obj).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+  return `
+    <p class="form-section-label">Брак по заказу</p>
+    <div class="field-sm dense" style="margin-bottom:10px;${sev ? 'background:#fef3f2;border-radius:10px;padding:8px;' : ''}">
+      ${sev ? `<p style="margin:0 0 6px;"><b>⚠ ${escapeHtml(DEFECT_LABELS[sev] || sev)}</b>${o.defectAt ? ' · ' + escapeHtml(fmtDate(o.defectAt)) : ''}${o.defectFix ? '<br>' + escapeHtml(DEFECT_FIX_LABELS[o.defectFix] || o.defectFix) : ''}${o.defectNote ? '<br>' + escapeHtml(o.defectNote) : ''}</p>` : '<p style="margin:0 0 6px;color:var(--gray-500);font-size:13px;">Отметьте брак, если после разбора жалобы проблема по вине мастера. Если вина не мастера — ничего не ставьте.</p>'}
+      <select id="defect-sev-${o.id}" style="width:100%;margin-bottom:6px;"><option value="">— брака нет —</option>${opt(DEFECT_LABELS, sev)}</select>
+      <select id="defect-fix-${o.id}" style="width:100%;margin-bottom:6px;"><option value="">Кто исправляет…</option>${opt(DEFECT_FIX_LABELS, o.defectFix)}</select>
+      <textarea id="defect-note-${o.id}" rows="2" placeholder="Что случилось (для себя)" style="width:100%;box-sizing:border-box;">${escapeHtml(o.defectNote || '')}</textarea>
+      <button type="button" class="btn-sm" data-defect-save="${o.id}" style="margin-top:6px;">Сохранить</button>
+    </div>`;
+}
+function skillStatsHtml(u) {
+  const rows = (skillStats.get(u.id) || []).slice().sort((a, b) => (b.restricted - a.restricted) || (b.orders_count - a.orders_count));
+  if (!rows.length) return '';
+  return `
+    <p class="form-section-label">Оценки по навыкам</p>
+    <div class="field-sm dense" style="margin-bottom:10px;">
+      ${rows.map((r) => `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:3px 0;${r.restricted ? 'color:#b42318;font-weight:600;' : ''}">
+        <span>${r.restricted ? '⛔ ' : ''}${escapeHtml(CATEGORY_TITLES[r.category_id] || r.category_id)}</span>
+        <span>· ${r.avg_score != null ? '★ ' + Number(r.avg_score).toFixed(1) : 'без оценок'} · заказов ${r.orders_count}${r.defects_total ? ` · брак ${r.defects_total} (очков за 10 последних: ${r.points_last10})` : ''}</span>
+        ${r.restricted ? `<button type="button" class="btn-sm" data-skill-clear="${u.id}|${escapeHtml(r.category_id)}">Снять ограничение</button>` : ''}
+      </div>`).join('')}
+      <p style="margin:6px 0 0;font-size:12px;color:var(--gray-500);">Ограничение: 4+ штрафных очка за последние 10 заказов в навыке (недочёт 1, заметный 2, серьёзный 4). Пока оно стоит, мастер не видит заказы этой категории. Снятие действует до следующего брака.</p>
+    </div>`;
+}
+document.addEventListener('click', async (ev) => {
+  const save = ev.target.closest && ev.target.closest('[data-defect-save]');
+  const clear = ev.target.closest && ev.target.closest('[data-skill-clear]');
+  if (!save && !clear) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const btn = save || clear; btn.disabled = true;
+  try {
+    if (save) {
+      const id = save.dataset.defectSave;
+      const sev = document.getElementById('defect-sev-' + id).value || null;
+      const fix = document.getElementById('defect-fix-' + id).value || null;
+      const note = document.getElementById('defect-note-' + id).value.trim() || null;
+      const o = allOrders.find((x) => x.id === id);
+      await updateRow('orders', id, { defect_severity: sev, defect_fix: sev ? fix : null, defect_note: sev ? note : null, defect_at: sev ? ((o && o.defectSeverity === sev && o.defectAt) || new Date().toISOString()) : null });
+    } else {
+      const [wid, cat] = clear.dataset.skillClear.split('|');
+      if (!confirm('Снять ограничение по навыку «' + (CATEGORY_TITLES[cat] || cat) + '»? Мастер снова увидит заказы этой категории.')) { btn.disabled = false; return; }
+      await insertRow('worker_skill_clearances', { worker_id: wid, category_id: cat });
+    }
+    await loadData({ keepOpen: true });
+  } catch (err) {
+    alert('Не удалось сохранить: ' + (err && err.message ? err.message : err));
+    btn.disabled = false;
+  }
+}, true);
+
 function orderReviewsHtml(o) {
   return orderReviewsCoreHtml(o) + orderBlockHtml(o);
 }
@@ -3904,6 +3970,7 @@ function orderFormHtml(o) {
       ${feedbackDetailsHtml(o)}
       ${orderReviewPhotosHtml(o)}
       ${orderReviewsHtml(o)}
+      ${defectAdminHtml(o)}
       ${adminNoteHtml('order', o.id)}
       ${o.timeline && o.timeline.length ? `<div class="timeline-list">${o.timeline.map((t) => `<div><span class="status-dot" style="background:${statusColor(t.status).dot};"></span>${escapeHtml(STATUS_LABELS[t.status] || t.status)} — ${fmtDate(t.at)}</div>`).join('')}</div>` : ''}
       <div class="row-actions">
@@ -4547,7 +4614,9 @@ function masterCardHtml(u) {
   // ключуется как `${entity_type}:${entity_id}`, та же Map, что и у
   // adminNoteHtml в развёрнутой форме ниже (masterFormHtml).
   const note = adminNotes.get(`user:${u.id}`) || '';
+  const restrictedSkills = (skillStats.get(u.id) || []).filter((r) => r.restricted);
   const statusPills = [
+    restrictedSkills.length ? `<span class="pill warn" style="background:#fee4e2;color:#b42318;" title="Из-за брака мастер не видит заказы этих категорий, пока администратор не снимет ограничение">⛔ Ограничен: ${restrictedSkills.map((r) => escapeHtml(CATEGORY_TITLES[r.category_id] || r.category_id)).join(', ')}</span>` : '',
     u.blocked ? '<span class="pill warn">заблокирован</span>' : '',
     u.masterStatus === 'pending' ? '<span class="pill warn">заявка на рассмотрении</span>' : '',
     u.masterStatus === 'rejected' ? '<span class="pill warn">заявка отклонена</span>' : '',
@@ -4659,6 +4728,7 @@ function masterFormHtml(u) {
   return `
     <div class="card-body open" id="master-body-${u.id}">
       ${(userUtm.get(u.id) || []).length ? `<p class="utm-tags" style="margin:0 0 8px;white-space:normal;">Метки: ${userUtm.get(u.id).map(escapeHtml).join(', ')}</p>` : ''}
+      ${skillStatsHtml(u)}
       ${masterIncidentsHtml(u)}
       ${userOrdersListHtml(u)}
       ${u.masterStatus !== 'none' ? `
@@ -6725,8 +6795,10 @@ function deviceIconsHtml(u) {
 }
 
 let userUtm = new Map();
+// Оценки мастера по навыкам и ограничения из-за брака (view worker_skill_stats).
+let skillStats = new Map();
 async function loadData(opts) {
-  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows, blockRows, utmRows] = await Promise.all([
+  const [userRows, orderRows, statRows, skillRows, messageRows, notificationRows, notesData, adminTaskRows, blockRows, utmRows, skillStatRows] = await Promise.all([
     getRows('users'),
     getRows('orders'),
     getRows('daily_stats', 'select=*&order=stat_date.desc&limit=60').catch(() => []),
@@ -6751,8 +6823,11 @@ async function loadData(opts) {
     getRows('admin_tasks', 'order=created_at.desc&limit=200').catch(() => []),
     getRows('master_customer_blocks').catch(() => []),
     getRows('landing_events', 'order=created_at.asc&limit=5000', ['event', 'login']).catch(() => []),
+    getRows('worker_skill_stats').catch(() => []),
   ]);
   allMasterBlocks = blockRows || [];
+  skillStats = new Map();
+  for (const r of (skillStatRows || [])) { const a = skillStats.get(r.worker_id) || []; a.push(r); skillStats.set(r.worker_id, a); }
   userUtm = new Map();
   for (const r of (utmRows || [])) { if (!r.user_id || !r.utm_source) continue; const a = userUtm.get(r.user_id) || []; if (!a.includes(r.utm_source)) a.push(r.utm_source); userUtm.set(r.user_id, a); }
   allUsers = userRows.map(dbUserToUser);
