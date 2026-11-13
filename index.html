@@ -7521,6 +7521,7 @@ function extraLinesHtml(orderId) {
     `<p class="order-meta" style="margin-top:8px;"><b>Итого доп. работы: ${total} ₽</b></p>
     <p class="order-meta" style="margin:6px 0 4px;"><b>Почему появились доп. работы?</b></p>
     <label class="order-meta" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;"><input type="radio" name="extra-why-${orderId}" value="client_asked" /> <span>Заказчик сам попросил сделать ещё (сразу уйдёт заказчику на оплату)</span></label>
+    <label class="order-meta" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;"><input type="radio" name="extra-why-${orderId}" value="after_diag" /> <span>После диагностики: нашёл причину, заказчик согласен на ремонт (сразу уйдёт заказчику на оплату)</span></label>
     <label class="order-meta" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;"><input type="radio" name="extra-why-${orderId}" value="needed" /> <span>Без этого не сделать заказ — заказчик не всё рассказал (сначала согласует администратор)</span></label>
     <textarea id="extra-note-${orderId}" class="composer-textarea" rows="2" placeholder="Коротко: что выяснилось на месте (для администратора)"></textarea>
     <button type="button" class="primary-button" data-action="extra-send" data-value="${orderId}">Отправить: ${total} ₽</button>`;
