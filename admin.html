@@ -7096,7 +7096,7 @@ function autoGrowNames(root) {
 function pricingRowHtml(it) {
   const v = (x) => (x === null || x === undefined ? '' : escapeHtml(String(x)));
   return `<div class="pr-row" data-id="${it && it.id ? it.id : ''}">
-    <textarea class="pr-name" rows="1" placeholder="Название работы">${v(it && it.name)}</textarea>
+    <div><textarea class="pr-name" rows="1" placeholder="Название работы">${v(it && it.name)}</textarea><label class="pr-cx" title="Сложную работу видят только мастера, у которых в этом навыке 4–5★ или PRO" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--gray-500);margin-top:2px;cursor:pointer;"><input type="checkbox" class="pr-complex" style="width:auto;padding:0;margin:0;"${it && it.complex ? ' checked' : ''} /> сложная (4–5★ / PRO)</label></div>
     <input type="number" class="pr-price" min="0" step="50" placeholder="₽" value="${v(it && it.price)}" />
     <input type="number" class="pr-min" min="0" step="5" placeholder="мин" value="${v(it && it.minutes)}" />
     <span class="pr-nh${normHourText(it && it.price, it && it.minutes).low ? ' low' : ''}">${normHourText(it && it.price, it && it.minutes).text}</span>
@@ -7172,6 +7172,7 @@ function renderPricing() {
         name: r.querySelector('.pr-name').value.trim(),
         price: r.querySelector('.pr-price').value,
         minutes: r.querySelector('.pr-min').value,
+        complex: Boolean(r.querySelector('.pr-complex') && r.querySelector('.pr-complex').checked),
       })).filter((it) => it.name);
       btn.disabled = true; status.style.color = '#767676'; status.textContent = 'Сохраняем…';
       try {
