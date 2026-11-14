@@ -46,4 +46,4 @@ User-agent: Bytespider
 Allow: /
 
 Host: https://xn--80aaflcxqniqbin.xn--p1ai
-Sitemap: https://мастерврайоне.рф/sitemap.xml
+Sitemap: https://xn--80aaflcxqniqbin.xn--p1ai/sitemap.xml
