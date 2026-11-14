@@ -187,4 +187,16 @@
     <priority>0.4</priority>
   </url>
   <url><loc>https://xn--80aaflcxqniqbin.xn--p1ai/akciya/</loc><changefreq>monthly</changefreq></url>
+  <url>
+    <loc>https://xn--80aaflcxqniqbin.xn--p1ai/masters.html</loc>
+    <lastmod>2026-11-14</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://xn--80aaflcxqniqbin.xn--p1ai/clients.html</loc>
+    <lastmod>2026-11-14</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
 </urlset>
