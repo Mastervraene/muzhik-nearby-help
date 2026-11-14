@@ -18,7 +18,7 @@
  *   ... window.openCookieConsentBanner() — показать баннер повторно.
  */
 window.COOKIE_ANALYTICS_CONFIG = window.COOKIE_ANALYTICS_CONFIG || {
-  yandexMetrikaId: null, // например: 12345678
+  yandexMetrikaId: 114248885, // Яндекс Метрика «Мастер в районе» (с 14.11.2026)
   vkPixelId: null,       // например: 'VK-RTRG-000000-xxxxx'
 };
 
@@ -51,7 +51,7 @@ window.COOKIE_ANALYTICS_CONFIG = window.COOKIE_ANALYTICS_CONFIG || {
       k = e.createElement(t); a = e.getElementsByTagName(t)[0];
       k.async = 1; k.src = r; a.parentNode.insertBefore(k, a);
     })(window, document, 'script', 'https://mc.yandex.ru/metrika/tag.js', 'ym');
-    window.ym(counterId, 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true });
+    window.ym(counterId, 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: true });
   }
 
   function loadVkPixel(pixelId) {
